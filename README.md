@@ -1,168 +1,155 @@
 # StreetBiz Backend
 
-The backend API for **StreetBiz**, a ward-level platform for sidewalk-vendor
-registration, legal-slot rental, digital permits, fees, penalties, and community
-verification.
+StreetBiz backend foundation built with .NET 8, ASP.NET Core, Entity Framework
+Core 8, SQL Server, and Clean Architecture. This repository currently contains
+infrastructure only: no business use cases or business API controllers have been
+implemented.
 
-> **Project status:** requirements and repository initialization. No backend
-> solution, database migration, or runtime configuration has been committed yet,
-> so this repository is not currently runnable. Scope in this README follows the
-> revised SRS baseline dated 30 August 2026.
+## Prerequisites
 
-## Responsibilities
+- .NET 8 SDK
+- SQL Server 2022 or a compatible SQL Server instance
+- dotnet-ef 8.x
+- Docker Desktop (optional)
 
-The backend is the authoritative source for identity, registration, sidewalk-slot,
-rental-contract, permit, fee, invoice, violation, and penalty state. It will expose
-implementation-independent, versioned REST APIs for the StreetBiz frontend.
+Check the SDK and install the EF CLI:
 
-Planned Core capabilities include:
+~~~powershell
+dotnet --list-sdks
+dotnet tool update --global dotnet-ef --version "8.*" --allow-downgrade
+dotnet ef --version
+~~~
 
-- Phone/OTP identity, session management, and role-based authorization.
-- Fixed Storefront and Itinerant vendor registration with separate evidence rules.
-- Independent registration and sidewalk-rental review state machines.
-- Ward-scoped slot grids, geofences, pricing, schedules, and availability.
-- Rental contracts and QR permits generated after rental approval.
-- Live permit verification for ward officers, customers, and guests.
-- Per-contract fee schedules, payment reconciliation, and invoice issuance.
-- Violation records, configured penalty calculation, and explicit permit actions.
-- Renewal, address-change, proposed-slot, conflict, and transfer workflows.
-- Ward operational/collection reporting and community-report routing.
-- Platform account/category administration, kept separate from ward authority.
-- Auditing, notifications, evidence storage, health checks, and operational logs.
+Run every dotnet command below from the directory containing
+StreetBiz.Backend.sln.
 
-## Critical domain flow
+## Configure the database connection
 
-```mermaid
-stateDiagram-v2
-    [*] --> RegistrationSubmitted
-    RegistrationSubmitted --> RegistrationApproved: ward approves
-    RegistrationSubmitted --> RegistrationRejected: ward rejects
-    RegistrationApproved --> RentalSubmitted: vendor selects an eligible slot
-    RentalSubmitted --> RentalApproved: ward approves
-    RentalSubmitted --> RentalRejected: ward rejects
-    RentalApproved --> ContractActive: create contract and QR permit
-    ContractActive --> PermitSuspended: explicit ward action
-    ContractActive --> ContractExpired: term ends without renewal
-    PermitSuspended --> ContractActive: explicit ward action
-```
+The application resolves the connection string in this order:
 
-Registration approval and rental approval are distinct decisions. A rental may be
-approved only for a vendor with an approved registration, and the resulting permit
-is valid only while its contract is active and not suspended.
+1. Environment variable STREETBIZ_DB_CONNECTION.
+2. Configuration key ConnectionStrings:StreetBizDatabase, including user-secrets.
+3. Startup fails with a clear error when neither value is present.
 
-## Planned backend stack
+PowerShell process-scoped environment variable:
 
-- .NET 8
-- REST APIs with a versioned OpenAPI/Swagger contract
-- PostgreSQL 16 with forward-only versioned migrations
-- Redis as an optional transient cache/event component
-- JWT or session-based authentication with strict RBAC
-- WebSocket or server-sent events only where real-time behaviour is justified
-- Docker/Compose for reproducible local and deployment environments
-- GitHub Actions for build, test, migration, dependency, and secret checks
+~~~powershell
+$env:STREETBIZ_DB_CONNECTION = "<sql-server-connection-string>"
+~~~
 
-### External integrations
+User-secrets alternative:
 
-- Phone/OTP provider, with a development stub
-- OpenStreetMap-compatible geocoding and map-data provider
-- MoMo/ZaloPay sandbox for rental fees and penalties
-- Firebase Cloud Messaging or an equivalent notification provider
-- Restricted evidence/object storage
-- Optional OCR/vision/AI services for the gated Core extension
-- Monitoring and error-tracking service
+~~~powershell
+dotnet user-secrets --project src/StreetBiz.API set "ConnectionStrings:StreetBizDatabase" "<sql-server-connection-string>"
+~~~
 
-Each provider must sit behind an adapter so it can be mocked, sandboxed, or
-replaced without changing the core domain workflow.
+Never commit a real password, connection string, .env file, or secrets.json.
+appsettings files intentionally contain no credentials.
 
-## Core invariants
+## Reverse-engineer the existing database
 
-- A slot belongs to exactly one ward and has one current lifecycle status.
-- Slot availability is revalidated transactionally when concurrent applications
-  target the same slot.
-- Rental approval atomically creates the contract and digital permit.
-- QR results always resolve against current server-side permit state.
-- Fee schedules derive from each contract's start date and selected term.
-- An invoice is issued only after an authenticated payment callback succeeds.
-- Callback handling is signed, idempotent, replay-resistant, and reconcilable.
-- Recording a violation or calculating a penalty does not automatically suspend a
-  permit; suspension and revocation are explicit ward actions with a reason.
-- Transfers preserve the remaining contract term and fee schedule and are blocked
-  while fees or penalties remain unpaid.
-- All material state transitions record the actor and timestamp.
-- Platform administrators cannot perform ward compliance decisions.
+Confirm that STREETBIZ_DB_CONNECTION is set, then run:
 
-## API and security expectations
+~~~powershell
+dotnet ef dbcontext scaffold "$env:STREETBIZ_DB_CONNECTION" Microsoft.EntityFrameworkCore.SqlServer --project src/StreetBiz.Infrastructure --startup-project src/StreetBiz.API --context StreetBizDbContext --context-dir Persistence --output-dir Persistence/ScaffoldedModels --no-onconfiguring --use-database-names --force
+~~~
 
-- Validate roles, ward scope, and resource ownership on the server for every
-  protected request.
-- Normalize supported Vietnamese phone numbers and represent money in VND.
-- Return standardized success payloads, errors, and HTTP status codes.
-- Paginate and filter application, slot, and report collections.
-- Restrict identity documents, addresses, and evidence to the owning vendor and
-  authorized ward reviewers.
-- Never log OTPs, tokens, payment secrets, or unnecessary personal information.
-- Keep development, test, staging, and production credentials separate.
-- Accept payment success only from verified provider callbacks, never from a
-  browser redirect alone.
-- Target at least 99.5% pilot availability and a 50-concurrent-user pilot load.
+This command overwrites generated DbContext/model files. Inspect local changes
+first and extend generated types with partial classes instead of editing generated
+files directly. See docs/database-reverse-engineering.md.
 
-## Getting started
+## Restore, build, and test
 
-There is no `.sln`, project file, Compose file, migration, or environment template
-in the repository yet. Once the service foundation is committed, this section
-will provide exact commands for:
+~~~powershell
+dotnet restore StreetBiz.Backend.sln
+dotnet build StreetBiz.Backend.sln --no-restore
+dotnet test StreetBiz.Backend.sln --no-build
+~~~
 
-1. Installing the pinned .NET SDK and container prerequisites.
-2. Creating local configuration from a safe example file.
-3. Starting PostgreSQL and optional Redis dependencies.
-4. Applying migrations and loading synthetic seed data.
-5. Running the API, automated tests, and OpenAPI documentation.
+## Run the API
 
-Configuration will cover database connectivity, token/session security, OTP,
-maps, payments, notifications, evidence storage, optional AI providers, and
-observability. Real credentials and personal data must never be committed.
+Set the connection string, then:
 
-## Testing and release quality
+~~~powershell
+dotnet run --project src/StreetBiz.API
+~~~
 
-- At least 70% automated line coverage for backend domain/service packages.
-- API and integration coverage for all Core endpoints and negative authorization
-  cases.
-- Integration adapters exercised through mocks, stubs, or approved sandboxes.
-- Explicit tests for duplicate submissions, payment callback replay, concurrent
-  slot applications, and permit-state transitions.
-- Applicable OWASP ASVS Level 1 checks, with no open High/Critical security defect
-  at release.
-- Health/readiness endpoints, structured logs, correlation IDs, migration records,
-  and a documented backup/restore and rollback procedure.
+In Development, open /swagger at the URL printed by ASP.NET Core. Check SQL
+Server readiness with GET /health. HTTPS redirection is enabled.
 
-## Phase boundaries
+## Docker
 
-The Core release covers compliance workflows only. AI compliance support is gated
-and advisory. Storefronts, menus, discovery, prepaid food orders, pickup tracking,
-reviews, refunds, and marketplace moderation belong to Phase 2. There is no
-delivery/shipper network or cash on delivery in any phase.
+Copy .env.example to .env and replace both placeholder values. The Compose file
+contains streetbiz-api and sqlserver services. The SQL Server container only
+starts the engine; it does not create, overwrite, migrate, or seed StreetBizDB.
 
-## Related repository
+STREETBIZ_DB_CONNECTION may point to the Compose SQL Server or to an existing
+SQL Server outside Docker.
 
-The responsive PWA and role-specific dashboards live in
-[StreetBiz-FE](https://github.com/zawy2004/StreetBiz-FE).
+~~~powershell
+docker compose up --build
+~~~
 
-## Contributing
+## Existing database and migrations
 
-Use a short-lived `feature/<issue>-short-name` or `fix/<issue>-short-name` branch.
-Pull requests should identify the requirement, include migration/API compatibility
-notes where relevant, provide test evidence and rollback risk, and receive at least
-one approval before merge.
+StreetBizDB existed before this codebase and did not contain
+__EFMigrationsHistory when inspected. InitialBaseline therefore has an
+intentionally empty Up() and Down(), while its Designer file and ModelSnapshot
+capture the current model.
 
-## Team
+Do not run InitialCreate, EnsureCreated(), Database.Migrate(), database update,
+or any migration SQL against the existing database without explicit review and
+approval. The generated inspection script is docs/InitialBaseline.sql; it has no
+schema operations for existing StreetBiz tables.
 
-- Dinh Gia Huy — Team Leader
-- Nguyen Duy Luong
-- Park Jea Minh
-- Truong Huynh Long Vien
-- Do Thanh Tin
-- Nguyen Quoc Long — Supervisor
+For a future reviewed schema change:
 
-## Licence
+~~~powershell
+dotnet ef migrations add <MigrationName> --project src/StreetBiz.Infrastructure --startup-project src/StreetBiz.API --context StreetBizDbContext --output-dir Persistence/Migrations
+dotnet ef migrations script --idempotent --project src/StreetBiz.Infrastructure --startup-project src/StreetBiz.API --context StreetBizDbContext
+~~~
 
-No open-source licence has been published for this repository yet.
+Review generated SQL for destructive or unintended operations before requesting
+approval to apply it. See docs/migration-guide.md.
+
+## Solution layout
+
+~~~text
+StreetBiz-BE/
+|-- StreetBiz.Backend.sln
+|-- src/
+|   |-- StreetBiz.Domain/
+|   |-- StreetBiz.Application/
+|   |-- StreetBiz.Infrastructure/
+|   +-- StreetBiz.API/
+|-- tests/
+|   |-- StreetBiz.Domain.Tests/
+|   |-- StreetBiz.Application.Tests/
+|   |-- StreetBiz.Infrastructure.Tests/
+|   +-- StreetBiz.API.Tests/
+|-- docs/
+|-- Dockerfile
+|-- docker-compose.yml
+|-- Directory.Build.props
++-- README.md
+~~~
+
+Dependencies point inward:
+
+- Application references Domain.
+- Infrastructure references Application and Domain.
+- API references Application and Infrastructure.
+- Domain references no other project and has no EF Core or ASP.NET Core package.
+
+## Deliberately not implemented
+
+Authentication/JWT, business controllers, repositories, CQRS commands/queries,
+payments, chat, notifications, and all domain business logic are outside this
+foundation.
+
+## More documentation
+
+- docs/architecture.md
+- docs/project-structure.md
+- docs/database-reverse-engineering.md
+- docs/migration-guide.md
