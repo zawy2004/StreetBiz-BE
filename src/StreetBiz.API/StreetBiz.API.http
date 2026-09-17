@@ -1,0 +1,151 @@
+### StreetBiz API — Authentication & Vendor Onboarding
+# Chạy từng request bằng "Send Request" (VS Code: extension REST Client; Visual Studio 2022 hỗ trợ sẵn).
+# Thứ tự: 1 → 2 → 3, sau đó các request có Bearer token.
+# OTP không gửi SMS thật: đọc dòng [DEV-SMS] trong cửa sổ console của API rồi dán vào @otp.
+
+@host = http://localhost:5000
+@phone = 0905123456
+@password = Str0ng!Pass
+@otp = 000000
+
+### 0. Danh sách phường (dùng id cho wardUnitId)
+GET {{host}}/api/administrative-units/wards
+
+### 1. AUTH-02 Gửi OTP đăng ký (gửi lại trong 60s -> 429 kèm retryAfterSeconds; số đã đăng ký -> 409)
+POST {{host}}/api/auth/send-otp
+Content-Type: application/json
+
+{ "phoneNumber": "{{phone}}", "purpose": "REGISTRATION" }
+
+### 2. AUTH-01 Đăng ký tài khoản Hộ kinh doanh (điền @otp trước)
+# @name register
+POST {{host}}/api/auth/register
+Content-Type: application/json
+
+{
+  "phoneNumber": "{{phone}}",
+  "password": "{{password}}",
+  "fullName": "Nguyen Van A",
+  "roleCode": "VENDOR",
+  "wardUnitId": 10,
+  "otp": "{{otp}}"
+}
+
+### 3. AUTH-03 Đăng nhập
+# @name login
+POST {{host}}/api/auth/login
+Content-Type: application/json
+
+{ "phoneNumber": "{{phone}}", "password": "{{password}}" }
+
+###
+@token = {{login.response.body.accessToken}}
+@refreshToken = {{login.response.body.refreshToken}}
+
+### AUTH-08 Danh sách phiên đăng nhập
+GET {{host}}/api/auth/sessions
+Authorization: Bearer {{token}}
+
+### AUTH-09 Đăng xuất một thiết bị khác (không được là phiên hiện tại -> 422)
+DELETE {{host}}/api/auth/sessions/1
+Authorization: Bearer {{token}}
+
+### Làm mới token (phiên cũ bị thu hồi, token cũ hết hiệu lực ngay)
+POST {{host}}/api/auth/refresh
+Content-Type: application/json
+
+{ "refreshToken": "{{refreshToken}}" }
+
+### AUTH-07 Đổi mật khẩu (sai mật khẩu hiện tại -> 400, errors.CurrentPassword)
+POST {{host}}/api/auth/change-password
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{ "currentPassword": "{{password}}", "newPassword": "N3w!Passw0rd" }
+
+### AUTH-05 Quên mật khẩu (luôn trả 200, kể cả số không tồn tại)
+POST {{host}}/api/auth/forgot-password
+Content-Type: application/json
+
+{ "phoneNumber": "{{phone}}" }
+
+### AUTH-06 Đặt lại mật khẩu bằng OTP PASSWORD_RESET
+POST {{host}}/api/auth/reset-password
+Content-Type: application/json
+
+{ "phoneNumber": "{{phone}}", "otp": "{{otp}}", "newPassword": "{{password}}" }
+
+### Upload giấy tờ (JPG/PNG/WEBP/PDF, <= 5 MB) — đổi đường dẫn file cho đúng máy bạn
+# @name upload
+POST {{host}}/api/uploads/evidence
+Authorization: Bearer {{token}}
+Content-Type: multipart/form-data; boundary=StreetBizBoundary
+
+--StreetBizBoundary
+Content-Disposition: form-data; name="file"; filename="cccd.jpg"
+Content-Type: image/jpeg
+
+< C:/path/to/cccd.jpg
+--StreetBizBoundary--
+
+###
+@fileUrl = {{upload.response.body.fileUrl}}
+
+### REG-01 Nộp hồ sơ đăng ký kinh doanh
+# @name submit
+POST {{host}}/api/vendor/registrations
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "vendorType": "FIXED_STOREFRONT",
+  "displayName": "Xoi ga Ba Nam",
+  "declaredAddress": "12 Le Duan, Hai Chau",
+  "addressLatitude": 16.0678,
+  "addressLongitude": 108.2208,
+  "wardUnitId": 10
+}
+
+###
+@registrationId = {{submit.response.body.data.registrationId}}
+
+### REG-02 Gắn giấy tờ đã upload vào hồ sơ
+POST {{host}}/api/vendor/registrations/{{registrationId}}/evidence
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{ "evidenceType": "IDENTITY_DOCUMENT", "fileUrl": "{{fileUrl}}", "ocrExtractedData": null }
+
+### REG-03 Danh sách hồ sơ
+GET {{host}}/api/vendor/registrations
+Authorization: Bearer {{token}}
+
+### REG-03 Chi tiết hồ sơ + giấy tờ
+GET {{host}}/api/vendor/registrations/{{registrationId}}
+Authorization: Bearer {{token}}
+
+### Tải file giấy tờ (chỉ chủ file, cán bộ phường, quản trị viên)
+GET {{host}}{{fileUrl}}
+Authorization: Bearer {{token}}
+
+### REG-04 Cập nhật & gửi lại (chỉ DRAFT / SUBMITTED / MORE_INFORMATION_REQUIRED)
+PUT {{host}}/api/vendor/registrations/{{registrationId}}
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "vendorType": "FIXED_STOREFRONT",
+  "displayName": "Xoi ga Ba Nam (co so 2)",
+  "declaredAddress": "12 Le Duan, Hai Chau",
+  "addressLatitude": 16.0678,
+  "addressLongitude": 108.2208,
+  "wardUnitId": 10
+}
+
+### REG-05 Rút hồ sơ
+POST {{host}}/api/vendor/registrations/{{registrationId}}/withdraw
+Authorization: Bearer {{token}}
+
+### AUTH-04 Đăng xuất (sau đó mọi request dùng @token trả 401)
+POST {{host}}/api/auth/logout
+Authorization: Bearer {{token}}
