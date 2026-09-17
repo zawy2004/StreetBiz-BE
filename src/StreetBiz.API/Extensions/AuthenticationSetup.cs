@@ -2,6 +2,7 @@ using System.Text;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.IdentityModel.Tokens;
 using StreetBiz.Application.Common.Interfaces;
+using StreetBiz.Application.Features.WardSlots;
 
 namespace StreetBiz.API.Extensions;
 
@@ -36,6 +37,7 @@ public static class AuthenticationSetup
                     ValidIssuer = configuration["Jwt:Issuer"] ?? "StreetBiz",
                     ValidAudience = configuration["Jwt:Audience"] ?? "StreetBiz",
                     IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(signingKey)),
+                    ValidAlgorithms = [SecurityAlgorithms.HmacSha256],
                     ClockSkew = TimeSpan.FromSeconds(30),
                 };
 
@@ -54,6 +56,27 @@ public static class AuthenticationSetup
 
     private static async Task ValidateSessionAsync(TokenValidatedContext context)
     {
+        var services = context.HttpContext.RequestServices;
+
+        // The short-lived ward bootstrap token exists only for local development.
+        // It has no persisted login session, so validate its configured database
+        // account here before the normal session check.
+        if (context.Principal?.FindFirst("ward_dev")?.Value == "true")
+        {
+            var environment = services.GetRequiredService<IHostEnvironment>();
+            var resolver = services.GetRequiredService<IWardActorResolver>();
+            if (!(environment.IsDevelopment() || environment.IsEnvironment("Testing")) ||
+                !long.TryParse(context.Principal.FindFirst("sub")?.Value, out var wardUserId) ||
+                await resolver.ResolveAsync(wardUserId, context.HttpContext.RequestAborted) is not { } actor)
+            {
+                context.Fail("Ward development session is invalid.");
+                return;
+            }
+
+            context.HttpContext.Items[typeof(WardActor)] = actor;
+            return;
+        }
+
         var sid = context.Principal?.FindFirst("sid")?.Value;
         if (!long.TryParse(sid, out var sessionId))
         {
@@ -61,7 +84,6 @@ public static class AuthenticationSetup
             return;
         }
 
-        var services = context.HttpContext.RequestServices;
         var sessions = services.GetRequiredService<ISessionRepository>();
         var clock = services.GetRequiredService<IDateTimeProvider>();
         var cancellationToken = context.HttpContext.RequestAborted;

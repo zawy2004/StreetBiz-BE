@@ -125,6 +125,7 @@ public static class PermitEffectiveStatuses
 /// <summary>FeeScheduleItems.item_status / Penalties.penalty_status values relevant to SIDE-07's debt check.</summary>
 public static class DebtStatuses
 {
+    public const string FeeItemPaid = "PAID";
     public const string FeeItemOverdue = "OVERDUE";
     public const string PenaltyUnpaid = "UNPAID";
 }
