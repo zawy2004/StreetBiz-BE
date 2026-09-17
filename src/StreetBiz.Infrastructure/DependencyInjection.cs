@@ -1,9 +1,11 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Options;
 using StreetBiz.Application.Common.Interfaces;
 using StreetBiz.Application.Common.Security;
 using StreetBiz.Infrastructure.Common;
+using StreetBiz.Infrastructure.Geocoding;
 using StreetBiz.Infrastructure.Identity;
 using StreetBiz.Infrastructure.Notifications;
 using StreetBiz.Infrastructure.Persistence;
@@ -60,6 +62,16 @@ public static class DependencyInjection
 
         services.Configure<Sidewalk.SidewalkSettings>(configuration.GetSection(Sidewalk.SidewalkSettings.SectionName));
         services.AddSingleton<ISidewalkPolicy, Sidewalk.SidewalkPolicy>();
+
+        services.Configure<NominatimSettings>(configuration.GetSection(NominatimSettings.SectionName));
+        services.AddMemoryCache();
+        services.AddHttpClient<IGeocodingService, NominatimGeocodingService>((sp, client) =>
+        {
+            var settings = sp.GetRequiredService<IOptions<NominatimSettings>>().Value;
+            client.BaseAddress = new Uri(settings.BaseUrl.TrimEnd('/') + "/");
+            client.Timeout = TimeSpan.FromSeconds(settings.TimeoutSeconds);
+            client.DefaultRequestHeaders.UserAgent.ParseAdd(settings.UserAgent);
+        });
 
         return services;
     }

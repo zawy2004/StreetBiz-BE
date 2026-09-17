@@ -144,7 +144,9 @@ public static class SideMessages
     public const string ContractCancelled = "Your rental slot has been returned successfully.";
     public const string PermitNotFound = "No digital permit has been issued for this contract yet.";
     public const string ProposalPhotoRequired = "A photo of the proposed location is required."; // WARD-16 evidence
+    public const string ZoneNotFound = "Please select a valid pricing zone.";
     public const string SlotCodeGenerationFailed = "Could not generate a unique slot code. Please try again.";
+    public const string SlotProposed = "Your proposed slot has been submitted for review.";
     public const string AddressChangeNotEligible = "Only fixed-storefront registrations may request an address change.";
     public const string AddressChangeAlreadyOpen = "An address change request is already pending for this registration.";
     public const string ReleasedContractNotOwned = "The slot to release does not belong to this registration.";

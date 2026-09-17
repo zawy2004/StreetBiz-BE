@@ -11,4 +11,16 @@ public interface ISidewalkSlotRepository
     Task<IReadOnlyList<SlotRow>> SearchAsync(SlotSearchArea area, CancellationToken cancellationToken);
 
     Task<SlotRow?> GetByIdAsync(long slotId, CancellationToken cancellationToken);
+
+    Task<bool> ZoneExistsAsync(int zoneId, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// SIDE-11: inserts a VENDOR_PROPOSED slot pending WARD-16 review. Throws a typed
+    /// AppException (via SqlErrorTranslator) if <paramref name="slotCode"/> collides.
+    /// </summary>
+    Task<long> ProposeAsync(long registrationId, NewSlotProposal proposal, string slotCode, CancellationToken cancellationToken);
+
+    Task<SlotProposalRow?> GetProposalByIdAsync(long slotId, CancellationToken cancellationToken);
+
+    Task<IReadOnlyList<SlotProposalRow>> ListProposalsByVendorAsync(long vendorId, CancellationToken cancellationToken);
 }

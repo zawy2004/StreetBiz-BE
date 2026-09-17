@@ -27,3 +27,23 @@ public sealed record SlotSearchArea(
     decimal MinLongitude,
     decimal MaxLongitude,
     int? WardUnitId);
+
+/// <summary>Fields supplied by a vendor proposing a new slot at an unlisted location (SIDE-11).</summary>
+public sealed record NewSlotProposal(
+    int ZoneId,
+    decimal Latitude,
+    decimal Longitude,
+    decimal? WidthMeters,
+    decimal? LengthMeters,
+    string ProposalPhotoUrl);
+
+/// <summary>Application-facing projection of a vendor-proposed slot and its review state.</summary>
+public sealed record SlotProposalRow(
+    long SlotId,
+    string SlotCode,
+    decimal Latitude,
+    decimal Longitude,
+    string ProposalReviewStatus,
+    string ProposalPhotoUrl,
+    string? ProposalReviewReason,
+    DateTime CreatedAt);
