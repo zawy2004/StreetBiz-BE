@@ -56,6 +56,7 @@ public static class DependencyInjection
         services.AddScoped<IRentalContractRepository, RentalContractRepository>();
         services.AddScoped<IRenewalRequestRepository, RenewalRequestRepository>();
         services.AddScoped<IDigitalPermitRepository, DigitalPermitRepository>();
+        services.AddScoped<IAddressChangeRequestRepository, AddressChangeRequestRepository>();
 
         services.Configure<PermitSettings>(configuration.GetSection(PermitSettings.SectionName));
         services.AddSingleton<IPermitTokenService, PermitTokenService>();

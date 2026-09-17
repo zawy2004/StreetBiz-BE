@@ -149,6 +149,8 @@ public static class SideMessages
     public const string SlotProposed = "Your proposed slot has been submitted for review.";
     public const string AddressChangeNotEligible = "Only fixed-storefront registrations may request an address change.";
     public const string AddressChangeAlreadyOpen = "An address change request is already pending for this registration.";
+    public const string AddressChangeNotFound = "Address change request not found.";
+    public const string AddressChangeRequested = "Your address change request has been submitted successfully.";
     public const string ReleasedContractNotOwned = "The slot to release does not belong to this registration.";
     public const string TransferSameVendor = "Cannot transfer a slot to yourself.";
     public const string TransferAlreadyOpen = "A transfer request is already pending for this contract.";
