@@ -22,4 +22,7 @@ public interface IBusinessRegistrationRepository
 
     /// <summary>True when an ACTIVE rental contract exists for this registration (blocks withdrawal, BR-16).</summary>
     Task<bool> HasActiveContractAsync(long registrationId, CancellationToken cancellationToken);
+
+    /// <summary>BR-26 (SIDE-12/13): true when the vendor holds at least one APPROVED registration.</summary>
+    Task<bool> HasApprovedRegistrationAsync(long vendorId, CancellationToken cancellationToken);
 }

@@ -121,6 +121,10 @@ public sealed class BusinessRegistrationRepository(
          select c.contract_id)
         .AnyAsync(cancellationToken);
 
+    public Task<bool> HasApprovedRegistrationAsync(long vendorId, CancellationToken cancellationToken) =>
+        dbContext.BusinessRegistrations.AsNoTracking()
+            .AnyAsync(r => r.vendor_id == vendorId && r.registration_status == RegistrationStatuses.Approved, cancellationToken);
+
     private static BizRegistration Map(BusinessRegistration r) => new(
         r.registration_id, r.vendor_id, r.vendor_type, r.display_name, r.declared_address,
         r.address_latitude, r.address_longitude, r.ward_unit_id, r.registration_status,
