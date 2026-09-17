@@ -4,7 +4,8 @@ namespace StreetBiz.Application.Common.Interfaces;
 
 public interface IBusinessRegistrationRepository
 {
-    Task<bool> HasActivePendingAsync(long vendorId, CancellationToken cancellationToken);
+    /// <summary>True when the vendor has a SUBMITTED/UNDER_REVIEW registration other than <paramref name="excludeRegistrationId"/>.</summary>
+    Task<bool> HasActivePendingAsync(long vendorId, CancellationToken cancellationToken, long? excludeRegistrationId = null);
     Task<long> CreateAsync(long vendorId, NewBizRegistration data, CancellationToken cancellationToken);
 
     Task<BizRegistration?> GetByIdAsync(long registrationId, CancellationToken cancellationToken);
@@ -16,6 +17,8 @@ public interface IBusinessRegistrationRepository
     Task SetStatusAsync(long registrationId, string status, CancellationToken cancellationToken);
 
     Task<long> AddEvidenceAsync(long registrationId, NewRegistrationEvidence evidence, CancellationToken cancellationToken);
+
+    Task<IReadOnlyList<BizRegistrationEvidence>> ListEvidenceAsync(long registrationId, CancellationToken cancellationToken);
 
     /// <summary>True when an ACTIVE rental contract exists for this registration (blocks withdrawal, BR-16).</summary>
     Task<bool> HasActiveContractAsync(long registrationId, CancellationToken cancellationToken);

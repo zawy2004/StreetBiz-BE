@@ -10,9 +10,10 @@ public sealed class BusinessRegistrationRepository(
     StreetBizDbContext dbContext,
     IDateTimeProvider clock) : IBusinessRegistrationRepository
 {
-    public Task<bool> HasActivePendingAsync(long vendorId, CancellationToken cancellationToken) =>
+    public Task<bool> HasActivePendingAsync(long vendorId, CancellationToken cancellationToken, long? excludeRegistrationId = null) =>
         dbContext.BusinessRegistrations.AsNoTracking()
             .AnyAsync(r => r.vendor_id == vendorId
+                        && r.registration_id != excludeRegistrationId
                         && (r.registration_status == RegistrationStatuses.Submitted
                          || r.registration_status == RegistrationStatuses.UnderReview),
                       cancellationToken);
@@ -104,6 +105,13 @@ public sealed class BusinessRegistrationRepository(
         await dbContext.SaveChangesAsync(cancellationToken);
         return entity.evidence_id;
     }
+
+    public async Task<IReadOnlyList<BizRegistrationEvidence>> ListEvidenceAsync(long registrationId, CancellationToken cancellationToken) =>
+        await dbContext.RegistrationEvidences.AsNoTracking()
+            .Where(e => e.registration_id == registrationId)
+            .OrderBy(e => e.uploaded_at)
+            .Select(e => new BizRegistrationEvidence(e.evidence_id, e.registration_id, e.evidence_type, e.file_url, e.uploaded_at))
+            .ToListAsync(cancellationToken);
 
     public Task<bool> HasActiveContractAsync(long registrationId, CancellationToken cancellationToken) =>
         (from c in dbContext.RentalContracts.AsNoTracking()

@@ -31,7 +31,8 @@ public sealed class OtpService(
 
         if (latest is not null && latest.consumed_at is null && now - latest.created_at < ResendCooldown)
         {
-            throw new DomainRuleException(AppMessages.OtpCooldown);
+            var wait = ResendCooldown - (now - latest.created_at);
+            throw new TooManyRequestsException(AppMessages.OtpCooldown, (int)Math.Ceiling(wait.TotalSeconds));
         }
 
         var code = RandomNumberGenerator.GetInt32(0, 1_000_000).ToString("D6");

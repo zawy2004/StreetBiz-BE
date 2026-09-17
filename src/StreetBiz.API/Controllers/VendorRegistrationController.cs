@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using StreetBiz.Application.Common.Security;
 using StreetBiz.Application.DTOs.VendorRegistration;
+using StreetBiz.Application.Features.VendorRegistration.GetRegistration;
 using StreetBiz.Application.Features.VendorRegistration.SubmitEvidence;
 using StreetBiz.Application.Features.VendorRegistration.SubmitRegistration;
 using StreetBiz.Application.Features.VendorRegistration.TrackRegistrations;
@@ -31,6 +32,11 @@ public sealed class VendorRegistrationController(ISender sender) : ControllerBas
     [HttpGet]
     public async Task<ActionResult<IReadOnlyList<BusinessRegistrationDto>>> List(CancellationToken cancellationToken)
         => Ok(await sender.Send(new TrackRegistrationsQuery(), cancellationToken));
+
+    /// <summary>REG-03: one registration with its evidence documents.</summary>
+    [HttpGet("{registrationId:long}")]
+    public async Task<ActionResult<BusinessRegistrationDetailDto>> Get(long registrationId, CancellationToken cancellationToken)
+        => Ok(await sender.Send(new GetRegistrationQuery(registrationId), cancellationToken));
 
     /// <summary>REG-02: upload an evidence document for a registration.</summary>
     [HttpPost("{registrationId:long}/evidence")]

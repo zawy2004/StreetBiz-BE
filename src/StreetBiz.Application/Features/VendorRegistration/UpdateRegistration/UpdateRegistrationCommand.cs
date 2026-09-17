@@ -36,7 +36,8 @@ public sealed class UpdateRegistrationCommandValidator : AbstractValidator<Updat
 
 public sealed class UpdateRegistrationCommandHandler(
     IVendorContext vendorContext,
-    IBusinessRegistrationRepository repository) : IRequestHandler<UpdateRegistrationCommand, BusinessRegistrationDto>
+    IBusinessRegistrationRepository repository,
+    IAdministrativeUnitRepository units) : IRequestHandler<UpdateRegistrationCommand, BusinessRegistrationDto>
 {
     public async Task<BusinessRegistrationDto> Handle(UpdateRegistrationCommand request, CancellationToken cancellationToken)
     {
@@ -47,6 +48,16 @@ public sealed class UpdateRegistrationCommandHandler(
         {
             throw new DomainRuleException(
                 string.Format(RegMessages.NotEditable, registration.RegistrationStatus));
+        }
+
+        await units.EnsureWardAsync(request.WardUnitId, cancellationToken);
+
+        // BR-09: re-submitting (e.g. from MORE_INFORMATION_REQUIRED) must not leave the
+        // vendor with a second application in review.
+        if (await repository.HasActivePendingAsync(
+                registration.VendorId, cancellationToken, excludeRegistrationId: registration.RegistrationId))
+        {
+            throw new ConflictException(RegMessages.DuplicatePending);
         }
 
         var data = new NewBizRegistration(

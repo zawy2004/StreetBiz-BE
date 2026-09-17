@@ -8,6 +8,7 @@ using StreetBiz.Infrastructure.Notifications;
 using StreetBiz.Infrastructure.Persistence;
 using StreetBiz.Infrastructure.Persistence.Repositories;
 using StreetBiz.Infrastructure.Security;
+using StreetBiz.Infrastructure.Storage;
 
 namespace StreetBiz.Infrastructure;
 
@@ -33,17 +34,20 @@ public static class DependencyInjection
         });
 
         services.Configure<JwtSettings>(configuration.GetSection(JwtSettings.SectionName));
+        services.Configure<StorageSettings>(configuration.GetSection(StorageSettings.SectionName));
 
         services.AddSingleton<IDateTimeProvider, DateTimeProvider>();
         services.AddSingleton<IPasswordHasher, PasswordHasher>();
         services.AddSingleton<IJwtTokenService, JwtTokenService>();
         services.AddSingleton<ISmsSender, LoggingSmsSender>();
+        services.AddSingleton<IFileStorage, LocalFileStorage>();
 
         services.AddScoped<IOtpService, OtpService>();
         services.AddScoped<IUserAccountRepository, UserAccountRepository>();
         services.AddScoped<ISessionRepository, SessionRepository>();
         services.AddScoped<IVendorRepository, VendorRepository>();
         services.AddScoped<IBusinessRegistrationRepository, BusinessRegistrationRepository>();
+        services.AddScoped<IAdministrativeUnitRepository, AdministrativeUnitRepository>();
 
         return services;
     }

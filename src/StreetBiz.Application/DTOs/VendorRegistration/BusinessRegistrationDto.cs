@@ -5,6 +5,8 @@ public sealed record BusinessRegistrationDto(
     string VendorType,
     string DisplayName,
     string? DeclaredAddress,
+    decimal? AddressLatitude,
+    decimal? AddressLongitude,
     int WardUnitId,
     string RegistrationStatus,
     bool FastTrackFlag,
@@ -19,3 +21,7 @@ public sealed record RegistrationEvidenceDto(
     string EvidenceType,
     string FileUrl,
     DateTime UploadedAt);
+
+public sealed record BusinessRegistrationDetailDto(
+    BusinessRegistrationDto Registration,
+    IReadOnlyList<RegistrationEvidenceDto> Evidence);

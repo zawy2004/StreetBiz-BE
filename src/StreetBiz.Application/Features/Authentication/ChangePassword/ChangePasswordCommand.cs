@@ -37,7 +37,12 @@ public sealed class ChangePasswordCommandHandler(
 
         if (!passwordHasher.Verify(request.CurrentPassword, user.PasswordHash))
         {
-            throw new AuthenticationException(AppMessages.CurrentPasswordIncorrect);
+            // A wrong current password is a form error, not a failed authentication: a 401
+            // here would make clients treat the access token as expired and refresh it.
+            throw new ValidationAppException(new Dictionary<string, string[]>
+            {
+                [nameof(request.CurrentPassword)] = [AppMessages.CurrentPasswordIncorrect],
+            });
         }
 
         await userRepository.UpdatePasswordHashAsync(

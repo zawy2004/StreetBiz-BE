@@ -47,4 +47,11 @@ public static class AppMessages
     public const string OtpCooldown = "Please wait before requesting another verification code.";
     public const string OtpLocked = "Too many failed verification attempts. Please try again later.";
     public const string AccountSuspended = "This account is suspended. Please contact support.";
+    public const string InvalidWard = "Please select a valid ward.";
+}
+
+/// <summary>AdministrativeUnits.unit_type values. `ward_unit_type` is a computed 'WARD' column.</summary>
+public static class AdministrativeUnitTypes
+{
+    public const string Ward = "WARD";
 }

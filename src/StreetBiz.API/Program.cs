@@ -1,9 +1,11 @@
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
+using Microsoft.OpenApi.Models;
 using Serilog;
 using StreetBiz.API.Extensions;
 using StreetBiz.Application;
 using StreetBiz.Infrastructure;
+using StreetBiz.Infrastructure.Storage;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -19,9 +21,29 @@ var databaseConnectionString =
 
 builder.Services.AddApplication();
 builder.Services.AddInfrastructure(builder.Configuration);
+// Resolve a relative upload root against the project, not the bin folder, so
+// uploads survive a rebuild. An absolute Storage:RootPath is used as-is.
+builder.Services.PostConfigure<StorageSettings>(settings =>
+    settings.RootPath = Path.Combine(builder.Environment.ContentRootPath, settings.RootPath));
 builder.Services.AddApiServices(builder.Configuration);
+builder.Services.AddStreetBizCors(builder.Configuration, builder.Environment);
 builder.Services.AddEndpointsApiExplorer();
-builder.Services.AddSwaggerGen();
+builder.Services.AddSwaggerGen(options =>
+{
+    // Lets "Authorize" in Swagger UI send the access token from /api/auth/login.
+    var bearer = new OpenApiSecurityScheme
+    {
+        Name = "Authorization",
+        In = ParameterLocation.Header,
+        Type = SecuritySchemeType.Http,
+        Scheme = "bearer",
+        BearerFormat = "JWT",
+        Description = "Paste the accessToken returned by /api/auth/login.",
+        Reference = new OpenApiReference { Type = ReferenceType.SecurityScheme, Id = "Bearer" },
+    };
+    options.AddSecurityDefinition("Bearer", bearer);
+    options.AddSecurityRequirement(new OpenApiSecurityRequirement { [bearer] = [] });
+});
 builder.Services.AddProblemDetails();
 builder.Services
     .AddHealthChecks()
@@ -42,7 +64,15 @@ if (app.Environment.IsDevelopment())
     app.UseSwaggerUI();
 }
 
-app.UseHttpsRedirection();
+// Redirecting to HTTPS in development would turn the SPA's plain-HTTP calls into
+// 307s, which browsers refuse to follow for a CORS preflight. Keep the redirect
+// to deployed environments, which are served over HTTPS end to end.
+if (!app.Environment.IsDevelopment())
+{
+    app.UseHttpsRedirection();
+}
+
+app.UseCors(CorsSetup.PolicyName);
 
 app.UseAuthentication();
 app.UseAuthorization();

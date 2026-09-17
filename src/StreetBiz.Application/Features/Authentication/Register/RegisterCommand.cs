@@ -48,10 +48,17 @@ public sealed class RegisterCommandHandler(
     IUserAccountRepository userRepository,
     IPasswordHasher passwordHasher,
     IDateTimeProvider clock,
-    IAuthTokenIssuer tokenIssuer) : IRequestHandler<RegisterCommand, AuthResultDto>
+    IAuthTokenIssuer tokenIssuer,
+    IAdministrativeUnitRepository units) : IRequestHandler<RegisterCommand, AuthResultDto>
 {
     public async Task<AuthResultDto> Handle(RegisterCommand request, CancellationToken cancellationToken)
     {
+        // Checked before the OTP is spent, so a bad ward does not burn the code.
+        if (request.WardUnitId is { } wardUnitId)
+        {
+            await units.EnsureWardAsync(wardUnitId, cancellationToken);
+        }
+
         // 1) Prove phone ownership (consumes the SIGNUP challenge).
         await otpService.ConsumeAsync(request.PhoneNumber, OtpPurposes.Signup, request.Otp, cancellationToken);
 

@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Diagnostics;
 using Microsoft.AspNetCore.Mvc;
 using StreetBiz.Application.Common.Exceptions;
+using StreetBiz.Application.Common.Security;
 
 namespace StreetBiz.API.Extensions;
 
@@ -22,11 +23,34 @@ public sealed class GlobalExceptionHandler(ILogger<GlobalExceptionHandler> logge
                 return true;
 
             case AppException app:
-                await WriteAsync(httpContext, new ProblemDetails
+                var problem = new ProblemDetails
                 {
                     Status = app.StatusCode,
                     Title = app.ErrorCode,
+                    Type = app.ErrorCode,
                     Detail = app.Message,
+                };
+
+                if (app is TooManyRequestsException tooMany)
+                {
+                    httpContext.Response.Headers.RetryAfter = tooMany.RetryAfterSeconds.ToString();
+                    problem.Extensions["retryAfterSeconds"] = tooMany.RetryAfterSeconds;
+                }
+
+                await WriteAsync(httpContext, problem);
+                return true;
+
+            // Kestrel rejects oversized bodies (e.g. an upload over the limit) with a 413;
+            // report that status instead of turning it into a 500.
+            case BadHttpRequestException badRequest:
+                await WriteAsync(httpContext, new ProblemDetails
+                {
+                    Status = badRequest.StatusCode,
+                    Title = "bad_request",
+                    Type = "bad_request",
+                    Detail = badRequest.StatusCode == StatusCodes.Status413PayloadTooLarge
+                        ? EvidenceFiles.TooLarge
+                        : "The request could not be read.",
                 });
                 return true;
 
@@ -42,7 +66,11 @@ public sealed class GlobalExceptionHandler(ILogger<GlobalExceptionHandler> logge
         }
     }
 
-    private static async Task WriteAsync(HttpContext httpContext, ProblemDetails problem)
+    // Generic so the compile-time type is the concrete one: serializing a
+    // ValidationProblemDetails through a ProblemDetails parameter would drop the
+    // "errors" dictionary the client needs to highlight individual fields.
+    private static async Task WriteAsync<TProblem>(HttpContext httpContext, TProblem problem)
+        where TProblem : ProblemDetails
     {
         httpContext.Response.StatusCode = problem.Status ?? StatusCodes.Status500InternalServerError;
         await httpContext.Response.WriteAsJsonAsync(problem);

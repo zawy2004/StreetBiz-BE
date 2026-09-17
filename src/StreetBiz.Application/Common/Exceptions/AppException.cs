@@ -41,3 +41,11 @@ public sealed class DomainRuleException(string message) : AppException(message)
     public override int StatusCode => 422;
     public override string ErrorCode => "domain_rule";
 }
+
+/// <summary>429 - the caller must wait before retrying (e.g. OTP resend cooldown, BR-61).</summary>
+public sealed class TooManyRequestsException(string message, int retryAfterSeconds) : AppException(message)
+{
+    public int RetryAfterSeconds { get; } = retryAfterSeconds;
+    public override int StatusCode => 429;
+    public override string ErrorCode => "otp_cooldown";
+}

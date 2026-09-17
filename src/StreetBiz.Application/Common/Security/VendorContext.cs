@@ -51,7 +51,8 @@ public sealed class VendorContext(
 public static class RegistrationMapper
 {
     public static BusinessRegistrationDto ToDto(this BizRegistration r) => new(
-        r.RegistrationId, r.VendorType, r.DisplayName, r.DeclaredAddress, r.WardUnitId,
+        r.RegistrationId, r.VendorType, r.DisplayName, r.DeclaredAddress,
+        r.AddressLatitude, r.AddressLongitude, r.WardUnitId,
         r.RegistrationStatus, r.FastTrackFlag, r.ReviewDecisionReason, r.ReviewedAt,
         r.CreatedAt, r.UpdatedAt);
 

@@ -1,5 +1,6 @@
 using FluentValidation;
 using MediatR;
+using StreetBiz.Application.Common.Exceptions;
 using StreetBiz.Application.Common.Interfaces;
 using StreetBiz.Application.Common.Models;
 using StreetBiz.Application.Common.Security;
@@ -22,20 +23,42 @@ public sealed class SubmitEvidenceCommandValidator : AbstractValidator<SubmitEvi
             .Must(t => EvidenceTypes.All.Contains(t))
             .WithMessage(RegMessages.UploadValidDocument);
 
+        // Only URLs issued by POST /api/uploads/evidence are accepted, so reviewers can
+        // always open the document (a browser blob: or arbitrary link cannot be).
         RuleFor(x => x.FileUrl)
-            .NotEmpty().WithMessage(RegMessages.UploadValidDocument)
+            .Must(url => EvidenceFiles.TryParseUrl(url, out _, out _))
+            .WithMessage(RegMessages.UploadValidDocument)
             .MaximumLength(500);
     }
 }
 
 public sealed class SubmitEvidenceCommandHandler(
     IVendorContext vendorContext,
+    ICurrentUser currentUser,
+    IFileStorage storage,
     IBusinessRegistrationRepository repository) : IRequestHandler<SubmitEvidenceCommand, RegistrationEvidenceDto>
 {
     public async Task<RegistrationEvidenceDto> Handle(SubmitEvidenceCommand request, CancellationToken cancellationToken)
     {
         // Ownership guard: the registration must belong to the calling vendor.
-        await vendorContext.RequireOwnedRegistrationAsync(request.RegistrationId, cancellationToken);
+        var registration = await vendorContext.RequireOwnedRegistrationAsync(request.RegistrationId, cancellationToken);
+
+        // BR-62: documents can only be added while the application is still editable.
+        if (!RegistrationStatuses.Editable.Contains(registration.RegistrationStatus))
+        {
+            throw new DomainRuleException(string.Format(RegMessages.NotEditable, registration.RegistrationStatus));
+        }
+
+        // The file must be one this caller uploaded, not another user's document.
+        EvidenceFiles.TryParseUrl(request.FileUrl, out var ownerUserId, out var fileName);
+        if (ownerUserId != currentUser.UserId
+            || !await storage.ExistsAsync(EvidenceFiles.StoragePath(ownerUserId, fileName), cancellationToken))
+        {
+            throw new ValidationAppException(new Dictionary<string, string[]>
+            {
+                [nameof(request.FileUrl)] = [RegMessages.UploadValidDocument],
+            });
+        }
 
         var evidence = new NewRegistrationEvidence(request.EvidenceType, request.FileUrl, request.OcrExtractedData);
         var id = await repository.AddEvidenceAsync(request.RegistrationId, evidence, cancellationToken);

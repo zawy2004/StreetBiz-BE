@@ -41,11 +41,13 @@ public sealed class SubmitRegistrationCommandValidator : AbstractValidator<Submi
 
 public sealed class SubmitRegistrationCommandHandler(
     IVendorContext vendorContext,
-    IBusinessRegistrationRepository repository) : IRequestHandler<SubmitRegistrationCommand, BusinessRegistrationDto>
+    IBusinessRegistrationRepository repository,
+    IAdministrativeUnitRepository units) : IRequestHandler<SubmitRegistrationCommand, BusinessRegistrationDto>
 {
     public async Task<BusinessRegistrationDto> Handle(SubmitRegistrationCommand request, CancellationToken cancellationToken)
     {
         var vendorId = await vendorContext.RequireVendorIdAsync(cancellationToken);
+        await units.EnsureWardAsync(request.WardUnitId, cancellationToken);
 
         // BR-09: at most one active (SUBMITTED/UNDER_REVIEW) registration per vendor.
         if (await repository.HasActivePendingAsync(vendorId, cancellationToken))

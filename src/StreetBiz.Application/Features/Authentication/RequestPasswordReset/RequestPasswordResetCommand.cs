@@ -1,5 +1,6 @@
 using FluentValidation;
 using MediatR;
+using StreetBiz.Application.Common.Exceptions;
 using StreetBiz.Application.Common.Interfaces;
 using StreetBiz.Application.Common.Security;
 
@@ -25,7 +26,15 @@ public sealed class RequestPasswordResetCommandHandler(
         // Only send when the phone is registered, but never reveal the outcome (SEC-05).
         if (await userRepository.PhoneExistsAsync(request.PhoneNumber, cancellationToken))
         {
-            await otpService.IssueAsync(request.PhoneNumber, OtpPurposes.PasswordReset, cancellationToken);
+            try
+            {
+                await otpService.IssueAsync(request.PhoneNumber, OtpPurposes.PasswordReset, cancellationToken);
+            }
+            catch (TooManyRequestsException)
+            {
+                // A code was sent moments ago and is still valid. Surfacing the cooldown
+                // would only happen for registered phones and so leak that the account exists.
+            }
         }
 
         return Unit.Value;
