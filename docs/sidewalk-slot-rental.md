@@ -51,13 +51,16 @@ How to run and test all of this end to end:
   translate to SQL). BR-11's adjacency radius is `Sidewalk:AdjacentRadiusMeters`
   (default 150m), a deliberate simplification since the schema has no
   per-ward radius column.
-- **Three mis-scaffolded 1:1 relationships** (`DigitalPermit.contract`,
-  `RenewalRequest.contract`, `AddressChangeRequest.registration`) were
-  reconfigured as 1:many in `Infrastructure/Persistence/Configurations/ModelFixups.cs`
-  via the `OnModelCreatingPartial` hook — the scaffolder read a *filtered*
-  unique index (only the currently-open row) as an unconditional one.
-  `FeeSchedule` and `Storefront` have the same bug and are still unfixed,
-  deferred to the FEE / Phase 2 module.
+- **Four mis-scaffolded 1:1 relationships** (`DigitalPermit.contract`,
+  `RenewalRequest.contract`, `AddressChangeRequest.registration`,
+  `FeeSchedule.contract`) were reconfigured as 1:many in
+  `Infrastructure/Persistence/Configurations/ModelFixups.cs` via the
+  `OnModelCreatingPartial` hook — the scaffolder read a *filtered* unique
+  index (only the currently-open/current row) as an unconditional one; the SQL
+  schema itself is correct as-is and was not touched. `Storefront.contract`
+  and `Storefront.registration` looked similar but are **not** a bug —
+  `UQ_Storefronts_Contract`/`UQ_Storefronts_Registration` are genuine
+  unconditional `UNIQUE` constraints, so EF's 1:1 mapping there is correct.
 - **SQL trigger errors become typed exceptions.** `TR_RentalContracts_*`
   triggers `RAISERROR` + `ROLLBACK`, which .NET sees as `SqlException` 50000
   regardless of which trigger fired. `Infrastructure/Persistence/SqlErrorTranslator`
