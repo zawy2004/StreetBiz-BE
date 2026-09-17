@@ -139,7 +139,9 @@ public static class SideMessages
     public const string ContractNotFound = "Rental contract not found.";
     public const string CannotReturnWithDebt = "Cannot return a slot while fees are overdue or penalties unpaid."; // mirrors TR_RentalContracts_NoCancelWithDebt
     public const string RenewalAlreadyOpen = "A renewal request is already pending for this contract.";
+    public const string RenewalRequested = "Your renewal request has been submitted successfully.";
     public const string ContractNotActive = "This action requires an active rental contract.";
+    public const string ContractCancelled = "Your rental slot has been returned successfully.";
     public const string PermitNotFound = "No digital permit has been issued for this contract yet.";
     public const string ProposalPhotoRequired = "A photo of the proposed location is required."; // WARD-16 evidence
     public const string SlotCodeGenerationFailed = "Could not generate a unique slot code. Please try again.";

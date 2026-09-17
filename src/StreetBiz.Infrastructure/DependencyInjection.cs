@@ -51,6 +51,7 @@ public static class DependencyInjection
         services.AddScoped<ISidewalkSlotRepository, SidewalkSlotRepository>();
         services.AddScoped<IRentalApplicationRepository, RentalApplicationRepository>();
         services.AddScoped<IRentalContractRepository, RentalContractRepository>();
+        services.AddScoped<IRenewalRequestRepository, RenewalRequestRepository>();
 
         services.Configure<Sidewalk.SidewalkSettings>(configuration.GetSection(Sidewalk.SidewalkSettings.SectionName));
         services.AddSingleton<ISidewalkPolicy, Sidewalk.SidewalkPolicy>();

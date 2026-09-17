@@ -36,6 +36,56 @@ public sealed class RentalContractRepository(StreetBizDbContext dbContext) : IRe
             .Select(ToRowExpression)
             .FirstOrDefaultAsync(cancellationToken);
 
+    public async Task<bool> HasOutstandingDebtAsync(long contractId, CancellationToken cancellationToken)
+    {
+        var hasOverdueFee = await dbContext.FeeScheduleItems.AsNoTracking()
+            .AnyAsync(i => i.fee_schedule.contract_id == contractId && i.item_status == DebtStatuses.FeeItemOverdue,
+                cancellationToken);
+        if (hasOverdueFee)
+        {
+            return true;
+        }
+
+        return await dbContext.Penalties.AsNoTracking()
+            .AnyAsync(p => p.violation.contract_id == contractId && p.penalty_status == DebtStatuses.PenaltyUnpaid,
+                cancellationToken);
+    }
+
+    public async Task CancelAsync(long contractId, long cancelledByUserId, string? reason, CancellationToken cancellationToken)
+    {
+        var contract = await dbContext.RentalContracts
+            .Include(c => c.slot)
+            .FirstOrDefaultAsync(c => c.contract_id == contractId, cancellationToken);
+        if (contract is null)
+        {
+            return;
+        }
+
+        contract.contract_status = ContractStatuses.Cancelled;
+        contract.cancelled_by = cancelledByUserId;
+        contract.cancellation_reason = reason;
+        contract.cancelled_at = DateTime.UtcNow;
+        contract.slot.slot_status = SlotStatuses.Available;
+
+        try
+        {
+            await dbContext.SaveChangesAsync(cancellationToken);
+        }
+        catch (DbUpdateException ex)
+        {
+            // TR_RentalContracts_NoCancelWithDebt is the safety net behind the handler's own
+            // HasOutstandingDebtAsync pre-check, for the race where a fee turns OVERDUE between
+            // the check and this write.
+            var translated = SqlErrorTranslator.TryTranslate(ex);
+            if (translated is not null)
+            {
+                throw translated;
+            }
+
+            throw;
+        }
+    }
+
     private static readonly System.Linq.Expressions.Expression<Func<RentalContract, RentalContractRow>> ToRowExpression =
         c => new RentalContractRow(
             c.contract_id, c.application_id, c.slot_id, c.slot.slot_code, c.slot.zone.zone_name, c.vendor_id,
