@@ -2,7 +2,9 @@ using MediatR;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using StreetBiz.Application.Common.Security;
+using StreetBiz.Application.DTOs.DigitalPermits;
 using StreetBiz.Application.DTOs.RentalContracts;
+using StreetBiz.Application.Features.DigitalPermits.GetPermit;
 using StreetBiz.Application.Features.RentalContracts.CancelContract;
 using StreetBiz.Application.Features.RentalContracts.GetContract;
 using StreetBiz.Application.Features.RentalContracts.ListContracts;
@@ -49,4 +51,9 @@ public sealed class RentalContractsController(ISender sender) : ControllerBase
         await sender.Send(new CancelContractCommand(contractId, request.Reason), cancellationToken);
         return Ok(new { message = SideMessages.ContractCancelled });
     }
+
+    /// <summary>SIDE-08: view the digital QR permit for this contract.</summary>
+    [HttpGet("{contractId:long}/permit")]
+    public async Task<ActionResult<DigitalPermitDto>> GetPermit(long contractId, CancellationToken cancellationToken)
+        => Ok(await sender.Send(new GetPermitQuery(contractId), cancellationToken));
 }

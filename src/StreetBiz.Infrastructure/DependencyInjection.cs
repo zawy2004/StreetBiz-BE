@@ -2,6 +2,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using StreetBiz.Application.Common.Interfaces;
+using StreetBiz.Application.Common.Security;
 using StreetBiz.Infrastructure.Common;
 using StreetBiz.Infrastructure.Identity;
 using StreetBiz.Infrastructure.Notifications;
@@ -52,6 +53,10 @@ public static class DependencyInjection
         services.AddScoped<IRentalApplicationRepository, RentalApplicationRepository>();
         services.AddScoped<IRentalContractRepository, RentalContractRepository>();
         services.AddScoped<IRenewalRequestRepository, RenewalRequestRepository>();
+        services.AddScoped<IDigitalPermitRepository, DigitalPermitRepository>();
+
+        services.Configure<PermitSettings>(configuration.GetSection(PermitSettings.SectionName));
+        services.AddSingleton<IPermitTokenService, PermitTokenService>();
 
         services.Configure<Sidewalk.SidewalkSettings>(configuration.GetSection(Sidewalk.SidewalkSettings.SectionName));
         services.AddSingleton<ISidewalkPolicy, Sidewalk.SidewalkPolicy>();
