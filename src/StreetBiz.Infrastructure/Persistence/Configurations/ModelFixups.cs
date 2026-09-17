@@ -13,6 +13,17 @@ public partial class StreetBizDbContext
 {
     partial void OnModelCreatingPartial(ModelBuilder modelBuilder)
     {
+        // The scaffolded singular navigations (RentalContract.DigitalPermit,
+        // RentalContract.RenewalRequest, BusinessRegistration.AddressChangeRequest) were
+        // generated to match the one-to-one Fluent config below and cannot coexist with a
+        // one-to-many relationship on the same foreign key — EF refuses to flip the
+        // multiplicity while a singular reference nav is still paired to it. They are
+        // unmapped here; a repository queries the *current* row directly (e.g. the live
+        // permit) rather than through contract.DigitalPermit.
+        modelBuilder.Entity<RentalContract>().Ignore(e => e.DigitalPermit);
+        modelBuilder.Entity<RentalContract>().Ignore(e => e.RenewalRequest);
+        modelBuilder.Entity<BusinessRegistration>().Ignore(e => e.AddressChangeRequest);
+
         // UQ_DigitalPermits_LivePerContract filters WHERE permit_status <> 'REVOKED': a
         // contract may accumulate a REVOKED permit plus a replacement (SIDE-08, BR-19/20).
         modelBuilder.Entity<DigitalPermit>()
