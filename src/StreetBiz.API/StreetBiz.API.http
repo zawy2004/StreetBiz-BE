@@ -1,0 +1,311 @@
+### StreetBiz API — Authentication & Vendor Onboarding
+# Chạy từng request bằng "Send Request" (VS Code: extension REST Client; Visual Studio 2022 hỗ trợ sẵn).
+# Thứ tự: 1 → 2 → 3, sau đó các request có Bearer token.
+# OTP không gửi SMS thật: đọc dòng [DEV-SMS] trong cửa sổ console của API rồi dán vào @otp.
+
+@host = http://localhost:5000
+@phone = 0905123456
+@password = Str0ng!Pass
+@otp = 000000
+
+### 0. Danh sách phường (dùng id cho wardUnitId)
+GET {{host}}/api/administrative-units/wards
+
+### 1. AUTH-02 Gửi OTP đăng ký (gửi lại trong 60s -> 429 kèm retryAfterSeconds; số đã đăng ký -> 409)
+POST {{host}}/api/auth/send-otp
+Content-Type: application/json
+
+{ "phoneNumber": "{{phone}}", "purpose": "REGISTRATION" }
+
+### 2. AUTH-01 Đăng ký tài khoản Hộ kinh doanh (điền @otp trước)
+# @name register
+POST {{host}}/api/auth/register
+Content-Type: application/json
+
+{
+  "phoneNumber": "{{phone}}",
+  "password": "{{password}}",
+  "fullName": "Nguyen Van A",
+  "roleCode": "VENDOR",
+  "wardUnitId": 10,
+  "otp": "{{otp}}"
+}
+
+### 3. AUTH-03 Đăng nhập
+# @name login
+POST {{host}}/api/auth/login
+Content-Type: application/json
+
+{ "phoneNumber": "{{phone}}", "password": "{{password}}" }
+
+###
+@token = {{login.response.body.accessToken}}
+@refreshToken = {{login.response.body.refreshToken}}
+
+### AUTH-08 Danh sách phiên đăng nhập
+GET {{host}}/api/auth/sessions
+Authorization: Bearer {{token}}
+
+### AUTH-09 Đăng xuất một thiết bị khác (không được là phiên hiện tại -> 422)
+DELETE {{host}}/api/auth/sessions/1
+Authorization: Bearer {{token}}
+
+### Làm mới token (phiên cũ bị thu hồi, token cũ hết hiệu lực ngay)
+POST {{host}}/api/auth/refresh
+Content-Type: application/json
+
+{ "refreshToken": "{{refreshToken}}" }
+
+### AUTH-07 Đổi mật khẩu (sai mật khẩu hiện tại -> 400, errors.CurrentPassword)
+POST {{host}}/api/auth/change-password
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{ "currentPassword": "{{password}}", "newPassword": "N3w!Passw0rd" }
+
+### AUTH-05 Quên mật khẩu (luôn trả 200, kể cả số không tồn tại)
+POST {{host}}/api/auth/forgot-password
+Content-Type: application/json
+
+{ "phoneNumber": "{{phone}}" }
+
+### AUTH-06 Đặt lại mật khẩu bằng OTP PASSWORD_RESET
+POST {{host}}/api/auth/reset-password
+Content-Type: application/json
+
+{ "phoneNumber": "{{phone}}", "otp": "{{otp}}", "newPassword": "{{password}}" }
+
+### Upload giấy tờ (JPG/PNG/WEBP/PDF, <= 5 MB) — đổi đường dẫn file cho đúng máy bạn
+# @name upload
+POST {{host}}/api/uploads/evidence
+Authorization: Bearer {{token}}
+Content-Type: multipart/form-data; boundary=StreetBizBoundary
+
+--StreetBizBoundary
+Content-Disposition: form-data; name="file"; filename="cccd.jpg"
+Content-Type: image/jpeg
+
+< C:/path/to/cccd.jpg
+--StreetBizBoundary--
+
+###
+@fileUrl = {{upload.response.body.fileUrl}}
+
+### REG-01 Nộp hồ sơ đăng ký kinh doanh
+# @name submit
+POST {{host}}/api/vendor/registrations
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "vendorType": "FIXED_STOREFRONT",
+  "displayName": "Xoi ga Ba Nam",
+  "declaredAddress": "12 Le Duan, Hai Chau",
+  "addressLatitude": 16.0678,
+  "addressLongitude": 108.2208,
+  "wardUnitId": 10
+}
+
+###
+@registrationId = {{submit.response.body.data.registrationId}}
+
+### REG-02 Gắn giấy tờ đã upload vào hồ sơ
+POST {{host}}/api/vendor/registrations/{{registrationId}}/evidence
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{ "evidenceType": "IDENTITY_DOCUMENT", "fileUrl": "{{fileUrl}}", "ocrExtractedData": null }
+
+### REG-03 Danh sách hồ sơ
+GET {{host}}/api/vendor/registrations
+Authorization: Bearer {{token}}
+
+### REG-03 Chi tiết hồ sơ + giấy tờ
+GET {{host}}/api/vendor/registrations/{{registrationId}}
+Authorization: Bearer {{token}}
+
+### Tải file giấy tờ (chỉ chủ file, cán bộ phường, quản trị viên)
+GET {{host}}{{fileUrl}}
+Authorization: Bearer {{token}}
+
+### REG-04 Cập nhật & gửi lại (chỉ DRAFT / SUBMITTED / MORE_INFORMATION_REQUIRED)
+PUT {{host}}/api/vendor/registrations/{{registrationId}}
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "vendorType": "FIXED_STOREFRONT",
+  "displayName": "Xoi ga Ba Nam (co so 2)",
+  "declaredAddress": "12 Le Duan, Hai Chau",
+  "addressLatitude": 16.0678,
+  "addressLongitude": 108.2208,
+  "wardUnitId": 10
+}
+
+### REG-05 Rút hồ sơ
+POST {{host}}/api/vendor/registrations/{{registrationId}}/withdraw
+Authorization: Bearer {{token}}
+
+### AUTH-04 Đăng xuất (sau đó mọi request dùng @token trả 401)
+POST {{host}}/api/auth/logout
+Authorization: Bearer {{token}}
+
+### =====================================================================
+### Sidewalk Slot & Rental (SIDE-01..13)
+### Cần: hồ sơ APPROVED + hợp đồng ACTIVE. Xem docs/dev-seed-side.sql để
+### dựng nhanh fixture này (hoặc @registrationId/@contractId ở trên đã được
+### Phường duyệt thủ công bằng SQL, xem docs/testing-sidewalk-slot-rental.md).
+### =====================================================================
+
+### SIDE-01 Tìm ô trống quanh một điểm (bán kính, mét)
+GET {{host}}/api/sidewalk-slots?lat=16.0120&lng=108.2400&radiusMeters=500
+Authorization: Bearer {{token}}
+
+### SIDE-01 Tìm ô trống theo khung bbox
+GET {{host}}/api/sidewalk-slots?minLat=16.0090&maxLat=16.0160&minLng=108.2360&maxLng=108.2440
+Authorization: Bearer {{token}}
+
+###
+@slotId = 1
+
+### SIDE-02 Chi tiết một ô
+GET {{host}}/api/sidewalk-slots/{{slotId}}
+Authorization: Bearer {{token}}
+
+### SIDE-03B Nộp đơn thuê ô trống (chọn thủ công)
+# @name submitOpenSlot
+POST {{host}}/api/vendor/rental-applications/open-slot
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{ "registrationId": {{registrationId}}, "slotId": {{slotId}}, "requestedTermDays": 90 }
+
+###
+@applicationId = {{submitOpenSlot.response.body.data.applicationId}}
+
+### SIDE-03A Nộp đơn thuê ô liền kề mặt tiền (chỉ Cửa hàng cố định; BR-11 bán kính 150m; BR-12 một hợp đồng adjacent ACTIVE)
+POST {{host}}/api/vendor/rental-applications/adjacent
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{ "registrationId": {{registrationId}}, "slotId": {{slotId}}, "requestedTermDays": 90 }
+
+### SIDE-04 Theo dõi danh sách đơn
+GET {{host}}/api/vendor/rental-applications
+Authorization: Bearer {{token}}
+
+### SIDE-04 Chi tiết một đơn
+GET {{host}}/api/vendor/rental-applications/{{applicationId}}
+Authorization: Bearer {{token}}
+
+### SIDE-04 Rút đơn (chỉ khi PENDING/UNDER_REVIEW/MORE_INFORMATION_REQUIRED)
+POST {{host}}/api/vendor/rental-applications/{{applicationId}}/withdraw
+Authorization: Bearer {{token}}
+
+###
+@contractId = 2
+
+### SIDE-05 Danh sách hợp đồng (lọc theo status, bỏ trống = tất cả)
+GET {{host}}/api/vendor/rental-contracts?status=ACTIVE
+Authorization: Bearer {{token}}
+
+### SIDE-05 Chi tiết hợp đồng
+GET {{host}}/api/vendor/rental-contracts/{{contractId}}
+Authorization: Bearer {{token}}
+
+### SIDE-06 Xin gia hạn hợp đồng (chỉ khi ACTIVE, chưa có renewal đang mở)
+POST {{host}}/api/vendor/rental-contracts/{{contractId}}/renewals
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{ "requestedTermDays": 30 }
+
+### SIDE-06 Danh sách yêu cầu gia hạn của hợp đồng
+GET {{host}}/api/vendor/rental-contracts/{{contractId}}/renewals
+Authorization: Bearer {{token}}
+
+### SIDE-08 Xem giấy phép số (QR) — effectiveStatus đọc từ view vw_PermitValidity
+GET {{host}}/api/vendor/rental-contracts/{{contractId}}/permit
+Authorization: Bearer {{token}}
+
+### SIDE-07 Trả ô / huỷ hợp đồng (còn nợ phí OVERDUE/phạt UNPAID -> 422)
+POST {{host}}/api/vendor/rental-contracts/{{contractId}}/cancel
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{ "reason": "Nghỉ bán, trả lại ô" }
+
+### SIDE-11 Đề xuất ô mới ở địa chỉ chưa có trên bản đồ (bắt buộc proposalPhotoUrl, dùng fileUrl đã upload ở trên)
+# @name proposeSlot
+POST {{host}}/api/vendor/slot-proposals
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "registrationId": {{registrationId}},
+  "zoneId": 1,
+  "latitude": 16.0125,
+  "longitude": 108.2410,
+  "widthMeters": 2.0,
+  "lengthMeters": 1.5,
+  "proposalPhotoUrl": "{{fileUrl}}"
+}
+
+### SIDE-11 Theo dõi các đề xuất đã gửi
+GET {{host}}/api/vendor/slot-proposals
+Authorization: Bearer {{token}}
+
+### SIDE-09/10 Xin đổi địa chỉ kinh doanh (chỉ Cửa hàng cố định; kèm releasedContractId nếu SIDE-10 trả ô liền kề cũ)
+POST {{host}}/api/vendor/address-changes
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "registrationId": {{registrationId}},
+  "newAddress": "45 Nguyen Van Linh, Hai Chau",
+  "newLatitude": null,
+  "newLongitude": null,
+  "releasedContractId": null,
+  "requestedNewSlotId": null
+}
+
+### SIDE-09 Theo dõi các yêu cầu đổi địa chỉ
+GET {{host}}/api/vendor/address-changes
+Authorization: Bearer {{token}}
+
+### SIDE-12 Đề nghị chuyển nhượng ô cho vendor khác (định danh bằng số điện thoại; tự chuyển cho mình -> 400; người nhận chưa APPROVED -> 422 BR-26; còn nợ -> 422 BR-27)
+# @name requestTransfer
+POST {{host}}/api/vendor/slot-transfers
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{ "contractId": {{contractId}}, "toVendorPhone": "0905999997" }
+
+###
+@transferId = {{requestTransfer.response.body.data.transferId}}
+
+### SIDE-12 Danh sách yêu cầu chuyển nhượng đã gửi đi
+GET {{host}}/api/vendor/slot-transfers?direction=outgoing
+Authorization: Bearer {{token}}
+
+### --- Đăng nhập bằng tài khoản vendor NHẬN chuyển nhượng để test SIDE-13 ---
+# @name loginReceiver
+POST {{host}}/api/auth/login
+Content-Type: application/json
+
+{ "phoneNumber": "0905999997", "password": "Test@12345" }
+
+###
+@receiverToken = {{loginReceiver.response.body.accessToken}}
+
+### SIDE-13 Danh sách yêu cầu chuyển nhượng nhận được
+GET {{host}}/api/vendor/slot-transfers?direction=incoming
+Authorization: Bearer {{receiverToken}}
+
+### SIDE-13 Chấp nhận chuyển nhượng (chỉ người nhận; đã quyết định rồi gọi lại -> 409)
+POST {{host}}/api/vendor/slot-transfers/{{transferId}}/accept
+Authorization: Bearer {{receiverToken}}
+
+### SIDE-13 Từ chối chuyển nhượng (dùng thay cho accept ở trên nếu muốn test nhánh từ chối)
+POST {{host}}/api/vendor/slot-transfers/{{transferId}}/decline
+Authorization: Bearer {{receiverToken}}

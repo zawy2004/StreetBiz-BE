@@ -1,5 +1,8 @@
 using FluentValidation;
+using MediatR;
 using Microsoft.Extensions.DependencyInjection;
+using StreetBiz.Application.Common.Behaviors;
+using StreetBiz.Application.Common.Security;
 
 namespace StreetBiz.Application;
 
@@ -13,6 +16,10 @@ public static class DependencyInjection
             configuration.RegisterServicesFromAssembly(assembly));
         services.AddValidatorsFromAssembly(assembly);
         services.AddAutoMapper(_ => { }, assembly);
+
+        services.AddTransient(typeof(IPipelineBehavior<,>), typeof(ValidationBehavior<,>));
+        services.AddScoped<IAuthTokenIssuer, AuthTokenIssuer>();
+        services.AddScoped<IVendorContext, VendorContext>();
 
         return services;
     }
