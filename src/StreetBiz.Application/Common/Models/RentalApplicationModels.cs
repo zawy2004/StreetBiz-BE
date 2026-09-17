@@ -10,4 +10,5 @@ public sealed record RentalApplicationRow(
     string ApplicationStatus,
     string? ReviewDecisionReason,
     DateTime? ReviewedAt,
-    DateTime CreatedAt);
+    DateTime CreatedAt,
+    long VendorId);

@@ -85,7 +85,7 @@ public sealed class RentalApplicationHandlerTests
             .ReturnsAsync(900);
         applications.Setup(a => a.GetByIdAsync(900, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new RentalApplicationRow(900, RegistrationId, SlotId, ApplicationMethods.ManualSelected, 30,
-                ApplicationStatuses.Pending, null, null, DateTime.UtcNow));
+                ApplicationStatuses.Pending, null, null, DateTime.UtcNow, VendorId: 70));
 
         var handler = new SubmitOpenSlotApplicationCommandHandler(vendorContext.Object, slots.Object, applications.Object);
         var command = new SubmitOpenSlotApplicationCommand(RegistrationId, SlotId, 30);
@@ -174,7 +174,7 @@ public sealed class RentalApplicationHandlerTests
             .ReturnsAsync(901);
         applications.Setup(a => a.GetByIdAsync(901, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new RentalApplicationRow(901, RegistrationId, SlotId, ApplicationMethods.AutoAdjacent, 30,
-                ApplicationStatuses.Pending, null, null, DateTime.UtcNow));
+                ApplicationStatuses.Pending, null, null, DateTime.UtcNow, VendorId: 70));
 
         var handler = new SubmitAdjacentApplicationCommandHandler(
             vendorContext.Object, slots.Object, applications.Object, contracts.Object, sidewalkPolicy.Object);

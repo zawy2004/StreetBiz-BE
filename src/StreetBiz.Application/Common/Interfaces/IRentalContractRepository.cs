@@ -1,7 +1,13 @@
+using StreetBiz.Application.Common.Models;
+
 namespace StreetBiz.Application.Common.Interfaces;
 
 public interface IRentalContractRepository
 {
     /// <summary>BR-12: true when the registration already holds an ACTIVE storefront-adjacent contract.</summary>
     Task<bool> HasActiveAdjacentContractAsync(long registrationId, CancellationToken cancellationToken);
+
+    Task<IReadOnlyList<RentalContractRow>> ListByVendorAsync(long vendorId, string? status, CancellationToken cancellationToken);
+
+    Task<RentalContractRow?> GetByIdAsync(long contractId, CancellationToken cancellationToken);
 }

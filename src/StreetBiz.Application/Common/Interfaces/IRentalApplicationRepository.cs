@@ -12,4 +12,8 @@ public interface IRentalApplicationRepository
         CancellationToken cancellationToken);
 
     Task<RentalApplicationRow?> GetByIdAsync(long applicationId, CancellationToken cancellationToken);
+
+    Task<IReadOnlyList<RentalApplicationRow>> ListByVendorAsync(long vendorId, CancellationToken cancellationToken);
+
+    Task SetStatusAsync(long applicationId, string status, CancellationToken cancellationToken);
 }

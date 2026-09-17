@@ -130,6 +130,8 @@ public static class SideMessages
     public const string ApplicationSubmitted = "Your rental application has been submitted successfully.";
     public const string ApplicationNotFound = "Rental application not found.";
     public const string ApplicationAlreadyOpenForSlot = "This slot already has an application under review.";
+    public const string ApplicationNotWithdrawable = "This application can no longer be withdrawn because it has already been decided.";
+    public const string ApplicationWithdrawn = "Your rental application has been withdrawn.";
     public const string NotEligibleForAdjacent = "Only fixed-storefront vendors may apply for a storefront-adjacent slot."; // BR pre-check
     public const string RegistrationMissingAddress = "This registration has no address on file to measure adjacency from.";
     public const string OutsideAdjacentRadius = "The selected slot is too far from the registered business address."; // BR-11

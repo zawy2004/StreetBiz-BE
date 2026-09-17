@@ -33,9 +33,32 @@ public sealed class RentalApplicationRepository(StreetBizDbContext dbContext) : 
     public Task<RentalApplicationRow?> GetByIdAsync(long applicationId, CancellationToken cancellationToken) =>
         dbContext.RentalApplications.AsNoTracking()
             .Where(a => a.application_id == applicationId)
-            .Select(a => new RentalApplicationRow(
-                a.application_id, a.registration_id, a.slot_id, a.application_method,
-                a.requested_term_days, a.application_status, a.review_decision_reason,
-                a.reviewed_at, a.created_at))
+            .Select(ToRowExpression)
             .FirstOrDefaultAsync(cancellationToken);
+
+    public async Task<IReadOnlyList<RentalApplicationRow>> ListByVendorAsync(long vendorId, CancellationToken cancellationToken) =>
+        await dbContext.RentalApplications.AsNoTracking()
+            .Where(a => a.registration.vendor_id == vendorId)
+            .OrderByDescending(a => a.created_at)
+            .Select(ToRowExpression)
+            .ToListAsync(cancellationToken);
+
+    public async Task SetStatusAsync(long applicationId, string status, CancellationToken cancellationToken)
+    {
+        var entity = await dbContext.RentalApplications
+            .FirstOrDefaultAsync(a => a.application_id == applicationId, cancellationToken);
+        if (entity is null)
+        {
+            return;
+        }
+
+        entity.application_status = status;
+        await dbContext.SaveChangesAsync(cancellationToken);
+    }
+
+    private static readonly System.Linq.Expressions.Expression<Func<RentalApplication, RentalApplicationRow>> ToRowExpression =
+        a => new RentalApplicationRow(
+            a.application_id, a.registration_id, a.slot_id, a.application_method,
+            a.requested_term_days, a.application_status, a.review_decision_reason,
+            a.reviewed_at, a.created_at, a.registration.vendor_id);
 }
