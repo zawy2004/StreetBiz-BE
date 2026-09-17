@@ -96,6 +96,14 @@ public static class TransferStatuses
     public static readonly string[] Open = [Pending, AcceptedByReceiver];
 }
 
+/// <summary>Direction filter for listing a vendor's slot transfer requests (SIDE-12/13).</summary>
+public static class TransferDirections
+{
+    public const string Outgoing = "outgoing";
+    public const string Incoming = "incoming";
+    public static readonly string[] All = [Outgoing, Incoming];
+}
+
 /// <summary>DigitalPermits.permit_status values (DB CHECK).</summary>
 public static class PermitStatuses
 {
@@ -160,4 +168,7 @@ public static class SideMessages
     public const string TransferNotFound = "Slot transfer request not found.";
     public const string TransferNotPending = "This transfer request is no longer pending.";
     public const string NotTheReceivingVendor = "Only the receiving vendor may accept or decline this transfer.";
+    public const string TransferRequested = "Your slot transfer request has been submitted successfully.";
+    public const string TransferAccepted = "You have accepted the slot transfer request.";
+    public const string TransferDeclined = "You have declined the slot transfer request.";
 }
