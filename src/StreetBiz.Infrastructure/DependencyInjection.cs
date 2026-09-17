@@ -49,6 +49,11 @@ public static class DependencyInjection
         services.AddScoped<IBusinessRegistrationRepository, BusinessRegistrationRepository>();
         services.AddScoped<IAdministrativeUnitRepository, AdministrativeUnitRepository>();
         services.AddScoped<ISidewalkSlotRepository, SidewalkSlotRepository>();
+        services.AddScoped<IRentalApplicationRepository, RentalApplicationRepository>();
+        services.AddScoped<IRentalContractRepository, RentalContractRepository>();
+
+        services.Configure<Sidewalk.SidewalkSettings>(configuration.GetSection(Sidewalk.SidewalkSettings.SectionName));
+        services.AddSingleton<ISidewalkPolicy, Sidewalk.SidewalkPolicy>();
 
         return services;
     }

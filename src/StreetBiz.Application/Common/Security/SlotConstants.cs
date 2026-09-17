@@ -43,6 +43,9 @@ public static class ApplicationStatuses
 
     /// <summary>Statuses a vendor may still withdraw (SIDE-04).</summary>
     public static readonly string[] Withdrawable = [Pending, UnderReview, MoreInformationRequired];
+
+    /// <summary>Statuses that count as an open, in-flight application for a slot (same set as <see cref="Withdrawable"/>).</summary>
+    public static readonly string[] Open = Withdrawable;
 }
 
 /// <summary>RentalContracts.contract_status values (DB CHECK).</summary>
@@ -124,6 +127,7 @@ public static class SideMessages
     public const string SlotNotFound = "Sidewalk slot not found.";
     public const string SlotNotAvailable = "This slot is not available for rent.";
     public const string SlotAlreadyBooked = "This slot already has an active contract for the requested period.";
+    public const string ApplicationSubmitted = "Your rental application has been submitted successfully.";
     public const string ApplicationNotFound = "Rental application not found.";
     public const string ApplicationAlreadyOpenForSlot = "This slot already has an application under review.";
     public const string NotEligibleForAdjacent = "Only fixed-storefront vendors may apply for a storefront-adjacent slot."; // BR pre-check
