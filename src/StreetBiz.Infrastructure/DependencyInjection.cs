@@ -67,6 +67,7 @@ public static class DependencyInjection
         services.AddScoped<ISlotTransferRequestRepository, SlotTransferRequestRepository>();
         services.AddScoped<ICommunityVendorRepository, CommunityVendorRepository>();
         services.AddScoped<IPlatformAdministrationRepository, PlatformAdministrationRepository>();
+        services.AddScoped<ICommerceRepository, CommerceRepository>();
 
         services.Configure<PermitSettings>(configuration.GetSection(PermitSettings.SectionName));
         services.AddSingleton<IPermitTokenService, PermitTokenService>();
