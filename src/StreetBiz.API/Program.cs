@@ -45,6 +45,8 @@ builder.Services.AddSwaggerGen(options =>
     options.AddSecurityRequirement(new OpenApiSecurityRequirement { [bearer] = [] });
 });
 builder.Services.AddProblemDetails();
+builder.Services.AddWardApi();
+builder.Services.AddCommunityApi();
 builder.Services
     .AddHealthChecks()
     .AddSqlServer(
@@ -64,20 +66,20 @@ if (app.Environment.IsDevelopment())
     app.UseSwaggerUI();
 }
 
-// Redirecting to HTTPS in development would turn the SPA's plain-HTTP calls into
-// 307s, which browsers refuse to follow for a CORS preflight. Keep the redirect
-// to deployed environments, which are served over HTTPS end to end.
+// Redirecting a development SPA's CORS preflight from HTTP to HTTPS makes the
+// browser reject it. Deployed environments are HTTPS end to end.
 if (!app.Environment.IsDevelopment())
 {
     app.UseHttpsRedirection();
 }
 
 app.UseCors(CorsSetup.PolicyName);
-
 app.UseAuthentication();
 app.UseAuthorization();
+app.UseRateLimiter();
 
 app.MapControllers();
+app.MapWardApi();
 
 app.MapHealthChecks(
     "/health",
