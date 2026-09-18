@@ -4,6 +4,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using StreetBiz.Application.Common.Interfaces;
 using StreetBiz.Application.Common.Security;
+using StreetBiz.Application.Features.WardSlots;
 using StreetBiz.Infrastructure.Common;
 using StreetBiz.Infrastructure.Geocoding;
 using StreetBiz.Infrastructure.Identity;
@@ -11,9 +12,8 @@ using StreetBiz.Infrastructure.Notifications;
 using StreetBiz.Infrastructure.Persistence;
 using StreetBiz.Infrastructure.Persistence.Repositories;
 using StreetBiz.Infrastructure.Security;
-using StreetBiz.Infrastructure.Storage;
-using StreetBiz.Application.Features.WardSlots;
 using StreetBiz.Infrastructure.Services;
+using StreetBiz.Infrastructure.Storage;
 
 namespace StreetBiz.Infrastructure;
 
@@ -65,6 +65,8 @@ public static class DependencyInjection
         services.AddScoped<IDigitalPermitRepository, DigitalPermitRepository>();
         services.AddScoped<IAddressChangeRequestRepository, AddressChangeRequestRepository>();
         services.AddScoped<ISlotTransferRequestRepository, SlotTransferRequestRepository>();
+        services.AddScoped<ICommunityVendorRepository, CommunityVendorRepository>();
+        services.AddScoped<IPlatformAdministrationRepository, PlatformAdministrationRepository>();
 
         services.Configure<PermitSettings>(configuration.GetSection(PermitSettings.SectionName));
         services.AddSingleton<IPermitTokenService, PermitTokenService>();
