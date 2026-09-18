@@ -20,7 +20,7 @@ public sealed class SlotProposalHandlerTests
         RegistrationId, ZoneId, 16.0130m, 108.2400m, 2, 3, "https://example.test/evidence/photo.jpg");
 
     [Fact]
-    public async Task Proposing_without_a_photo_is_a_validation_error()
+    public void Proposing_without_a_photo_is_a_validation_error()
     {
         var command = ValidCommand() with { ProposalPhotoUrl = "" };
         var validator = new ProposeSlotCommandValidator();
