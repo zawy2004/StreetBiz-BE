@@ -46,6 +46,7 @@ builder.Services.AddSwaggerGen(options =>
 });
 builder.Services.AddProblemDetails();
 builder.Services.AddWardApi();
+builder.Services.AddCommunityApi();
 builder.Services
     .AddHealthChecks()
     .AddSqlServer(

@@ -21,6 +21,8 @@ public static class DependencyInjection
         services.AddTransient(typeof(IPipelineBehavior<,>), typeof(ValidationBehavior<,>));
         services.AddScoped<IAuthTokenIssuer, AuthTokenIssuer>();
         services.AddScoped<IVendorContext, VendorContext>();
+        services.AddScoped<ICustomerContext, CustomerContext>();
+        services.AddScoped<IPlatformAdminContext, PlatformAdminContext>();
         services.AddScoped<IWardActorResolver, WardActorResolver>();
         services.AddScoped<IWardActorContext, WardActorContext>();
 
