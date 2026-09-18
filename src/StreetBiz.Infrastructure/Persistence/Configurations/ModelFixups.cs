@@ -13,6 +13,10 @@ public partial class StreetBizDbContext
 {
     partial void OnModelCreatingPartial(ModelBuilder modelBuilder)
     {
+        // SQL Server rejects OUTPUT without INTO for tables with enabled triggers.
+        modelBuilder.Entity<RentalContract>()
+            .ToTable("RentalContracts", table => table.UseSqlOutputClause(false));
+
         // The scaffolded singular navigations (RentalContract.DigitalPermit,
         // RentalContract.RenewalRequest, BusinessRegistration.AddressChangeRequest,
         // RentalContract.FeeSchedule) were generated to match the one-to-one Fluent config
