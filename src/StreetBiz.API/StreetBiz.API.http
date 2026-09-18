@@ -165,6 +165,10 @@ Authorization: Bearer {{token}}
 GET {{host}}/api/sidewalk-slots?minLat=16.0090&maxLat=16.0160&minLng=108.2360&maxLng=108.2440
 Authorization: Bearer {{token}}
 
+### SIDE-01 Toàn bộ ô của một tuyến (sơ đồ) — kèm ô đã thuê/tạm ngưng
+GET {{host}}/api/sidewalk-slots?zoneId=1002&includeUnavailable=true&take=500
+Authorization: Bearer {{token}}
+
 ###
 @slotId = 1
 
