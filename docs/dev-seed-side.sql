@@ -20,6 +20,55 @@ SET NOCOUNT ON;
 SET QUOTED_IDENTIFIER ON;
 SET ANSI_NULLS ON;
 
+-- 0) Pilot area: Đường Nguyễn Văn Linh, phường Nam Dương, quận Hải Châu.
+--    StreetBiz_SQL_Server_Data.sql's own 7 slots are only approximately
+--    placed inside Hoà Quý city blocks, not on any real street; these 6 are
+--    geocoded onto the actual Nguyễn Văn Linh road centerline (via Esri's
+--    World Geocoding Service) so the map has one deliberately accurate,
+--    manageable area instead of scattered approximate points citywide.
+IF NOT EXISTS (SELECT 1 FROM AdministrativeUnits WHERE unit_type = 'DISTRICT' AND unit_name = N'Quận Hải Châu')
+BEGIN
+    INSERT INTO AdministrativeUnits (unit_type, unit_name, parent_unit_id)
+    VALUES ('DISTRICT', N'Quận Hải Châu', (SELECT TOP 1 unit_id FROM AdministrativeUnits WHERE unit_type = 'PROVINCE' ORDER BY unit_id));
+END;
+
+DECLARE @haiChauDistrictId INT = (SELECT unit_id FROM AdministrativeUnits WHERE unit_type = 'DISTRICT' AND unit_name = N'Quận Hải Châu');
+
+IF NOT EXISTS (SELECT 1 FROM AdministrativeUnits WHERE unit_type = 'WARD' AND unit_name = N'Phường Nam Dương')
+BEGIN
+    INSERT INTO AdministrativeUnits (unit_type, unit_name, parent_unit_id)
+    VALUES ('WARD', N'Phường Nam Dương', @haiChauDistrictId);
+END;
+
+DECLARE @namDuongWardId INT = (SELECT unit_id FROM AdministrativeUnits WHERE unit_type = 'WARD' AND unit_name = N'Phường Nam Dương');
+
+IF NOT EXISTS (SELECT 1 FROM PricingZones WHERE zone_name = N'Đường Nguyễn Văn Linh')
+BEGIN
+    DECLARE @nvlWardAuthorityUserId BIGINT = (SELECT TOP 1 user_id FROM UserAccounts WHERE role_code = 'WARD_AUTHORITY' ORDER BY user_id);
+    IF @nvlWardAuthorityUserId IS NOT NULL
+    BEGIN
+        INSERT INTO PricingZones (zone_name, ward_unit_id, price_per_day, available_from, available_to, created_by)
+        VALUES (N'Đường Nguyễn Văn Linh', @namDuongWardId, 30000, '05:00', '22:00', @nvlWardAuthorityUserId);
+    END;
+END;
+
+DECLARE @nvlZoneId INT = (SELECT zone_id FROM PricingZones WHERE zone_name = N'Đường Nguyễn Văn Linh');
+
+IF @nvlZoneId IS NOT NULL
+BEGIN
+    INSERT INTO SidewalkSlots (slot_code, zone_id, latitude, longitude, width_meters, length_meters, slot_status, source)
+    SELECT v.slot_code, @nvlZoneId, v.latitude, v.longitude, 2.0, 3.0, 'AVAILABLE', 'WARD_DEFINED'
+    FROM (VALUES
+        ('NVL-01', 16.060870, 108.216079),
+        ('NVL-02', 16.060849, 108.215668),
+        ('NVL-03', 16.060727, 108.215702),
+        ('NVL-04', 16.060657, 108.215198),
+        ('NVL-05', 16.060585, 108.214678),
+        ('NVL-06', 16.060523, 108.214228)
+    ) AS v(slot_code, latitude, longitude)
+    WHERE NOT EXISTS (SELECT 1 FROM SidewalkSlots s WHERE s.slot_code = v.slot_code);
+END;
+
 -- 1) A ward-defined pricing zone (StreetBiz_SQL_Server_Data.sql already seeds
 --    3 real zones; this block only fills the gap on a schema-only database).
 IF NOT EXISTS (SELECT 1 FROM PricingZones)
