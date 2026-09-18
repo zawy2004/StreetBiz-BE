@@ -1,9 +1,13 @@
 # StreetBiz Backend
 
+WARD-16–18 and SYS-01–02 are now implemented. See
+[Ward slot workflows](docs/ward-slot-workflows.md) for API contracts, authentication,
+geofence configuration, frontend connection and test instructions.
+
 StreetBiz backend foundation built with .NET 8, ASP.NET Core, Entity Framework
-Core 8, SQL Server, and Clean Architecture. This repository currently contains
-infrastructure only: no business use cases or business API controllers have been
-implemented.
+Core 8, SQL Server, and Clean Architecture. The current codebase includes
+authentication, vendor onboarding, sidewalk/rental workflows and the ward slot
+proposal, address-conflict, transfer and geolocation workflows.
 
 ## Prerequisites
 
@@ -28,8 +32,9 @@ StreetBiz.Backend.sln.
 The application resolves the connection string in this order:
 
 1. Environment variable STREETBIZ_DB_CONNECTION.
-2. Configuration key ConnectionStrings:StreetBizDatabase, including user-secrets.
-3. Startup fails with a clear error when neither value is present.
+2. Configuration key ConnectionStrings:StreetBizDB, including user-secrets.
+3. Legacy key ConnectionStrings:StreetBizDatabase.
+4. Startup fails with a clear error when none is present.
 
 PowerShell process-scoped environment variable:
 
@@ -40,7 +45,7 @@ $env:STREETBIZ_DB_CONNECTION = "<sql-server-connection-string>"
 User-secrets alternative:
 
 ~~~powershell
-dotnet user-secrets --project src/StreetBiz.API set "ConnectionStrings:StreetBizDatabase" "<sql-server-connection-string>"
+dotnet user-secrets --project src/StreetBiz.API set "ConnectionStrings:StreetBizDB" "<sql-server-connection-string>"
 ~~~
 
 Never commit a real password, connection string, .env file, or secrets.json.
@@ -141,11 +146,12 @@ Dependencies point inward:
 - API references Application and Infrastructure.
 - Domain references no other project and has no EF Core or ASP.NET Core package.
 
-## Deliberately not implemented
+## Ward implementation
 
-Authentication/JWT, business controllers, repositories, CQRS commands/queries,
-payments, chat, notifications, and all domain business logic are outside this
-foundation.
+WARD-16–18 and SYS-01–02 use the existing authentication/session module,
+controller/MediatR request pipeline, shared Nominatim adapter and sidewalk
+adjacency policy. Ward decisions are serializable, audited and create in-app
+notifications. External push delivery and payment providers remain outside this scope.
 
 ## More documentation
 
@@ -153,3 +159,4 @@ foundation.
 - docs/project-structure.md
 - docs/database-reverse-engineering.md
 - docs/migration-guide.md
+- docs/ward-slot-workflows.md

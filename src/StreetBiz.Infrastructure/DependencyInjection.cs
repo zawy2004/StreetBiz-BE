@@ -12,6 +12,8 @@ using StreetBiz.Infrastructure.Persistence;
 using StreetBiz.Infrastructure.Persistence.Repositories;
 using StreetBiz.Infrastructure.Security;
 using StreetBiz.Infrastructure.Storage;
+using StreetBiz.Application.Features.WardSlots;
+using StreetBiz.Infrastructure.Services;
 
 namespace StreetBiz.Infrastructure;
 
@@ -19,12 +21,17 @@ public static class DependencyInjection
 {
     private const string EnvironmentVariableName = "STREETBIZ_DB_CONNECTION";
     private const string ConnectionStringName = "StreetBizDB";
+    private const string LegacyConnectionStringName = "StreetBizDatabase";
 
     public static IServiceCollection AddInfrastructure(
         this IServiceCollection services,
         IConfiguration configuration)
     {
         var connectionString = configuration.GetStreetBizDatabaseConnectionString();
+        services.AddSingleton(TimeProvider.System);
+        services.AddSingleton<IGeolocation, WardGeolocation>();
+        services.AddScoped<WardSlots>();
+        services.AddScoped<IWardSlots>(provider => provider.GetRequiredService<WardSlots>());
 
         services.AddDbContext<StreetBizDbContext>(options =>
         {
@@ -86,14 +93,16 @@ public static class DependencyInjection
 
         if (string.IsNullOrWhiteSpace(connectionString))
         {
-            connectionString = configuration.GetConnectionString(ConnectionStringName);
+            connectionString = configuration.GetConnectionString(ConnectionStringName)
+                ?? configuration.GetConnectionString(LegacyConnectionStringName);
         }
 
         if (string.IsNullOrWhiteSpace(connectionString))
         {
             throw new InvalidOperationException(
                 $"Database connection is not configured. Set {EnvironmentVariableName} " +
-                $"or ConnectionStrings:{ConnectionStringName}.");
+                $"or ConnectionStrings:{ConnectionStringName} " +
+                $"(legacy: ConnectionStrings:{LegacyConnectionStringName}).");
         }
 
         return connectionString;

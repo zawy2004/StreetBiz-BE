@@ -10,4 +10,13 @@ namespace StreetBiz.Application.Common.Interfaces;
 public interface IGeocodingService
 {
     Task<GeoPoint?> ForwardAsync(string address, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Returns candidate coordinates for an explicit address search. An unavailable
+    /// provider returns an empty list so manual coordinates remain usable.
+    /// </summary>
+    Task<IReadOnlyList<GeoPoint>> SearchAsync(
+        string address,
+        int limit,
+        CancellationToken cancellationToken);
 }
