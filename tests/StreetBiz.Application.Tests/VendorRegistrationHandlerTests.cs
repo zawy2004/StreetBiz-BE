@@ -126,6 +126,44 @@ public sealed class VendorRegistrationHandlerTests
         validator.Validate(Evidence(UserId)).IsValid.Should().BeTrue();
     }
 
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    public void Submit_validator_gives_a_readable_message_for_a_non_positive_ward_id(int wardUnitId)
+    {
+        var validator = new SubmitRegistrationCommandValidator();
+        var command = new SubmitRegistrationCommand(VendorTypes.Itinerant, "Banh mi", null, null, null, wardUnitId);
+
+        var result = validator.Validate(command);
+
+        result.Errors.Should().ContainSingle(e => e.PropertyName == nameof(SubmitRegistrationCommand.WardUnitId))
+            .Which.ErrorMessage.Should().Be(AppMessages.InvalidWard);
+    }
+
+    [Fact]
+    public void Update_validator_matches_submit_validator_on_an_empty_display_name()
+    {
+        var validator = new UpdateRegistrationCommandValidator();
+        var command = new UpdateRegistrationCommand(RegistrationId, VendorTypes.Itinerant, "  ", null, null, null, WardId);
+
+        var result = validator.Validate(command);
+
+        result.Errors.Should().ContainSingle(e => e.PropertyName == nameof(UpdateRegistrationCommand.DisplayName))
+            .Which.ErrorMessage.Should().Be("Business/display name is required.");
+    }
+
+    [Fact]
+    public void Update_validator_gives_a_readable_message_for_a_non_positive_ward_id()
+    {
+        var validator = new UpdateRegistrationCommandValidator();
+        var command = new UpdateRegistrationCommand(RegistrationId, VendorTypes.Itinerant, "Banh mi", null, null, null, WardUnitId: 0);
+
+        var result = validator.Validate(command);
+
+        result.Errors.Should().ContainSingle(e => e.PropertyName == nameof(UpdateRegistrationCommand.WardUnitId))
+            .Which.ErrorMessage.Should().Be(AppMessages.InvalidWard);
+    }
+
     private SubmitEvidenceCommandHandler EvidenceHandler(bool fileExists)
     {
         var currentUser = new Mock<ICurrentUser>();
