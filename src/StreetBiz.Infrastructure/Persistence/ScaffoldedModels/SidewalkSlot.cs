@@ -37,23 +37,11 @@ public partial class SidewalkSlot
 
     public DateTime created_at { get; set; }
 
-    public string? image_url { get; set; }
-
-    public bool has_power { get; set; }
-
-    public bool has_water { get; set; }
-
-    public bool has_trash_bin { get; set; }
-
-    public string? business_category { get; set; }
-
     public virtual ICollection<AddressChangeRequest> AddressChangeRequests { get; set; } = new List<AddressChangeRequest>();
 
     public virtual ICollection<RentalApplication> RentalApplications { get; set; } = new List<RentalApplication>();
 
     public virtual ICollection<RentalContract> RentalContracts { get; set; } = new List<RentalContract>();
-
-    public virtual SlotHold? SlotHold { get; set; }
 
     public virtual UserAccount? UserAccount { get; set; }
 

@@ -16,9 +16,3 @@ artifacts/
 !.env.example
 appsettings.Local.json
 secrets.json
-
-# Uploaded evidence files (personal data) in local development
-App_Data/
-
-# API console log captured for OTP codes (scripts/e2e-auth-onboarding.sh)
-api.log
