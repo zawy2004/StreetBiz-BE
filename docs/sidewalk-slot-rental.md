@@ -17,7 +17,7 @@ update, documented in
 
 | Use case | Endpoint |
 |---|---|
-| SIDE-01 Browse slot map | `GET /api/sidewalk-slots?lat=&lng=&radiusMeters=` or `?minLat=&maxLat=&minLng=&maxLng=` (auth) |
+| SIDE-01 Browse slot map | `GET /api/sidewalk-slots?lat=&lng=&radiusMeters=`, `?minLat=&maxLat=&minLng=&maxLng=`, or `?zoneId=` (auth); add `&includeUnavailable=true` to also return rented/suspended slots |
 | SIDE-02 Slot detail | `GET /api/sidewalk-slots/{slotId}` (auth) |
 | SIDE-03B Apply for an open slot | `POST /api/vendor/rental-applications/open-slot` (auth) |
 | SIDE-03A Apply for a storefront-adjacent slot | `POST /api/vendor/rental-applications/adjacent` (auth) |

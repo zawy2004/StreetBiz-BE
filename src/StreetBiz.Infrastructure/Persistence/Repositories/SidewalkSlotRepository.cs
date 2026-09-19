@@ -9,15 +9,29 @@ public sealed class SidewalkSlotRepository(StreetBizDbContext dbContext) : ISide
 {
     public async Task<IReadOnlyList<SlotRow>> SearchAsync(SlotSearchArea area, CancellationToken cancellationToken)
     {
+        var query = dbContext.SidewalkSlots.AsNoTracking()
+            // A vendor-proposed slot is invisible until WARD-16 approves it. This rule is
+            // unconditional: IncludeUnavailable widens slot_status only, never this.
+            .Where(s => s.source == SlotSources.WardDefined
+                     || s.proposal_review_status == ProposalReviewStatuses.Approved);
+
+        if (!area.IncludeUnavailable)
+        {
+            query = query.Where(s => s.slot_status == SlotStatuses.Available);
+        }
+
+        if (area.MinLatitude is { } minLat) query = query.Where(s => s.latitude >= minLat);
+        if (area.MaxLatitude is { } maxLat) query = query.Where(s => s.latitude <= maxLat);
+        if (area.MinLongitude is { } minLng) query = query.Where(s => s.longitude >= minLng);
+        if (area.MaxLongitude is { } maxLng) query = query.Where(s => s.longitude <= maxLng);
+
+        if (area.ZoneId is { } zoneId)
+        {
+            query = query.Where(s => s.zone_id == zoneId);
+        }
+
         // SidewalkSlots has no ward column of its own — its ward is PricingZones.ward_unit_id,
         // reached through zone_id, so a ward filter is always a join.
-        var query = dbContext.SidewalkSlots.AsNoTracking()
-            .Where(s => s.latitude >= area.MinLatitude && s.latitude <= area.MaxLatitude
-                     && s.longitude >= area.MinLongitude && s.longitude <= area.MaxLongitude
-                     && s.slot_status == SlotStatuses.Available
-                     && (s.source == SlotSources.WardDefined
-                         || s.proposal_review_status == ProposalReviewStatuses.Approved));
-
         if (area.WardUnitId is { } wardUnitId)
         {
             query = query.Where(s => s.zone.ward_unit_id == wardUnitId);
