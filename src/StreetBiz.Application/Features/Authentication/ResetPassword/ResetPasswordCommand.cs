@@ -15,13 +15,13 @@ public sealed class ResetPasswordCommandValidator : AbstractValidator<ResetPassw
     {
         RuleFor(x => x.PhoneNumber)
             .Must(p => AuthValidationRules.PhoneRegex().IsMatch(p))
-            .WithMessage("Please enter a valid phone number.");
+            .WithMessage(AppMessages.InvalidPhone);
         RuleFor(x => x.Otp)
             .Must(o => AuthValidationRules.OtpRegex().IsMatch(o))
-            .WithMessage("The verification code must be 6 digits.");
+            .WithMessage(AppMessages.OtpFormat);
         RuleFor(x => x.NewPassword)
             .Must(p => AuthValidationRules.PasswordRegex().IsMatch(p))
-            .WithMessage("The new password does not meet the security requirements.");
+            .WithMessage(AppMessages.NewPasswordPolicy);
     }
 }
 

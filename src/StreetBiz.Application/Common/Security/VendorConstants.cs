@@ -34,19 +34,50 @@ public static class EvidenceTypes
     public const string AddressProof = "ADDRESS_PROOF";
     public const string Other = "OTHER";
     public static readonly string[] All = [IdentityDocument, BusinessLicense, AddressProof, Other];
+
+    /// <summary>
+    /// BR-07: a fixed storefront must prove its business licence, an itinerant vendor
+    /// only its identity. Mirrors `requiredEvidence()` in the SPA wizard so the rule is
+    /// enforced server-side too (CR-04), not just in the browser.
+    /// </summary>
+    public static string[] RequiredFor(string vendorType) =>
+        vendorType == VendorTypes.FixedStorefront
+            ? [IdentityDocument, BusinessLicense]
+            : [IdentityDocument];
+
+    /// <summary>Vietnamese labels, matching EVIDENCE_LABELS in the SPA.</summary>
+    public static string Label(string evidenceType) => evidenceType switch
+    {
+        IdentityDocument => "CCCD gắn chip",
+        BusinessLicense => "Giấy phép kinh doanh",
+        AddressProof => "Giấy tờ địa chỉ",
+        _ => "Giấy tờ khác",
+    };
 }
 
-/// <summary>Messages for the Vendor Business Registration workflow (REG).</summary>
+/// <summary>Messages for the Vendor Business Registration workflow (REG), in Vietnamese.</summary>
 public static class RegMessages
 {
-    public const string Submitted = "Your business registration has been submitted successfully.";     // MSG09
-    public const string SelectVendorType = "Please select a vendor type before continuing.";           // MSG10
-    public const string DuplicatePending = "You already have a registration under review. Please wait for a decision or withdraw it first."; // BR-09
-    public const string FixedNeedsAddress = "A fixed-storefront registration requires a business address."; // BR-07
-    public const string UploadValidDocument = "Please upload a valid identity or business-licence document."; // MSG14
-    public const string NotEditable = "This registration can no longer be edited because it is {0}.";  // MSG62
-    public const string Withdrawn = "Your registration has been withdrawn.";
-    public const string WithdrawBlockedActiveContract = "This registration cannot be withdrawn while it has an active rental contract.";
-    public const string NotAVendor = "Only vendor accounts can manage business registrations.";
-    public const string NotFound = "Business registration not found.";
+    public const string Submitted = "Đã nộp hồ sơ đăng ký kinh doanh.";                                // MSG09
+    public const string SelectVendorType = "Vui lòng chọn loại hình kinh doanh.";                      // MSG10
+    public const string DuplicatePending = "Bạn đang có một hồ sơ chờ xét duyệt. Vui lòng chờ kết quả hoặc rút hồ sơ đó trước."; // BR-09
+    public const string FixedNeedsAddress = "Cửa hàng cố định cần nhập địa chỉ kinh doanh.";           // BR-07
+    public const string UploadValidDocument = "Vui lòng tải lên giấy tờ tuỳ thân hoặc giấy phép kinh doanh hợp lệ."; // MSG14
+    public const string NotEditable = "Hồ sơ không thể chỉnh sửa vì {0}.";                             // MSG62
+    public const string Withdrawn = "Đã rút hồ sơ đăng ký.";
+    public const string WithdrawBlockedActiveContract = "Không thể rút hồ sơ khi đang có hợp đồng thuê ô vỉa hè hiệu lực.";
+    public const string NotAVendor = "Chỉ tài khoản Hộ kinh doanh mới quản lý được hồ sơ đăng ký.";
+    public const string NotFound = "Không tìm thấy hồ sơ đăng ký.";
+    public const string DisplayNameRequired = "Vui lòng nhập tên hộ kinh doanh.";
+    public const string DisplayNameTooLong = "Tên hộ kinh doanh tối đa 180 ký tự.";
+
+    /// <summary>Vietnamese wording for the status inserted into <see cref="NotEditable"/>.</summary>
+    public static string StatusWord(string status) => status switch
+    {
+        RegistrationStatuses.Approved => "đã được duyệt",
+        RegistrationStatuses.Rejected => "đã bị từ chối",
+        RegistrationStatuses.Withdrawn => "đã được rút",
+        RegistrationStatuses.UnderReview => "đang được xét duyệt",
+        _ => status,
+    };
 }

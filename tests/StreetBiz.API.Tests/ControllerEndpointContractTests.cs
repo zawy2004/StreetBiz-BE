@@ -58,6 +58,7 @@ public sealed class ControllerEndpointContractTests
         "POST /api/auth/send-otp",
         "POST /api/auth/register",
         "POST /api/auth/login",
+        "POST /api/auth/login-otp",
         "POST /api/auth/refresh",
         "POST /api/auth/logout",
         "POST /api/auth/change-password",

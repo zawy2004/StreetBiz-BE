@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Mvc;
 using StreetBiz.Application.Common.Exceptions;
 using StreetBiz.Application.Common.Interfaces;
 using StreetBiz.Application.Common.Security;
+using StreetBiz.Application.Features.WardSlots;
 
 namespace StreetBiz.API.Controllers;
 
@@ -13,9 +14,12 @@ namespace StreetBiz.API.Controllers;
 [ApiController]
 [Authorize]
 [Route("api/uploads/evidence")]
-public sealed class UploadsController(IFileStorage storage, ICurrentUser currentUser) : ControllerBase
+public sealed class UploadsController(
+    IFileStorage storage,
+    ICurrentUser currentUser,
+    IWardActorResolver wardActors,
+    IBusinessRegistrationRepository registrations) : ControllerBase
 {
-    private static readonly string[] ReviewerRoles = [RoleCodes.WardAuthority, RoleCodes.PlatformAdmin];
 
     /// <summary>Uploads one evidence file (JPG/PNG/WEBP/PDF, max 5 MB) and returns its URL.</summary>
     [HttpPost]
@@ -24,7 +28,7 @@ public sealed class UploadsController(IFileStorage storage, ICurrentUser current
     [RequestFormLimits(MultipartBodyLengthLimit = EvidenceFiles.MaxBytes + 64 * 1024)]
     public async Task<ActionResult<UploadedFileResponse>> Upload(IFormFile? file, CancellationToken cancellationToken)
     {
-        var userId = currentUser.UserId ?? throw new AuthenticationException("No active session.");
+        var userId = currentUser.UserId ?? throw new AuthenticationException(AppMessages.SessionExpired);
 
         // Only REG-02 needs this endpoint; scoping it to Vendor stops other roles
         // from filling the disk with files that can never be attached to anything.
@@ -63,7 +67,12 @@ public sealed class UploadsController(IFileStorage storage, ICurrentUser current
             EvidenceFiles.BuildUrl(userId, fileName), EvidenceFiles.ContentTypes[extension], file.Length));
     }
 
-    /// <summary>Downloads an evidence file: its owner, ward authorities and platform admins only.</summary>
+    /// <summary>
+    /// Downloads an evidence file. PRI-02/PRI-07: only the owning vendor and the ward
+    /// officer whose ward the registration belongs to. Platform Administrator is
+    /// deliberately excluded — BR-44 keeps that role out of registration identity
+    /// evidence entirely.
+    /// </summary>
     [HttpGet("{ownerUserId:long}/{fileName}")]
     public async Task<IActionResult> Download(long ownerUserId, string fileName, CancellationToken cancellationToken)
     {
@@ -72,8 +81,8 @@ public sealed class UploadsController(IFileStorage storage, ICurrentUser current
             return NotFound();
         }
 
-        var isOwner = currentUser.UserId == ownerUserId;
-        if (!isOwner && !ReviewerRoles.Contains(currentUser.RoleCode))
+        if (currentUser.UserId != ownerUserId
+            && !await IsReviewingWardOfficerAsync(ownerUserId, fileName, cancellationToken))
         {
             throw new ForbiddenException(AppMessages.Forbidden);
         }
@@ -86,6 +95,22 @@ public sealed class UploadsController(IFileStorage storage, ICurrentUser current
 
         Response.Headers.CacheControl = "private, no-store";
         return File(stream, EvidenceFiles.ContentTypes[Path.GetExtension(fileName)]);
+    }
+
+    private async Task<bool> IsReviewingWardOfficerAsync(
+        long ownerUserId,
+        string fileName,
+        CancellationToken cancellationToken)
+    {
+        if (currentUser.UserId is not { } userId || currentUser.RoleCode != RoleCodes.WardAuthority)
+        {
+            return false;
+        }
+
+        var actor = await wardActors.ResolveAsync(userId, cancellationToken);
+        return actor is not null
+            && await registrations.EvidenceBelongsToWardAsync(
+                ownerUserId, EvidenceFiles.BuildUrl(ownerUserId, fileName), actor.WardId, cancellationToken);
     }
 
     private static ValidationAppException FileError(string message) =>

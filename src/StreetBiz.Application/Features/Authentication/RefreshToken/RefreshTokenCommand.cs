@@ -14,7 +14,7 @@ public sealed record RefreshTokenCommand(string RefreshToken, string? DeviceInfo
 public sealed class RefreshTokenCommandValidator : AbstractValidator<RefreshTokenCommand>
 {
     public RefreshTokenCommandValidator()
-        => RuleFor(x => x.RefreshToken).NotEmpty().WithMessage("A refresh token is required.");
+        => RuleFor(x => x.RefreshToken).NotEmpty().WithMessage(AppMessages.RefreshTokenRequired);
 }
 
 public sealed class RefreshTokenCommandHandler(
