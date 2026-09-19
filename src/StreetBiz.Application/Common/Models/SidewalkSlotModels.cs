@@ -18,15 +18,18 @@ public sealed record SlotRow(
     TimeOnly? AvailableTo);
 
 /// <summary>
-/// A bounding box to search within, in decimal degrees. Callers refine the SQL-side bbox
-/// result with GeoMath.DistanceMeters for an exact-radius answer.
+/// The slot search filter. The bounding box is optional in decimal degrees -- a zoneId lookup
+/// needs no area at all -- and callers refine any SQL-side bbox result with
+/// GeoMath.DistanceMeters for an exact-radius answer.
 /// </summary>
 public sealed record SlotSearchArea(
-    decimal MinLatitude,
-    decimal MaxLatitude,
-    decimal MinLongitude,
-    decimal MaxLongitude,
-    int? WardUnitId);
+    decimal? MinLatitude,
+    decimal? MaxLatitude,
+    decimal? MinLongitude,
+    decimal? MaxLongitude,
+    int? WardUnitId,
+    int? ZoneId,
+    bool IncludeUnavailable);
 
 /// <summary>Fields supplied by a vendor proposing a new slot at an unlisted location (SIDE-11).</summary>
 public sealed record NewSlotProposal(
