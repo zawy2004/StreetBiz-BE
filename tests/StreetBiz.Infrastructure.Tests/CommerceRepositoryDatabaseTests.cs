@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using StreetBiz.Application.Common.Models;
 using StreetBiz.Application.Common.Security;
 using StreetBiz.Infrastructure.Persistence;
 using StreetBiz.Infrastructure.Persistence.Repositories;
@@ -23,7 +24,31 @@ public sealed class CommerceRepositoryDatabaseTests
         await using var db = new StreetBizDbContext(options);
         var repository = new CommerceRepository(db, TimeProvider.System);
 
-        _ = await repository.SearchMenuItemsAsync(null, 10, CancellationToken.None);
+        _ = await repository.SearchMenuItemsAsync(
+            new MarketplaceMenuFilter(null, null, null, null, null, null, MarketplaceMenuSorts.Name),
+            10,
+            CancellationToken.None);
+        foreach (var sort in new[] { MarketplaceMenuSorts.PriceAsc, MarketplaceMenuSorts.PriceDesc })
+        {
+            _ = await repository.SearchMenuItemsAsync(
+                new MarketplaceMenuFilter("a", 1, 1, 0, 100_000, new MarketplaceOpenAt(1, new TimeOnly(10, 0)), sort),
+                10,
+                CancellationToken.None);
+        }
+
+        var openAt = new MarketplaceOpenAt(1, new TimeOnly(10, 0));
+        var storefronts = await repository.ListStorefrontsAsync(
+            new MarketplaceStorefrontFilter("a", 1, 1, openAt, null),
+            10,
+            CancellationToken.None);
+        _ = await repository.ListStorefrontsAsync(
+            new MarketplaceStorefrontFilter(null, null, null, null, null),
+            10,
+            CancellationToken.None);
+        _ = await repository.ListStorefrontLocationsAsync(CancellationToken.None);
+        _ = await repository.ListMarketplaceCategoriesAsync(CancellationToken.None);
+        _ = await repository.GetStorefrontAsync(storefronts.FirstOrDefault()?.StorefrontId ?? 0, CancellationToken.None);
+
 
         var existingOrder = await db.Orders.AsNoTracking()
             .Select(order => new

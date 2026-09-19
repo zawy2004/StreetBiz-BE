@@ -48,8 +48,27 @@ public static class SalesPeriods
     public static bool IsValid(string value) => value is Day or Week or Month;
 }
 
+public static class MarketplaceStorefrontSorts
+{
+    public const string Distance = "distance";
+    public const string Rating = "rating";
+    public const string Name = "name";
+
+    public static bool IsValid(string value) => value is Distance or Rating or Name;
+}
+
+public static class MarketplaceMenuSorts
+{
+    public const string Name = "name";
+    public const string PriceAsc = "price_asc";
+    public const string PriceDesc = "price_desc";
+
+    public static bool IsValid(string value) => value is Name or PriceAsc or PriceDesc;
+}
+
 public static class CommerceMessages
 {
+    public const string StorefrontNotFound = "The storefront was not found.";
     public const string CartEmpty = "The active cart is empty.";
     public const string CartItemNotFound = "The cart item was not found.";
     public const string MenuItemNotFound = "The menu item was not found.";
