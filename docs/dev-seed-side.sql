@@ -133,6 +133,73 @@ BEGIN
     WHERE NOT EXISTS (SELECT 1 FROM SidewalkSlots s WHERE s.slot_code = v.slot_code);
 END;
 
+-- 0b) Slot workspace data for the Nguyễn Văn Linh zone (needs
+--     docs/slot-workspace-schema.sql applied first): zone info, ward contact,
+--     fee table, per-slot amenities/category and street features. All values
+--     are placeholders for local development, not real legal references.
+--     Only fills what is empty or is pure descriptive data, never a status.
+IF @nvlZoneId IS NOT NULL
+BEGIN
+    UPDATE PricingZones
+    SET zone_code = COALESCE(zone_code, N'KZ-NVL'),
+        regulation_ref = COALESCE(regulation_ref, N'QĐ-DEV-2026'),
+        segment_from = COALESCE(segment_from, N'Đầu tuyến'),
+        segment_to = COALESCE(segment_to, N'Cuối tuyến'),
+        application_deadline = COALESCE(application_deadline, DATEADD(DAY, 30, CAST(SYSUTCDATETIME() AS DATE)))
+    WHERE zone_id = @nvlZoneId;
+
+    UPDATE AdministrativeUnits
+    SET contact_name = COALESCE(contact_name, N'Tổ Quản lý Trật tự Đô thị'),
+        contact_phone = COALESCE(contact_phone, N'0236 000 0000')
+    WHERE unit_id = @namDuongWardId;
+
+    -- PER_DAY lines are multiplied by the term, PER_TERM lines are charged once.
+    INSERT INTO ZoneFeeComponents (zone_id, component_name, calc_basis, unit_amount, sort_order)
+    SELECT @nvlZoneId, v.component_name, v.calc_basis, v.unit_amount, v.sort_order
+    FROM (VALUES
+        (N'Phí vệ sinh môi trường', 'PER_DAY',  3000, 1),
+        (N'Phí quản lý và an ninh', 'PER_TERM', 150000, 2),
+        (N'Tiền đặt cọc',           'PER_TERM', 500000, 3)
+    ) AS v(component_name, calc_basis, unit_amount, sort_order)
+    WHERE NOT EXISTS (
+        SELECT 1 FROM ZoneFeeComponents c WHERE c.zone_id = @nvlZoneId AND c.component_name = v.component_name);
+
+    UPDATE s
+    SET has_power = v.has_power, has_water = v.has_water, has_trash_bin = v.has_trash_bin,
+        business_category = v.business_category
+    FROM SidewalkSlots s
+    JOIN (VALUES
+        ('NVL-01', 1, 0, 1, 'FOOD_BEVERAGE'), ('NVL-02', 1, 0, 1, 'FOOD_BEVERAGE'),
+        ('NVL-03', 1, 0, 0, 'RETAIL'),        ('NVL-04', 0, 0, 1, 'RETAIL'),
+        ('NVL-05', 0, 0, 0, 'SERVICES'),      ('NVL-06', 1, 1, 1, 'GENERAL'),
+        ('NVL-07', 0, 0, 1, 'CRAFTS'),        ('NVL-08', 1, 0, 0, 'GENERAL'),
+        ('NVL-09', 1, 1, 1, 'FOOD_BEVERAGE'), ('NVL-10', 0, 0, 0, 'RETAIL'),
+        ('NVL-11', 1, 1, 0, 'FOOD_BEVERAGE'), ('NVL-12', 1, 0, 1, 'SERVICES'),
+        ('NVL-13', 0, 0, 1, 'RETAIL'),        ('NVL-14', 1, 0, 0, 'GENERAL'),
+        ('NVL-15', 0, 0, 0, 'CRAFTS'),        ('NVL-16', 0, 0, 0, 'SERVICES'),
+        ('NVL-17', 1, 1, 1, 'FOOD_BEVERAGE'), ('NVL-18', 0, 0, 0, NULL),
+        ('NVL-19', 1, 0, 1, 'RETAIL'),        ('NVL-20', 0, 0, 1, 'GENERAL')
+    ) AS v(slot_code, has_power, has_water, has_trash_bin, business_category)
+      ON s.slot_code = v.slot_code
+    WHERE s.source = 'WARD_DEFINED';
+
+    -- Placed between neighbouring slots of the two rows so the corridor plan
+    -- shows them in line with the slots. blocks_business = 1 means no slot can
+    -- operate there.
+    INSERT INTO StreetFeatures (zone_id, feature_type, label, latitude, longitude, blocks_business, note)
+    SELECT @nvlZoneId, v.feature_type, v.label, v.latitude, v.longitude, v.blocks_business, v.note
+    FROM (VALUES
+        ('TRANSFORMER', N'Trạm biến áp',  16.060493, 108.214068, 1, N'Hành lang an toàn lưới điện, không kinh doanh'),
+        ('TREE',        N'Cây xanh',      16.060597, 108.214619, 0, NULL),
+        ('BUS_STOP',    N'Trạm xe buýt',  16.060649, 108.214894, 1, N'Khu vực dừng đón khách'),
+        ('LIGHT_POLE',  N'Cột đèn',       16.060130, 108.213998, 0, NULL),
+        ('HYDRANT',     N'Họng cứu hỏa',  16.060208, 108.214411, 0, N'Giữ lối tiếp cận cho xe cứu hỏa'),
+        ('PARKING',     N'Bãi giữ xe',    16.060311, 108.214962, 0, NULL)
+    ) AS v(feature_type, label, latitude, longitude, blocks_business, note)
+    WHERE NOT EXISTS (
+        SELECT 1 FROM StreetFeatures f WHERE f.zone_id = @nvlZoneId AND f.label = v.label);
+END;
+
 -- 1) A ward-defined pricing zone (StreetBiz_SQL_Server_Data.sql already seeds
 --    3 real zones; this block only fills the gap on a schema-only database).
 IF NOT EXISTS (SELECT 1 FROM PricingZones)
