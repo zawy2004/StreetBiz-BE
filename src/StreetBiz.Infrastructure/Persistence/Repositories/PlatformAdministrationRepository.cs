@@ -24,7 +24,6 @@ public sealed class PlatformAdministrationRepository(
     public async Task<IReadOnlyList<FoodCategoryRow>> ListFoodCategoriesAsync(
         CancellationToken cancellationToken) =>
         await CategoryQuery()
-            .OrderBy(category => category.CategoryName)
             .ToListAsync(cancellationToken);
 
     public Task<bool> FoodCategoryNameExistsAsync(
@@ -64,7 +63,7 @@ public sealed class PlatformAdministrationRepository(
         });
 
         return categoryId.HasValue
-            ? await CategoryQuery().SingleAsync(row => row.CategoryId == categoryId, cancellationToken)
+            ? await CategoryQuery(categoryId).SingleAsync(cancellationToken)
             : null;
     }
 
@@ -104,7 +103,7 @@ public sealed class PlatformAdministrationRepository(
         });
 
         return updated
-            ? await CategoryQuery().SingleAsync(row => row.CategoryId == categoryId, cancellationToken)
+            ? await CategoryQuery(categoryId).SingleAsync(cancellationToken)
             : null;
     }
 
@@ -458,12 +457,22 @@ public sealed class PlatformAdministrationRepository(
         return new ComplaintDecisionResult(outcome, row);
     }
 
-    private IQueryable<FoodCategoryRow> CategoryQuery() =>
-        db.FoodCategories.AsNoTracking().Select(category => new FoodCategoryRow(
-            category.category_id,
-            category.category_name,
-            category.MenuItems.Count,
-            category.UserAccount != null ? category.UserAccount.full_name : null));
+    private IQueryable<FoodCategoryRow> CategoryQuery(int? categoryId = null)
+    {
+        var query = db.FoodCategories.AsNoTracking();
+        if (categoryId.HasValue)
+        {
+            query = query.Where(category => category.category_id == categoryId.Value);
+        }
+
+        return query
+            .OrderBy(category => category.category_name)
+            .Select(category => new FoodCategoryRow(
+                category.category_id,
+                category.category_name,
+                category.MenuItems.Count,
+                category.UserAccount != null ? category.UserAccount.full_name : null));
+    }
 
     private async Task<IReadOnlyList<ReportedContentRow>> EnrichReportedContentAsync(
         IReadOnlyList<ReportedContentData> records,

@@ -14,6 +14,7 @@ public interface IVendorContext
 
 public sealed class VendorContext(
     ICurrentUser currentUser,
+    IUserAccountRepository users,
     IVendorRepository vendorRepository,
     IBusinessRegistrationRepository registrationRepository) : IVendorContext
 {
@@ -22,6 +23,14 @@ public sealed class VendorContext(
         var userId = currentUser.UserId ?? throw new AuthenticationException("No active session.");
 
         if (currentUser.RoleCode != RoleCodes.Vendor)
+        {
+            throw new ForbiddenException(RegMessages.NotAVendor);
+        }
+
+        var user = await users.GetByIdAsync(userId, cancellationToken);
+        if (user is null
+            || user.RoleCode != RoleCodes.Vendor
+            || user.AccountStatus != AccountStatuses.Active)
         {
             throw new ForbiddenException(RegMessages.NotAVendor);
         }
