@@ -28,7 +28,7 @@ public sealed class SubmitEvidenceCommandValidator : AbstractValidator<SubmitEvi
         RuleFor(x => x.FileUrl)
             .Must(url => EvidenceFiles.TryParseUrl(url, out _, out _))
             .WithMessage(RegMessages.UploadValidDocument)
-            .MaximumLength(500);
+            .MaximumLength(500).WithMessage(RegMessages.UploadValidDocument);
     }
 }
 

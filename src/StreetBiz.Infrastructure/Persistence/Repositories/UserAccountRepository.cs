@@ -1,4 +1,6 @@
+using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
+using StreetBiz.Application.Common.Exceptions;
 using StreetBiz.Application.Common.Interfaces;
 using StreetBiz.Application.Common.Models;
 using StreetBiz.Application.Common.Security;
@@ -43,7 +45,19 @@ public sealed class UserAccountRepository(
         };
 
         dbContext.UserAccounts.Add(entity);
-        await dbContext.SaveChangesAsync(cancellationToken);
+
+        try
+        {
+            await dbContext.SaveChangesAsync(cancellationToken);
+        }
+        catch (DbUpdateException ex) when (IsUniquePhoneViolation(ex))
+        {
+            // PhoneExistsAsync is checked earlier, but two concurrent registrations for the
+            // same number (e.g. a doubly-submitted form) can both pass that check before either
+            // inserts; the UQ index on phone_number is the real guard. Surface it as a normal
+            // conflict rather than letting the raw SqlException reach the client as a 500.
+            throw new ConflictException(AppMessages.PhoneAlreadyRegistered);
+        }
 
         // Create the linked Vendor row for vendor accounts.
         if (user.RoleCode == RoleCodes.Vendor)
@@ -72,6 +86,10 @@ public sealed class UserAccountRepository(
         entity.updated_at = clock.UtcNow;
         await dbContext.SaveChangesAsync(cancellationToken);
     }
+
+    // SQL Server error 2601 = duplicate key on a unique index, 2627 = on a unique constraint.
+    private static bool IsUniquePhoneViolation(DbUpdateException ex) =>
+        ex.InnerException is SqlException { Number: 2601 or 2627 };
 
     private static AppUser Map(UserAccount u) => new(
         u.user_id, u.phone_number, u.password_hash, u.full_name, u.role_code,
