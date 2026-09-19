@@ -1,0 +1,2 @@
+# Shell scripts must keep LF endings or Git Bash fails on "" when core.autocrlf=true.
+*.sh text eol=lf

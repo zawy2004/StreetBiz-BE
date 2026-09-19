@@ -15,6 +15,10 @@ public partial class AdministrativeUnit
 
     public DateTime created_at { get; set; }
 
+    public string? contact_name { get; set; }
+
+    public string? contact_phone { get; set; }
+
     public virtual ICollection<BusinessRegistration> BusinessRegistrations { get; set; } = new List<BusinessRegistration>();
 
     public virtual ICollection<AdministrativeUnit> Inverseparent_unit { get; set; } = new List<AdministrativeUnit>();
