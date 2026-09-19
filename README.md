@@ -1,12 +1,15 @@
 # StreetBiz Backend
 
-WARD-16–18, SYS-01–02, BUY-01–05, ADM-01 and ADM-03–05 are now implemented. See
+WARD-16–18, SYS-01–02, BUY-01–05, ADM-01, ADM-03–05, CART-01,
+ORD-01–04 and SORD-01–04 are now implemented. See
 [Ward slot workflows](docs/ward-slot-workflows.md) for API contracts, authentication,
 geofence configuration and test instructions, and
 [Community vendor workflows](docs/community-vendor-workflows.md) for the public map,
 permit verification, public profiles, customer ratings and suspicious-vendor reports.
 [Platform administration workflows](docs/platform-administration-workflows.md) documents
-food-category management, content moderation and order-complaint resolution.
+food-category management, content moderation and order-complaint resolution. See
+[Commerce order workflows](docs/commerce-order-workflows.md) for cart, prepaid order,
+pickup, seller processing, refund-request and sales-summary contracts.
 
 StreetBiz backend foundation built with .NET 8, ASP.NET Core, Entity Framework
 Core 8, SQL Server, and Clean Architecture. The current codebase includes
@@ -166,3 +169,4 @@ notifications. External push delivery and payment providers remain outside this 
 - docs/ward-slot-workflows.md
 - docs/community-vendor-workflows.md
 - docs/platform-administration-workflows.md
+- docs/commerce-order-workflows.md
