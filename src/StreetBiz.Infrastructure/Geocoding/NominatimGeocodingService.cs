@@ -37,36 +37,50 @@ public sealed class NominatimGeocodingService(HttpClient httpClient, IMemoryCach
 
     private static readonly TimeSpan CacheDuration = TimeSpan.FromDays(7);
 
-    public async Task<GeoPoint?> ForwardAsync(string address, CancellationToken cancellationToken)
+    public async Task<GeoPoint?> ForwardAsync(
+        string address,
+        CancellationToken cancellationToken) =>
+        (await SearchAsync(address, 1, cancellationToken)).FirstOrDefault();
+
+    public async Task<IReadOnlyList<GeoPoint>> SearchAsync(
+        string address,
+        int limit,
+        CancellationToken cancellationToken)
     {
         var normalized = address.Trim();
         if (normalized.Length == 0)
         {
-            return null;
+            return [];
         }
 
-        var cacheKey = BuildCacheKey(normalized);
-        if (cache.TryGetValue(cacheKey, out GeoPoint? cached))
+        var normalizedLimit = Math.Clamp(limit, 1, 10);
+        var cacheKey = BuildCacheKey(normalized, normalizedLimit);
+        if (cache.TryGetValue(cacheKey, out IReadOnlyList<GeoPoint>? cached)
+            && cached is not null)
         {
             return cached;
         }
 
-        var result = await FetchAsync(normalized, cancellationToken);
+        var result = await FetchAsync(normalized, normalizedLimit, cancellationToken);
         if (result is not null)
         {
             cache.Set(cacheKey, result, CacheDuration);
+            return result;
         }
 
-        return result;
+        return [];
     }
 
-    private async Task<GeoPoint?> FetchAsync(string address, CancellationToken cancellationToken)
+    private async Task<IReadOnlyList<GeoPoint>?> FetchAsync(
+        string address,
+        int limit,
+        CancellationToken cancellationToken)
     {
         await ThrottleAsync(cancellationToken);
 
         try
         {
-            var url = $"search?q={Uri.EscapeDataString(address)}&format=jsonv2&limit=1";
+            var url = $"search?q={Uri.EscapeDataString(address)}&format=jsonv2&limit={limit}&countrycodes=vn";
             using var response = await httpClient.GetAsync(url, cancellationToken);
             if (!response.IsSuccessStatusCode)
             {
@@ -74,15 +88,29 @@ public sealed class NominatimGeocodingService(HttpClient httpClient, IMemoryCach
             }
 
             var results = await response.Content.ReadFromJsonAsync<NominatimResult[]>(cancellationToken: cancellationToken);
-            var first = results?.FirstOrDefault();
-            if (first is null
-                || !decimal.TryParse(first.Lat, NumberStyles.Float, CultureInfo.InvariantCulture, out var lat)
-                || !decimal.TryParse(first.Lon, NumberStyles.Float, CultureInfo.InvariantCulture, out var lon))
+            if (results is null)
             {
-                return null;
+                return [];
             }
 
-            return new GeoPoint(Math.Round(lat, 6), Math.Round(lon, 6), first.DisplayName);
+            var points = new List<GeoPoint>(results.Length);
+            foreach (var result in results)
+            {
+                if (!decimal.TryParse(result.Lat, NumberStyles.Float, CultureInfo.InvariantCulture, out var latitude)
+                    || !decimal.TryParse(result.Lon, NumberStyles.Float, CultureInfo.InvariantCulture, out var longitude)
+                    || latitude is < -90 or > 90
+                    || longitude is < -180 or > 180)
+                {
+                    continue;
+                }
+
+                points.Add(new GeoPoint(
+                    Math.Round(latitude, 6),
+                    Math.Round(longitude, 6),
+                    result.DisplayName));
+            }
+
+            return points;
         }
         catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or JsonException)
         {
@@ -111,9 +139,10 @@ public sealed class NominatimGeocodingService(HttpClient httpClient, IMemoryCach
         }
     }
 
-    private static string BuildCacheKey(string normalizedAddress)
+    private static string BuildCacheKey(string normalizedAddress, int limit)
     {
-        var hash = SHA256.HashData(Encoding.UTF8.GetBytes(normalizedAddress.ToLowerInvariant()));
+        var hash = SHA256.HashData(
+            Encoding.UTF8.GetBytes($"{normalizedAddress.ToLowerInvariant()}|{limit}"));
         return "geo:" + Convert.ToHexString(hash);
     }
 

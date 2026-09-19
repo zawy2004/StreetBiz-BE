@@ -93,4 +93,31 @@ public sealed class NominatimGeocodingServiceTests
 
         handler.CallCount.Should().Be(1);
     }
+
+    [Fact]
+    public async Task Search_returns_multiple_valid_candidates_and_ignores_invalid_coordinates()
+    {
+        var handler = new StubHandler(request =>
+        {
+            request.RequestUri!.Query.Should().Contain("limit=5");
+            request.RequestUri.Query.Should().Contain("countrycodes=vn");
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(
+                    """
+                    [
+                      {"lat":"16.013200","lon":"108.239800","display_name":"First"},
+                      {"lat":"16.014200","lon":"108.240800","display_name":"Second"},
+                      {"lat":"999","lon":"108.240800","display_name":"Invalid"}
+                    ]
+                    """),
+            };
+        });
+        var service = BuildService(handler);
+
+        var results = await service.SearchAsync("Le Van Hien", 5, CancellationToken.None);
+
+        results.Should().HaveCount(2);
+        results.Select(x => x.DisplayName).Should().Equal("First", "Second");
+    }
 }

@@ -29,27 +29,35 @@ common domain primitives. The current foundation contains no business behavior.
 
 ### Application
 
-Owns future use-case contracts, DTOs, validators, mapping profiles, MediatR
-behaviors, and feature folders. DependencyInjection.cs registers MediatR,
-FluentValidation, and AutoMapper. No command, query, or use case is present.
+Owns use-case contracts, DTOs, validators, MediatR handlers and feature folders.
+DependencyInjection.cs registers MediatR, FluentValidation, AutoMapper and the
+database-backed ward actor context. Features/WardSlots contains one handler per
+WARD/SYS operation; handlers obtain the caller from ICurrentUser and never trust
+a ward id or reviewer id supplied by the client.
 
 ### Infrastructure
 
 Owns SQL Server persistence and future adapters for identity, payments,
 notifications, file storage, and external services. StreetBizDbContext and all
 database-first model types currently live here because they reflect persistence
-concerns.
+concerns. Services/WardSlots implements ward review transactions against those
+models. WardSlots implements serializable review transactions. WardGeolocation
+only performs configured polygon containment; SYS-01 reuses the shared,
+cached/throttled NominatimGeocodingService already used by SIDE workflows.
 
 ### API
 
 Is the composition root. It configures dependency injection, Serilog, Swagger,
 exception handling, HTTPS redirection, and the SQL Server health check. It
-contains no business controller.
+exposes authenticated controller routes for ward slot review and geolocation.
+Controllers delegate to MediatR and share the normal JWT/session,
+ProblemDetails, CORS and request-rate-limit pipeline.
 
 ## Runtime configuration
 
 The database connection is resolved from STREETBIZ_DB_CONNECTION first, then
-ConnectionStrings:StreetBizDatabase. Missing configuration fails startup.
+ConnectionStrings:StreetBizDB, and finally the legacy
+ConnectionStrings:StreetBizDatabase key. Missing configuration fails startup.
 Credentials are not stored in appsettings and the connection string is never
 written to logs.
 

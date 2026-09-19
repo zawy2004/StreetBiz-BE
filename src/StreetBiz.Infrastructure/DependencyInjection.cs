@@ -4,6 +4,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using StreetBiz.Application.Common.Interfaces;
 using StreetBiz.Application.Common.Security;
+using StreetBiz.Application.Features.WardSlots;
 using StreetBiz.Infrastructure.Common;
 using StreetBiz.Infrastructure.Geocoding;
 using StreetBiz.Infrastructure.Identity;
@@ -11,6 +12,7 @@ using StreetBiz.Infrastructure.Notifications;
 using StreetBiz.Infrastructure.Persistence;
 using StreetBiz.Infrastructure.Persistence.Repositories;
 using StreetBiz.Infrastructure.Security;
+using StreetBiz.Infrastructure.Services;
 using StreetBiz.Infrastructure.Storage;
 
 namespace StreetBiz.Infrastructure;
@@ -19,12 +21,17 @@ public static class DependencyInjection
 {
     private const string EnvironmentVariableName = "STREETBIZ_DB_CONNECTION";
     private const string ConnectionStringName = "StreetBizDB";
+    private const string LegacyConnectionStringName = "StreetBizDatabase";
 
     public static IServiceCollection AddInfrastructure(
         this IServiceCollection services,
         IConfiguration configuration)
     {
         var connectionString = configuration.GetStreetBizDatabaseConnectionString();
+        services.AddSingleton(TimeProvider.System);
+        services.AddSingleton<IGeolocation, WardGeolocation>();
+        services.AddScoped<WardSlots>();
+        services.AddScoped<IWardSlots>(provider => provider.GetRequiredService<WardSlots>());
 
         services.AddDbContext<StreetBizDbContext>(options =>
         {
@@ -58,6 +65,8 @@ public static class DependencyInjection
         services.AddScoped<IDigitalPermitRepository, DigitalPermitRepository>();
         services.AddScoped<IAddressChangeRequestRepository, AddressChangeRequestRepository>();
         services.AddScoped<ISlotTransferRequestRepository, SlotTransferRequestRepository>();
+        services.AddScoped<ICommunityVendorRepository, CommunityVendorRepository>();
+        services.AddScoped<IPlatformAdministrationRepository, PlatformAdministrationRepository>();
 
         services.Configure<PermitSettings>(configuration.GetSection(PermitSettings.SectionName));
         services.AddSingleton<IPermitTokenService, PermitTokenService>();
@@ -86,14 +95,16 @@ public static class DependencyInjection
 
         if (string.IsNullOrWhiteSpace(connectionString))
         {
-            connectionString = configuration.GetConnectionString(ConnectionStringName);
+            connectionString = configuration.GetConnectionString(ConnectionStringName)
+                ?? configuration.GetConnectionString(LegacyConnectionStringName);
         }
 
         if (string.IsNullOrWhiteSpace(connectionString))
         {
             throw new InvalidOperationException(
                 $"Database connection is not configured. Set {EnvironmentVariableName} " +
-                $"or ConnectionStrings:{ConnectionStringName}.");
+                $"or ConnectionStrings:{ConnectionStringName} " +
+                $"(legacy: ConnectionStrings:{LegacyConnectionStringName}).");
         }
 
         return connectionString;
