@@ -4,6 +4,7 @@ using StreetBiz.Application.Common.Exceptions;
 using StreetBiz.Application.Common.Interfaces;
 using StreetBiz.Application.Common.Security;
 using StreetBiz.Application.DTOs.RentalApplications;
+using StreetBiz.Application.Features.SlotHolds;
 
 namespace StreetBiz.Application.Features.RentalApplications.SubmitOpenSlotApplication;
 
@@ -11,7 +12,8 @@ namespace StreetBiz.Application.Features.RentalApplications.SubmitOpenSlotApplic
 public sealed record SubmitOpenSlotApplicationCommand(
     long RegistrationId,
     long SlotId,
-    int RequestedTermDays) : IRequest<RentalApplicationDto>;
+    int RequestedTermDays,
+    bool CommitmentsAccepted) : IRequest<RentalApplicationDto>;
 
 public sealed class SubmitOpenSlotApplicationCommandValidator : AbstractValidator<SubmitOpenSlotApplicationCommand>
 {
@@ -19,13 +21,16 @@ public sealed class SubmitOpenSlotApplicationCommandValidator : AbstractValidato
     {
         RuleFor(x => x.SlotId).GreaterThan(0);
         RuleFor(x => x.RequestedTermDays).GreaterThan(0);
+        RuleFor(x => x.CommitmentsAccepted).Equal(true).WithMessage(SideMessages.CommitmentsRequired);
     }
 }
 
 public sealed class SubmitOpenSlotApplicationCommandHandler(
     IVendorContext vendorContext,
     ISidewalkSlotRepository slots,
-    IRentalApplicationRepository applications)
+    IRentalApplicationRepository applications,
+    ISlotHoldRepository holds,
+    IDateTimeProvider clock)
     : IRequestHandler<SubmitOpenSlotApplicationCommand, RentalApplicationDto>
 {
     public async Task<RentalApplicationDto> Handle(SubmitOpenSlotApplicationCommand request, CancellationToken cancellationToken)
@@ -47,9 +52,17 @@ public sealed class SubmitOpenSlotApplicationCommandHandler(
             throw new ConflictException(SideMessages.ApplicationAlreadyOpenForSlot);
         }
 
+        // Someone else's live hold blocks the application; the caller's own hold has done its job
+        // once the application exists, so it is released below.
+        var now = clock.UtcNow;
+        await SlotHoldRules.RequireNotHeldByAnotherAsync(
+            holds, now, request.SlotId, request.RegistrationId, cancellationToken);
+
         var applicationId = await applications.CreateAsync(
             request.RegistrationId, request.SlotId, ApplicationMethods.ManualSelected,
-            request.RequestedTermDays, cancellationToken);
+            request.RequestedTermDays, now, cancellationToken);
+
+        await holds.ReleaseAsync(request.SlotId, request.RegistrationId, cancellationToken);
 
         var created = await applications.GetByIdAsync(applicationId, cancellationToken)
             ?? throw new NotFoundException(SideMessages.ApplicationNotFound);
