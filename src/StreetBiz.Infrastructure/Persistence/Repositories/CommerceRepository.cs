@@ -27,6 +27,13 @@ public sealed class CommerceRepository(
     private const string RefundOrderRejected = "ORDER_REJECTED";
 
     private DateTime Now => clock.GetUtcNow().UtcDateTime;
+    private DateOnly Today => DateOnly.FromDateTime(TimeZoneInfo.ConvertTimeFromUtc(Now, BusinessTimeZone));
+
+    private IQueryable<Storefront> EligibleStores() => db.Storefronts.Where(store =>
+        store.availability_status == StorefrontOpen && store.registration.registration_status == "APPROVED"
+        && store.contract.contract_status == "ACTIVE" && store.contract.start_date <= Today && store.contract.end_date >= Today
+        && store.contract.vendor_id == store.registration.vendor_id
+        && store.contract.application.registration_id == store.registration_id);
 
     public async Task<IReadOnlyList<MarketplaceMenuItemRow>> SearchMenuItemsAsync(
         string? query,
@@ -102,7 +109,7 @@ public sealed class CommerceRepository(
                 return (CartMutationOutcome.MenuItemUnavailable, (long?)null);
             }
 
-            if (menuItem.StorefrontStatus != StorefrontOpen)
+            if (menuItem.StorefrontStatus != StorefrontOpen || !await EligibleStores().AnyAsync(x => x.storefront_id == menuItem.storefront_id, cancellationToken))
             {
                 return (CartMutationOutcome.StorefrontUnavailable, (long?)null);
             }
@@ -301,7 +308,7 @@ public sealed class CommerceRepository(
                 return (OrderMutationOutcome.EmptyCart, (long?)null);
             }
 
-            if (cart.storefront.availability_status != StorefrontOpen)
+            if (!await EligibleStores().AnyAsync(x => x.storefront_id == cart.storefront_id, cancellationToken))
             {
                 return (OrderMutationOutcome.StorefrontUnavailable, (long?)null);
             }
@@ -397,17 +404,21 @@ public sealed class CommerceRepository(
             }
 
             if (payment.transaction_status == PaymentSuccess
-                && order.order_status == OrderStatuses.Placed)
+                && payment.provider_reference != null && payment.provider_reference.StartsWith("SANDBOX-"))
             {
                 await transaction.CommitAsync(cancellationToken);
                 return OrderMutationOutcome.Updated;
             }
 
-            if (payment.transaction_status != PaymentPending
+            if ((payment.transaction_status != PaymentPending && payment.transaction_status != PaymentFailed)
+                || (payment.provider_reference != null && !payment.provider_reference.StartsWith("SANDBOX-"))
                 || order.order_status != OrderStatuses.PendingPayment)
             {
                 return OrderMutationOutcome.Conflict;
             }
+
+            if (!await EligibleStores().AnyAsync(x => x.storefront_id == order.storefront_id, cancellationToken))
+                return OrderMutationOutcome.StorefrontUnavailable;
 
             var now = Now;
             payment.transaction_status = PaymentSuccess;
@@ -683,7 +694,7 @@ public sealed class CommerceRepository(
 
     private IQueryable<MenuItem> MarketplaceMenuQuery() =>
         db.MenuItems.AsNoTracking()
-            .Where(item => item.storefront.availability_status == StorefrontOpen
+            .Where(item => EligibleStores().Select(store => store.storefront_id).Contains(item.storefront_id)
                 && (item.availability_status == MenuAvailable
                     || item.availability_status == MenuSoldOut));
 
@@ -737,7 +748,7 @@ public sealed class CommerceRepository(
             header.cart_id,
             header.storefront_id,
             header.storefront_name,
-            header.StorefrontStatus,
+            await EligibleStores().AnyAsync(x => x.storefront_id == header.storefront_id, cancellationToken) ? header.StorefrontStatus : "CLOSED",
             items,
             items.Sum(item => item.UnitPrice * item.Quantity));
     }
