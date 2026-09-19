@@ -25,9 +25,23 @@ public partial class PricingZone
 
     public DateTime created_at { get; set; }
 
+    public string? zone_code { get; set; }
+
+    public string? regulation_ref { get; set; }
+
+    public string? segment_from { get; set; }
+
+    public string? segment_to { get; set; }
+
+    public DateOnly? application_deadline { get; set; }
+
     public virtual AdministrativeUnit? AdministrativeUnit { get; set; }
 
     public virtual ICollection<SidewalkSlot> SidewalkSlots { get; set; } = new List<SidewalkSlot>();
+
+    public virtual ICollection<StreetFeature> StreetFeatures { get; set; } = new List<StreetFeature>();
+
+    public virtual ICollection<ZoneFeeComponent> ZoneFeeComponents { get; set; } = new List<ZoneFeeComponent>();
 
     public virtual UserAccount? UserAccount { get; set; }
 }
