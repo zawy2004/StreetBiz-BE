@@ -20,15 +20,18 @@ public sealed class RentalApplicationHandlerTests
     private readonly Mock<IRentalApplicationRepository> applications = new();
     private readonly Mock<IRentalContractRepository> contracts = new();
     private readonly Mock<ISidewalkPolicy> sidewalkPolicy = new();
+    private readonly Mock<ISlotHoldRepository> holds = new();
+    private readonly Mock<IDateTimeProvider> clock = new();
 
     public RentalApplicationHandlerTests()
     {
         sidewalkPolicy.Setup(p => p.AdjacentRadiusMeters).Returns(150);
+        clock.Setup(c => c.UtcNow).Returns(new DateTime(2026, 9, 19, 8, 0, 0, DateTimeKind.Utc));
     }
 
     private static SlotRow Slot(string status, decimal lat = 16.0130m, decimal lon = 108.2400m) => new(
         SlotId, "HQ-DH-01", 1, "Khu vuc gan truong dai hoc", WardId, lat, lon,
-        2, 3, status, SlotSources.WardDefined, 25000, null, null);
+        2, 3, status, SlotSources.WardDefined, 25000, null, null, null, false, false, false, null, null, null);
 
     private static BizRegistration Registration(
         string vendorType, decimal? lat = 16.0130m, decimal? lon = 108.2400m) => new(
@@ -48,14 +51,15 @@ public sealed class RentalApplicationHandlerTests
         slots.Setup(s => s.GetByIdAsync(SlotId, It.IsAny<CancellationToken>()))
             .ReturnsAsync(Slot(SlotStatuses.PendingApplication));
 
-        var handler = new SubmitOpenSlotApplicationCommandHandler(vendorContext.Object, slots.Object, applications.Object);
-        var command = new SubmitOpenSlotApplicationCommand(RegistrationId, SlotId, 30);
+        var handler = new SubmitOpenSlotApplicationCommandHandler(
+            vendorContext.Object, slots.Object, applications.Object, holds.Object, clock.Object);
+        var command = new SubmitOpenSlotApplicationCommand(RegistrationId, SlotId, 30, true);
 
         await FluentActions.Awaiting(() => handler.Handle(command, CancellationToken.None))
             .Should().ThrowAsync<ConflictException>().WithMessage(SideMessages.SlotNotAvailable);
 
         applications.Verify(a => a.CreateAsync(
-            It.IsAny<long>(), It.IsAny<long>(), It.IsAny<string>(), It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Never);
+            It.IsAny<long>(), It.IsAny<long>(), It.IsAny<string>(), It.IsAny<int>(), It.IsAny<DateTime?>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
     [Fact]
@@ -67,8 +71,9 @@ public sealed class RentalApplicationHandlerTests
         applications.Setup(a => a.HasOpenApplicationForSlotAsync(SlotId, It.IsAny<CancellationToken>()))
             .ReturnsAsync(true);
 
-        var handler = new SubmitOpenSlotApplicationCommandHandler(vendorContext.Object, slots.Object, applications.Object);
-        var command = new SubmitOpenSlotApplicationCommand(RegistrationId, SlotId, 30);
+        var handler = new SubmitOpenSlotApplicationCommandHandler(
+            vendorContext.Object, slots.Object, applications.Object, holds.Object, clock.Object);
+        var command = new SubmitOpenSlotApplicationCommand(RegistrationId, SlotId, 30, true);
 
         await FluentActions.Awaiting(() => handler.Handle(command, CancellationToken.None))
             .Should().ThrowAsync<ConflictException>().WithMessage(SideMessages.ApplicationAlreadyOpenForSlot);
@@ -81,14 +86,15 @@ public sealed class RentalApplicationHandlerTests
         Owns(Registration(VendorTypes.FixedStorefront));
         slots.Setup(s => s.GetByIdAsync(SlotId, It.IsAny<CancellationToken>()))
             .ReturnsAsync(Slot(SlotStatuses.Available));
-        applications.Setup(a => a.CreateAsync(RegistrationId, SlotId, ApplicationMethods.ManualSelected, 30, It.IsAny<CancellationToken>()))
+        applications.Setup(a => a.CreateAsync(RegistrationId, SlotId, ApplicationMethods.ManualSelected, 30, It.IsAny<DateTime?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(900);
         applications.Setup(a => a.GetByIdAsync(900, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new RentalApplicationRow(900, RegistrationId, SlotId, ApplicationMethods.ManualSelected, 30,
                 ApplicationStatuses.Pending, null, null, DateTime.UtcNow, VendorId: 70));
 
-        var handler = new SubmitOpenSlotApplicationCommandHandler(vendorContext.Object, slots.Object, applications.Object);
-        var command = new SubmitOpenSlotApplicationCommand(RegistrationId, SlotId, 30);
+        var handler = new SubmitOpenSlotApplicationCommandHandler(
+            vendorContext.Object, slots.Object, applications.Object, holds.Object, clock.Object);
+        var command = new SubmitOpenSlotApplicationCommand(RegistrationId, SlotId, 30, true);
 
         var result = await handler.Handle(command, CancellationToken.None);
 
@@ -103,7 +109,7 @@ public sealed class RentalApplicationHandlerTests
         Owns(Registration(VendorTypes.Itinerant));
 
         var handler = new SubmitAdjacentApplicationCommandHandler(
-            vendorContext.Object, slots.Object, applications.Object, contracts.Object, sidewalkPolicy.Object);
+            vendorContext.Object, slots.Object, applications.Object, contracts.Object, sidewalkPolicy.Object, holds.Object, clock.Object);
         var command = new SubmitAdjacentApplicationCommand(RegistrationId, SlotId, 30);
 
         await FluentActions.Awaiting(() => handler.Handle(command, CancellationToken.None))
@@ -118,7 +124,7 @@ public sealed class RentalApplicationHandlerTests
         Owns(Registration(VendorTypes.FixedStorefront, lat: null, lon: null));
 
         var handler = new SubmitAdjacentApplicationCommandHandler(
-            vendorContext.Object, slots.Object, applications.Object, contracts.Object, sidewalkPolicy.Object);
+            vendorContext.Object, slots.Object, applications.Object, contracts.Object, sidewalkPolicy.Object, holds.Object, clock.Object);
         var command = new SubmitAdjacentApplicationCommand(RegistrationId, SlotId, 30);
 
         await FluentActions.Awaiting(() => handler.Handle(command, CancellationToken.None))
@@ -135,7 +141,7 @@ public sealed class RentalApplicationHandlerTests
             .ReturnsAsync(Slot(SlotStatuses.Available, lat: 16.0155m, lon: 108.2437m));
 
         var handler = new SubmitAdjacentApplicationCommandHandler(
-            vendorContext.Object, slots.Object, applications.Object, contracts.Object, sidewalkPolicy.Object);
+            vendorContext.Object, slots.Object, applications.Object, contracts.Object, sidewalkPolicy.Object, holds.Object, clock.Object);
         var command = new SubmitAdjacentApplicationCommand(RegistrationId, SlotId, 30);
 
         await FluentActions.Awaiting(() => handler.Handle(command, CancellationToken.None))
@@ -152,14 +158,14 @@ public sealed class RentalApplicationHandlerTests
             .ReturnsAsync(true);
 
         var handler = new SubmitAdjacentApplicationCommandHandler(
-            vendorContext.Object, slots.Object, applications.Object, contracts.Object, sidewalkPolicy.Object);
+            vendorContext.Object, slots.Object, applications.Object, contracts.Object, sidewalkPolicy.Object, holds.Object, clock.Object);
         var command = new SubmitAdjacentApplicationCommand(RegistrationId, SlotId, 30);
 
         await FluentActions.Awaiting(() => handler.Handle(command, CancellationToken.None))
             .Should().ThrowAsync<ConflictException>().WithMessage(SideMessages.AlreadyHasActiveAdjacentContract);
 
         applications.Verify(a => a.CreateAsync(
-            It.IsAny<long>(), It.IsAny<long>(), It.IsAny<string>(), It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Never);
+            It.IsAny<long>(), It.IsAny<long>(), It.IsAny<string>(), It.IsAny<int>(), It.IsAny<DateTime?>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
     [Fact]
@@ -170,14 +176,14 @@ public sealed class RentalApplicationHandlerTests
             .ReturnsAsync(Slot(SlotStatuses.Available));
         contracts.Setup(c => c.HasActiveAdjacentContractAsync(RegistrationId, It.IsAny<CancellationToken>()))
             .ReturnsAsync(false);
-        applications.Setup(a => a.CreateAsync(RegistrationId, SlotId, ApplicationMethods.AutoAdjacent, 30, It.IsAny<CancellationToken>()))
+        applications.Setup(a => a.CreateAsync(RegistrationId, SlotId, ApplicationMethods.AutoAdjacent, 30, It.IsAny<DateTime?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(901);
         applications.Setup(a => a.GetByIdAsync(901, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new RentalApplicationRow(901, RegistrationId, SlotId, ApplicationMethods.AutoAdjacent, 30,
                 ApplicationStatuses.Pending, null, null, DateTime.UtcNow, VendorId: 70));
 
         var handler = new SubmitAdjacentApplicationCommandHandler(
-            vendorContext.Object, slots.Object, applications.Object, contracts.Object, sidewalkPolicy.Object);
+            vendorContext.Object, slots.Object, applications.Object, contracts.Object, sidewalkPolicy.Object, holds.Object, clock.Object);
         var command = new SubmitAdjacentApplicationCommand(RegistrationId, SlotId, 30);
 
         var result = await handler.Handle(command, CancellationToken.None);

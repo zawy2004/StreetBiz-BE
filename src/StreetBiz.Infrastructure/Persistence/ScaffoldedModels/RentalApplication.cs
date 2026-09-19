@@ -27,6 +27,8 @@ public partial class RentalApplication
 
     public DateTime created_at { get; set; }
 
+    public DateTime? commitments_accepted_at { get; set; }
+
     public virtual RentalContract? RentalContract { get; set; }
 
     public virtual UserAccount? UserAccount { get; set; }

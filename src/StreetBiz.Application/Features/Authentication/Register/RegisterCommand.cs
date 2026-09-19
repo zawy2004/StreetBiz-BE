@@ -39,7 +39,8 @@ public sealed class RegisterCommandValidator : AbstractValidator<RegisterCommand
             .Must(o => AuthValidationRules.OtpRegex().IsMatch(o))
             .WithMessage("The verification code must be 6 digits.");
 
-        RuleFor(x => x.FullName).MaximumLength(150);
+        RuleFor(x => x.FullName)
+            .MaximumLength(150).WithMessage("Full name must be 150 characters or fewer.");
     }
 }
 

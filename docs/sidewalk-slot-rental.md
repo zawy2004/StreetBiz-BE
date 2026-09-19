@@ -17,9 +17,13 @@ update, documented in
 
 | Use case | Endpoint |
 |---|---|
-| SIDE-01 Browse slot map | `GET /api/sidewalk-slots?lat=&lng=&radiusMeters=` or `?minLat=&maxLat=&minLng=&maxLng=` (auth) |
+| SIDE-01 Browse slot map | `GET /api/sidewalk-slots?lat=&lng=&radiusMeters=`, `?minLat=&maxLat=&minLng=&maxLng=`, or `?zoneId=` (auth); add `&includeUnavailable=true` to also return rented/suspended slots |
 | SIDE-02 Slot detail | `GET /api/sidewalk-slots/{slotId}` (auth) |
-| SIDE-03B Apply for an open slot | `POST /api/vendor/rental-applications/open-slot` (auth) |
+| SIDE-02 Zone info (regulation, segment ends, deadline, ward contact, fee table, street features) | `GET /api/sidewalk-zones/{zoneId}` (auth) |
+| SIDE-02 Price estimate for a term | `GET /api/sidewalk-slots/{slotId}/quote?termDays=` (auth) |
+| Hold a slot for 15 minutes | `POST /api/vendor/slot-holds` (auth) — `{ registrationId, slotId }`; holding again renews |
+| List / release holds | `GET /api/vendor/slot-holds?registrationId=`, `DELETE /api/vendor/slot-holds/{slotId}?registrationId=` (auth) |
+| SIDE-03B Apply for an open slot | `POST /api/vendor/rental-applications/open-slot` (auth) — body must carry `commitmentsAccepted: true` |
 | SIDE-03A Apply for a storefront-adjacent slot | `POST /api/vendor/rental-applications/adjacent` (auth) |
 | SIDE-04 Track applications | `GET /api/vendor/rental-applications` (auth) |
 | SIDE-04 Application detail | `GET /api/vendor/rental-applications/{applicationId}` (auth) |
@@ -41,6 +45,39 @@ update, documented in
 
 How to run and test all of this end to end:
 [testing-sidewalk-slot-rental.md](testing-sidewalk-slot-rental.md).
+
+## Slot workspace (vendor "Ô thuê" screen)
+
+The redesigned `/vendor/slots` screen needs data the original schema did not
+have. Apply [slot-workspace-schema.sql](slot-workspace-schema.sql) by hand (the
+API never changes the schema, see [migration-guide.md](migration-guide.md)); it
+is idempotent and is mirrored in `db/StreetBiz_SQL_Server.sql`.
+
+- **Slot detail**: `SidewalkSlotDto` now also carries `imageUrl`, `hasPower`,
+  `hasWater`, `hasTrashBin`, `businessCategory` (`FOOD_BEVERAGE`, `RETAIL`,
+  `SERVICES`, `CRAFTS`, `GENERAL`; advisory, never enforced on an application),
+  `tenantName` (only for a slot with an ACTIVE contract) and `holdExpiresAt`.
+- **Zone info** lives on `PricingZones` (`zone_code`, `regulation_ref`,
+  `segment_from/to`, `application_deadline`), the ward contact on
+  `AdministrativeUnits`, the fee table in `ZoneFeeComponents` and technical
+  corridors / street furniture in `StreetFeatures` (`blocks_business = 1` means
+  no slot can operate there). There is no ward-side UI to edit any of it yet;
+  it enters through SQL or [dev-seed-side.sql](dev-seed-side.sql).
+- **Quote** = `price_per_day x days` plus each fee component (`PER_DAY` lines
+  times the days, `PER_TERM` lines once). It is informational only -- the real
+  fee schedule is generated at WARD-08 -- and is never stored.
+- **Holds** reserve an AVAILABLE slot for `Sidewalk:SlotHoldTtlMinutes` (15)
+  and are capped at `Sidewalk:MaxSlotHoldsPerRegistration` (3) per
+  registration. `SlotHolds` has `PRIMARY KEY (slot_id)`, so two simultaneous
+  requests cannot both win: the loser gets a 409. Expired rows are never swept;
+  every read ignores rows whose `expires_at` has passed ("lazy expiry"), and a
+  new hold takes over an expired row with one conditional UPDATE. Only
+  `holdExpiresAt` is exposed, never who holds the slot. While someone else's
+  live hold exists, applying for the slot (open-slot or adjacent) is a 409; a
+  successful application releases the applicant's own hold.
+- **Commitments**: `commitmentsAccepted` must be `true` on an open-slot
+  application (400 otherwise) and `RentalApplications.commitments_accepted_at`
+  stores when.
 
 ## Design decisions (reconciled with the database)
 
@@ -111,8 +148,10 @@ Set a real permit signing key (>= 32 chars), same pattern as the JWT key:
 dotnet user-secrets --project src/StreetBiz.API set "Permit:SigningKey" "<a-long-random-secret>"
 ~~~
 
-`Sidewalk:AdjacentRadiusMeters` and the `Nominatim:*` section have working
-defaults in `appsettings.json` for local development.
+`Sidewalk:AdjacentRadiusMeters`, `Sidewalk:SlotHoldTtlMinutes`,
+`Sidewalk:MaxSlotHoldsPerRegistration` and the `Nominatim:*` section have
+working defaults for local development (the `Sidewalk:*` ones live in
+`SidewalkSettings`, not `appsettings.json`).
 
 ## Build & run
 

@@ -7,9 +7,10 @@ public interface IRentalApplicationRepository
     /// <summary>True when the slot already has a PENDING/UNDER_REVIEW/MORE_INFORMATION_REQUIRED application.</summary>
     Task<bool> HasOpenApplicationForSlotAsync(long slotId, CancellationToken cancellationToken);
 
+    /// <param name="commitmentsAcceptedAt">When the vendor ticked the commitments; null for flows that have none.</param>
     Task<long> CreateAsync(
         long registrationId, long slotId, string applicationMethod, int requestedTermDays,
-        CancellationToken cancellationToken);
+        DateTime? commitmentsAcceptedAt, CancellationToken cancellationToken);
 
     Task<RentalApplicationRow?> GetByIdAsync(long applicationId, CancellationToken cancellationToken);
 
