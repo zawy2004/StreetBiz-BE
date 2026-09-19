@@ -19,6 +19,21 @@ public sealed class ControllerEndpointContractTests
 
     private static readonly string[] ExpectedControllerOperations =
     [
+        "GET /api/seller/storefronts",
+        "POST /api/seller/storefronts",
+        "PUT /api/seller/storefronts/{storefrontId}",
+        "GET /api/seller/storefronts/food-categories",
+        "GET /api/seller/storefronts/{storefrontId}/menu-items",
+        "POST /api/seller/storefronts/{storefrontId}/menu-items",
+        "PUT /api/seller/storefronts/{storefrontId}/menu-items/{itemId}",
+        "DELETE /api/seller/storefronts/{storefrontId}/menu-items/{itemId}",
+        "GET /api/orders/{orderId}/complaints",
+        "POST /api/orders/{orderId}/complaints",
+        "GET /api/orders/{orderId}/review",
+        "PUT /api/orders/{orderId}/review",
+        "GET /api/orders/payment-options",
+        "POST /api/orders/{orderId}/payment/sandbox-fail",
+        "POST /api/orders/{orderId}/refund/sandbox-confirm",
         "GET /api/administrative-units/wards",
         "GET /api/community/vendors",
         "GET /api/community/vendors/{vendorId}",
@@ -110,6 +125,21 @@ public sealed class ControllerEndpointContractTests
 
     private static readonly (HttpMethod Method, string Path)[] ProtectedEndpoints =
     [
+        (HttpMethod.Get, "/api/seller/storefronts"),
+        (HttpMethod.Post, "/api/seller/storefronts"),
+        (HttpMethod.Put, "/api/seller/storefronts/1"),
+        (HttpMethod.Get, "/api/seller/storefronts/food-categories"),
+        (HttpMethod.Get, "/api/seller/storefronts/1/menu-items"),
+        (HttpMethod.Post, "/api/seller/storefronts/1/menu-items"),
+        (HttpMethod.Put, "/api/seller/storefronts/1/menu-items/1"),
+        (HttpMethod.Delete, "/api/seller/storefronts/1/menu-items/1"),
+        (HttpMethod.Get, "/api/orders/1/complaints"),
+        (HttpMethod.Post, "/api/orders/1/complaints"),
+        (HttpMethod.Get, "/api/orders/1/review"),
+        (HttpMethod.Put, "/api/orders/1/review"),
+        (HttpMethod.Get, "/api/orders/payment-options"),
+        (HttpMethod.Post, "/api/orders/1/payment/sandbox-fail"),
+        (HttpMethod.Post, "/api/orders/1/refund/sandbox-confirm"),
         (HttpMethod.Post, "/api/auth/logout"),
         (HttpMethod.Post, "/api/auth/change-password"),
         (HttpMethod.Put, "/api/community/vendors/1/comment"),

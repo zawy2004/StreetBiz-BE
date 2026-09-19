@@ -11,6 +11,23 @@ namespace StreetBiz.Application.Tests;
 public sealed class CommerceUseCaseTests
 {
     [Fact]
+    public async Task Sql_order_timestamps_are_serialized_as_utc_not_local_wall_clock()
+    {
+        var sqlTime = new DateTime(2026, 9, 19, 10, 30, 0, DateTimeKind.Unspecified);
+        var row = Order() with { CreatedAt = sqlTime, PlacedAt = sqlTime,
+            RefundRequestedAt = sqlTime, RefundCompletedAt = sqlTime,
+            History = [new(1, null, "PLACED", null, sqlTime)] };
+        var repository = new Mock<ICommerceRepository>();
+        repository.Setup(x => x.GetCustomerOrderAsync(7, row.OrderId, It.IsAny<CancellationToken>())).ReturnsAsync(row);
+        var dto = await new GetCustomerOrderQueryHandler(CustomerContext(), repository.Object)
+            .Handle(new(row.OrderId), default);
+        Assert.Equal(DateTimeKind.Utc, dto.CreatedAt.Kind);
+        Assert.Equal(DateTimeKind.Utc, dto.History[0].ChangedAt.Kind);
+        Assert.Equal(DateTimeKind.Utc, dto.RefundCompletedAt!.Value.Kind);
+        Assert.Equal(sqlTime.Ticks, dto.CreatedAt.Ticks);
+    }
+
+    [Fact]
     public async Task Add_cart_item_uses_the_verified_customer_and_normalizes_the_note()
     {
         var repository = new Mock<ICommerceRepository>();

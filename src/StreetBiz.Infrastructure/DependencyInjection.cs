@@ -70,6 +70,8 @@ public static class DependencyInjection
         services.AddScoped<ICommunityVendorRepository, CommunityVendorRepository>();
         services.AddScoped<IPlatformAdministrationRepository, PlatformAdministrationRepository>();
         services.AddScoped<ICommerceRepository, CommerceRepository>();
+        services.AddScoped<StreetBiz.Application.Features.Commerce.ICommerceManagement, CommerceManagement>();
+        services.AddScoped<StreetBiz.Application.Features.Commerce.IOrderPaymentTesting, OrderPaymentTesting>();
 
         services.Configure<PermitSettings>(configuration.GetSection(PermitSettings.SectionName));
         services.AddSingleton<IPermitTokenService, PermitTokenService>();

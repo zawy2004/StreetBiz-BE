@@ -20,8 +20,9 @@ It does not create or migrate the database schema.
 | SORD-04 | Seller reads completed-order count, gross sales, successful refunds, net sales and order rows for the current day, week or month in Vietnam business time (`Asia/Ho_Chi_Minh`). |
 
 The public marketplace endpoints are included because live cart flows need real
-numeric menu-item identifiers. Only menu items from an `OPEN` storefront are
-returned.
+numeric menu-item identifiers. Only menu items from an `OPEN` storefront with an
+approved registration and a matching active, currently valid rental contract are
+returned. Cart addition, checkout and sandbox payment recheck this eligibility.
 
 ## State model
 
@@ -91,13 +92,57 @@ POST /api/orders/{orderId}/payment/sandbox-confirm
 ```
 
 It is excluded from Swagger and still requires the owning customer. It changes a
-pending payment to `SUCCESS` and the order to `PLACED`. Frontend development can
-call it when `VITE_ENABLE_PAYMENT_SANDBOX=true`.
+pending/failed sandbox payment to `SUCCESS` and the order to `PLACED`.
+Repeated confirmation never resets an already processed order. The frontend now
+reads `GET /api/orders/payment-options`; a client environment flag cannot enable
+server payment simulation. Checkout creates a pending order, then opens a
+separate payment screen with failure/retry and resume support.
 
 A cancel/reject operation records a `PENDING` refund request. Order responses
 include the latest refund amount, reason, status, requested time and completed
 time so tracking clients can distinguish `PENDING`, `SUCCESS` and `FAILED`.
-A provider refund worker or callback must later finish that request.
+A provider refund worker or callback must later finish that request in production.
+Development can simulate completion using the owner-only sandbox refund endpoint.
+This never contacts MoMo/ZaloPay or moves money.
+
+## Storefront, menu, review and complaint APIs
+
+All routes below require an active account; seller/customer ownership is checked
+against the database, not caller-provided user/vendor IDs.
+
+| Method | Path | Role / request |
+| --- | --- | --- |
+| GET / POST | `/api/seller/storefronts` | Vendor: list owned stores / create with registrationId, contractId, name, description, availabilityStatus. |
+| PUT | `/api/seller/storefronts/{storefrontId}` | Vendor: update name, description, OPEN/PAUSED/CLOSED; cannot reassign registration/contract. |
+| GET | `/api/seller/storefronts/food-categories` | Vendor: existing category IDs/names. |
+| GET / POST | `/api/seller/storefronts/{storefrontId}/menu-items` | Vendor: list / create with categoryId, name, description, unitPrice, availabilityStatus. |
+| PUT / DELETE | `/api/seller/storefronts/{storefrontId}/menu-items/{itemId}` | Vendor: edit or mark ARCHIVED without deleting order history. |
+| GET / PUT | `/api/orders/{orderId}/review` | Customer: read own review (JSON null if absent) / upsert rating 1–5 and text for a COMPLETED order. |
+| GET / POST | `/api/orders/{orderId}/complaints` | Customer: list / create complaintType COMPLAINT or REFUND_REQUEST, description, requestedRefundAmount. |
+| GET | `/api/orders/payment-options` | Authenticated: SANDBOX or UNAVAILABLE, provider list and explanatory message. |
+| POST | `/api/orders/{orderId}/payment/sandbox-fail` | Owning customer, Development only: simulate failure, leaving the order retryable. |
+| POST | `/api/orders/{orderId}/refund/sandbox-confirm` | Owning customer, Development only: complete approved PENDING refunds for a successful sandbox payment. |
+
+Prices/refund requests are integer VND. Menu prices are 1–50,000,000.
+Seller edits cannot restore HIDDEN/ARCHIVED items or an admin-hidden store.
+Complaints require a paid processed order, allow only one open case per order,
+and cannot request more than the payment minus pending/successful refunds.
+ADM-05 resolves/rejects these same complaint rows; customers see the resolution.
+Order/refund/history/complaint timestamps are returned as UTC instants.
+
+No schema migration is needed. Store writes respect the existing SQL
+`TR_Storefronts_Phase2Gate`; an invalid contract returns a domain error.
+
+## Remaining production payment work
+
+This is a complete **development simulation flow**, not a real gateway integration.
+MoMo/ZaloPay create-payment/redirect, signed callback verification, server-side
+payment reconciliation and real refund execution are still not implemented.
+Do not enable production checkout until those adapters and merchant credentials,
+HTTPS callback URL, timeout/late-callback handling and gateway sandbox tests exist.
+No secrets belong in frontend VITE variables or version-controlled files.
+
+See `commerce-live.postman_collection.json` for manual API requests.
 
 ## Verification
 
