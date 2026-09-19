@@ -91,6 +91,17 @@ public sealed class SqlErrorTranslatorTests
     }
 
     [Fact]
+    public void A_duplicate_slot_hold_becomes_a_held_by_another_conflict()
+    {
+        // SlotHolds' primary key on slot_id is what stops two vendors holding the same slot.
+        var result = SqlErrorTranslator.Translate(2627,
+            "Violation of PRIMARY KEY constraint 'PK__SlotHold__971A01BB0168B98B'. Cannot insert duplicate key in object 'dbo.SlotHolds'.");
+
+        result.Should().BeOfType<ConflictException>()
+            .Which.Message.Should().Be(SideMessages.SlotHeldByAnother);
+    }
+
+    [Fact]
     public void Foreign_key_violation_becomes_a_validation_error_not_a_500()
     {
         var result = SqlErrorTranslator.Translate(547,

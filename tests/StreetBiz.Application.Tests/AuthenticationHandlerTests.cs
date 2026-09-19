@@ -7,6 +7,7 @@ using StreetBiz.Application.Common.Models;
 using StreetBiz.Application.Common.Security;
 using StreetBiz.Application.Features.Authentication.ChangePassword;
 using StreetBiz.Application.Features.Authentication.RequestPasswordReset;
+using StreetBiz.Application.Features.Authentication.Register;
 using StreetBiz.Application.Features.Authentication.SendOtp;
 
 namespace StreetBiz.Application.Tests;
@@ -92,4 +93,28 @@ public sealed class AuthenticationHandlerTests
     [InlineData("09050000012", false)]
     public void Phone_rule_matches_what_the_frontend_normalizes_to(string phone, bool valid)
         => AuthValidationRules.PhoneRegex().IsMatch(phone).Should().Be(valid);
+
+    [Fact]
+    public void A_full_name_over_150_characters_gets_a_readable_message_not_the_FluentValidation_default()
+    {
+        var validator = new RegisterCommandValidator();
+        var command = new RegisterCommand(
+            Phone, "Str0ng!Pass", new string('A', 151), RoleCodes.Customer, null, "123456", null, null);
+
+        var result = validator.Validate(command);
+
+        result.IsValid.Should().BeFalse();
+        result.Errors.Should().ContainSingle(e => e.PropertyName == nameof(RegisterCommand.FullName))
+            .Which.ErrorMessage.Should().Be("Full name must be 150 characters or fewer.");
+    }
+
+    [Fact]
+    public void A_150_character_full_name_is_accepted()
+    {
+        var validator = new RegisterCommandValidator();
+        var command = new RegisterCommand(
+            Phone, "Str0ng!Pass", new string('A', 150), RoleCodes.Customer, null, "123456", null, null);
+
+        validator.Validate(command).Errors.Should().NotContain(e => e.PropertyName == nameof(RegisterCommand.FullName));
+    }
 }

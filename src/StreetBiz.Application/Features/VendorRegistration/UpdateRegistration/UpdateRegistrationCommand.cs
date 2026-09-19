@@ -25,12 +25,14 @@ public sealed class UpdateRegistrationCommandValidator : AbstractValidator<Updat
         RuleFor(x => x.VendorType)
             .Must(t => VendorTypes.All.Contains(t))
             .WithMessage(RegMessages.SelectVendorType);
-        RuleFor(x => x.DisplayName).NotEmpty().MaximumLength(180);
+        RuleFor(x => x.DisplayName)
+            .NotEmpty().WithMessage("Business/display name is required.")
+            .MaximumLength(180).WithMessage("Business/display name must be 180 characters or fewer.");
         RuleFor(x => x.DeclaredAddress)
             .NotEmpty()
             .When(x => x.VendorType == VendorTypes.FixedStorefront)
             .WithMessage(RegMessages.FixedNeedsAddress);
-        RuleFor(x => x.WardUnitId).GreaterThan(0);
+        RuleFor(x => x.WardUnitId).GreaterThan(0).WithMessage(AppMessages.InvalidWard);
     }
 }
 

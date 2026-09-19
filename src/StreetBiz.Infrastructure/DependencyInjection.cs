@@ -59,6 +59,8 @@ public static class DependencyInjection
         services.AddScoped<IBusinessRegistrationRepository, BusinessRegistrationRepository>();
         services.AddScoped<IAdministrativeUnitRepository, AdministrativeUnitRepository>();
         services.AddScoped<ISidewalkSlotRepository, SidewalkSlotRepository>();
+        services.AddScoped<ISidewalkZoneRepository, SidewalkZoneRepository>();
+        services.AddScoped<ISlotHoldRepository, SlotHoldRepository>();
         services.AddScoped<IRentalApplicationRepository, RentalApplicationRepository>();
         services.AddScoped<IRentalContractRepository, RentalContractRepository>();
         services.AddScoped<IRenewalRequestRepository, RenewalRequestRepository>();

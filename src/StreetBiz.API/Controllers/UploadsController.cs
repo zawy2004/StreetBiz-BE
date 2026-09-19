@@ -26,6 +26,13 @@ public sealed class UploadsController(IFileStorage storage, ICurrentUser current
     {
         var userId = currentUser.UserId ?? throw new AuthenticationException("No active session.");
 
+        // Only REG-02 needs this endpoint; scoping it to Vendor stops other roles
+        // from filling the disk with files that can never be attached to anything.
+        if (currentUser.RoleCode != RoleCodes.Vendor)
+        {
+            throw new ForbiddenException(RegMessages.NotAVendor);
+        }
+
         if (file is null || file.Length == 0)
         {
             throw FileError(RegMessages.UploadValidDocument);

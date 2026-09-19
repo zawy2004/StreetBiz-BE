@@ -122,7 +122,8 @@ Swagger: gọi `POST /api/auth/login`, copy `accessToken`, bấm **Authorize**
 
 | # | Thao tác | Kết quả mong đợi |
 |---|---|---|
-| 1 | `POST /rental-applications/open-slot` với ô đang `AVAILABLE` | 200, đơn `PENDING`/method `MANUAL_SELECTED` |
+| 1 | `POST /rental-applications/open-slot` với ô đang `AVAILABLE` và `commitmentsAccepted: true` | 200, đơn `PENDING`/method `MANUAL_SELECTED`, `commitments_accepted_at` được lưu |
+| 1b | Như trên nhưng `commitmentsAccepted: false` hoặc thiếu | 400 (phải chấp nhận cam kết) |
 | 2 | Gọi lại cho **cùng ô** khi đơn trên chưa được xét | 409 (đã có đơn đang mở cho ô) |
 | 3 | `POST /rental-applications/adjacent` bằng hồ sơ **Bán hàng lưu động** | 422 (chỉ Cửa hàng cố định) |
 | 4 | `POST /rental-applications/adjacent` với ô cách địa chỉ đăng ký > 150m | 422 (BR-11, ngoài bán kính) |
@@ -200,6 +201,29 @@ Cần 2 tài khoản vendor đã đăng nhập (bên gửi và bên nhận — x
 | 8 | Bên nhận `POST /slot-transfers/{id}/accept` | 200, `transferStatus = ACCEPTED_BY_RECEIVER` |
 | 9 | Gọi lại `accept` lần hai | 409 (không còn PENDING) |
 | 10 | `RentalContracts.vendor_id` sau khi accept | **Không đổi** — chỉ WARD-18 (chưa có) mới đổi chủ |
+
+### 4.9 Màn "Ô thuê": thông tin tuyến, báo giá, giữ chỗ
+
+Cần áp `docs/slot-workspace-schema.sql` và chạy lại `docs/dev-seed-side.sql`
+(tuyến Nguyễn Văn Linh, `zoneId` xem trong bảng `PricingZones`).
+
+| # | Thao tác | Kết quả mong đợi |
+|---|---|---|
+| 1 | `GET /api/sidewalk-zones/{zoneId}` | Tên/mã/quyết định/đoạn tuyến, hạn nộp, liên hệ Phường, 3 khoản phí, 6 hạng mục (`features`) |
+| 2 | `GET /api/sidewalk-zones/99999` | 404 |
+| 3 | `GET /api/sidewalk-slots/{slotId}` | Có `hasPower/hasWater/hasTrashBin/businessCategory`; `tenantName` chỉ có ở ô có hợp đồng ACTIVE |
+| 4 | `GET /api/sidewalk-slots/{slotId}/quote?termDays=90` | Dòng `RENT` + các dòng `FEE`, `total` = giá/ngày × 90 + phí `PER_DAY` × 90 + phí `PER_TERM` |
+| 5 | `quote?termDays=0` hoặc `366` | 400 |
+| 6 | `POST /vendor/slot-holds` `{registrationId, slotId}` với ô `AVAILABLE` | 200, `expiresAt` = bây giờ + 15 phút (UTC, có `Z`) |
+| 7 | Giữ lại đúng ô đó | 200, `expiresAt` được gia hạn |
+| 8 | Giữ tới ô thứ 4 cùng lúc | 409 (tối đa 3) |
+| 9 | Ô đang `ACTIVE`/`SUSPENDED`, hoặc đã có đơn mở | 409 |
+| 10 | `registrationId` của người khác | 403 |
+| 11 | `GET /vendor/slot-holds?registrationId=` | Chỉ các hold còn hạn của hồ sơ đó |
+| 12 | `DELETE /vendor/slot-holds/{slotId}?registrationId=` hai lần | 200 rồi 404 |
+| 13 | Hồ sơ B giữ ô, hồ sơ A giữ/nộp đơn cho **cùng ô** | 409 cả hai (`held by another vendor`) |
+| 14 | Chỉnh `SlotHolds.expires_at` về quá khứ bằng SQL rồi gọi lại | Hold coi như không còn: ô hết `holdExpiresAt`, A giữ/nộp đơn được |
+| 15 | Nộp đơn `open-slot` cho ô mình đang giữ | 200 và hold của mình biến mất |
 
 ---
 

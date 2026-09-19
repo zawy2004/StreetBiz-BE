@@ -27,7 +27,7 @@ public sealed class SubmitRegistrationCommandValidator : AbstractValidator<Submi
 
         RuleFor(x => x.DisplayName)
             .NotEmpty().WithMessage("Business/display name is required.")
-            .MaximumLength(180);
+            .MaximumLength(180).WithMessage("Business/display name must be 180 characters or fewer.");
 
         // BR-07: a fixed storefront must declare an address.
         RuleFor(x => x.DeclaredAddress)
@@ -35,7 +35,7 @@ public sealed class SubmitRegistrationCommandValidator : AbstractValidator<Submi
             .When(x => x.VendorType == VendorTypes.FixedStorefront)
             .WithMessage(RegMessages.FixedNeedsAddress);
 
-        RuleFor(x => x.WardUnitId).GreaterThan(0);
+        RuleFor(x => x.WardUnitId).GreaterThan(0).WithMessage(AppMessages.InvalidWard);
     }
 }
 
