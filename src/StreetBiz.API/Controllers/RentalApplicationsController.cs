@@ -22,7 +22,7 @@ public sealed class RentalApplicationsController(ISender sender) : ControllerBas
         SubmitOpenSlotApplicationRequest request, CancellationToken cancellationToken)
     {
         var result = await sender.Send(new SubmitOpenSlotApplicationCommand(
-            request.RegistrationId, request.SlotId, request.RequestedTermDays), cancellationToken);
+            request.RegistrationId, request.SlotId, request.RequestedTermDays, request.CommitmentsAccepted), cancellationToken);
         return Ok(new { message = SideMessages.ApplicationSubmitted, data = result });
     }
 

@@ -14,7 +14,7 @@ public sealed class RentalApplicationRepository(StreetBizDbContext dbContext) : 
 
     public async Task<long> CreateAsync(
         long registrationId, long slotId, string applicationMethod, int requestedTermDays,
-        CancellationToken cancellationToken)
+        DateTime? commitmentsAcceptedAt, CancellationToken cancellationToken)
     {
         var entity = new RentalApplication
         {
@@ -22,6 +22,7 @@ public sealed class RentalApplicationRepository(StreetBizDbContext dbContext) : 
             slot_id = slotId,
             application_method = applicationMethod,
             requested_term_days = requestedTermDays,
+            commitments_accepted_at = commitmentsAcceptedAt,
             // application_status and created_at are database defaults — never set here.
         };
 
