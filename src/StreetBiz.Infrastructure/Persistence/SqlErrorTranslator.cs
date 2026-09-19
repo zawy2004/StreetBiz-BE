@@ -104,7 +104,12 @@ public static class SqlErrorTranslator
         // slot_code and qr_payload are plain inline UNIQUE columns, so SQL Server auto-names
         // their constraint (e.g. "UQ__SidewalkSlots__<hash>") and that hash is not guaranteed
         // stable across environments. Fall back to the table name, which the message always
-        // carries as "object 'dbo.<Table>'".
+        // carries as "object 'dbo.<Table>'". The same goes for SlotHolds' primary key on slot_id.
+        if (message.Contains("SlotHolds", StringComparison.OrdinalIgnoreCase))
+        {
+            return new ConflictException(SideMessages.SlotHeldByAnother);
+        }
+
         if (message.Contains("SidewalkSlots", StringComparison.OrdinalIgnoreCase))
         {
             return new ConflictException(SideMessages.SlotCodeGenerationFailed);

@@ -176,13 +176,36 @@ Authorization: Bearer {{token}}
 GET {{host}}/api/sidewalk-slots/{{slotId}}
 Authorization: Bearer {{token}}
 
-### SIDE-03B Nộp đơn thuê ô trống (chọn thủ công)
+### Thông tin một tuyến: quyết định, đoạn, hạn nộp, liên hệ Phường, bảng phí, hạng mục kỹ thuật
+GET {{host}}/api/sidewalk-zones/1002
+Authorization: Bearer {{token}}
+
+### Báo giá dự kiến thuê ô trong N ngày (chỉ để tham khảo, không lưu)
+GET {{host}}/api/sidewalk-slots/{{slotId}}/quote?termDays=90
+Authorization: Bearer {{token}}
+
+### Giữ ô 15 phút (giữ lại đúng ô đó = gia hạn; tối đa 3 ô mỗi hồ sơ)
+POST {{host}}/api/vendor/slot-holds
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{ "registrationId": {{registrationId}}, "slotId": {{slotId}} }
+
+### Các ô đang giữ còn hạn của hồ sơ
+GET {{host}}/api/vendor/slot-holds?registrationId={{registrationId}}
+Authorization: Bearer {{token}}
+
+### Nhả ô đang giữ
+DELETE {{host}}/api/vendor/slot-holds/{{slotId}}?registrationId={{registrationId}}
+Authorization: Bearer {{token}}
+
+### SIDE-03B Nộp đơn thuê ô trống (chọn thủ công; phải chấp nhận cam kết, nộp xong tự nhả hold của mình)
 # @name submitOpenSlot
 POST {{host}}/api/vendor/rental-applications/open-slot
 Authorization: Bearer {{token}}
 Content-Type: application/json
 
-{ "registrationId": {{registrationId}}, "slotId": {{slotId}}, "requestedTermDays": 90 }
+{ "registrationId": {{registrationId}}, "slotId": {{slotId}}, "requestedTermDays": 90, "commitmentsAccepted": true }
 
 ###
 @applicationId = {{submitOpenSlot.response.body.data.applicationId}}

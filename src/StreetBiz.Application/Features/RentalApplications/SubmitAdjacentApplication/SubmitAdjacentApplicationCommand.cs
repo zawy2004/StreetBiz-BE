@@ -5,6 +5,7 @@ using StreetBiz.Application.Common.Geo;
 using StreetBiz.Application.Common.Interfaces;
 using StreetBiz.Application.Common.Security;
 using StreetBiz.Application.DTOs.RentalApplications;
+using StreetBiz.Application.Features.SlotHolds;
 
 namespace StreetBiz.Application.Features.RentalApplications.SubmitAdjacentApplication;
 
@@ -28,7 +29,9 @@ public sealed class SubmitAdjacentApplicationCommandHandler(
     ISidewalkSlotRepository slots,
     IRentalApplicationRepository applications,
     IRentalContractRepository contracts,
-    ISidewalkPolicy sidewalkPolicy)
+    ISidewalkPolicy sidewalkPolicy,
+    ISlotHoldRepository holds,
+    IDateTimeProvider clock)
     : IRequestHandler<SubmitAdjacentApplicationCommand, RentalApplicationDto>
 {
     public async Task<RentalApplicationDto> Handle(SubmitAdjacentApplicationCommand request, CancellationToken cancellationToken)
@@ -74,9 +77,15 @@ public sealed class SubmitAdjacentApplicationCommandHandler(
             throw new ConflictException(SideMessages.ApplicationAlreadyOpenForSlot);
         }
 
+        // A vendor holding the slot has reserved it -- an adjacent application must not jump the hold.
+        await SlotHoldRules.RequireNotHeldByAnotherAsync(
+            holds, clock.UtcNow, request.SlotId, request.RegistrationId, cancellationToken);
+
         var applicationId = await applications.CreateAsync(
             request.RegistrationId, request.SlotId, ApplicationMethods.AutoAdjacent,
-            request.RequestedTermDays, cancellationToken);
+            request.RequestedTermDays, null, cancellationToken);
+
+        await holds.ReleaseAsync(request.SlotId, request.RegistrationId, cancellationToken);
 
         var created = await applications.GetByIdAsync(applicationId, cancellationToken)
             ?? throw new NotFoundException(SideMessages.ApplicationNotFound);
