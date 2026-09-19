@@ -25,4 +25,11 @@ public interface IBusinessRegistrationRepository
 
     /// <summary>BR-26 (SIDE-12/13): true when the vendor holds at least one APPROVED registration.</summary>
     Task<bool> HasApprovedRegistrationAsync(long vendorId, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// PRI-02/PRI-07: true when an evidence file uploaded by <paramref name="ownerUserId"/> is
+    /// attached to a registration in <paramref name="wardUnitId"/>, i.e. the ward officer
+    /// reviewing that ward is entitled to open it.
+    /// </summary>
+    Task<bool> EvidenceBelongsToWardAsync(long ownerUserId, string fileUrl, int wardUnitId, CancellationToken cancellationToken);
 }

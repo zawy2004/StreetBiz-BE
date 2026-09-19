@@ -20,9 +20,12 @@ public sealed class OtpService(
     private static readonly TimeSpan ResendCooldown = TimeSpan.FromSeconds(60);
     private const byte MaxAttempts = 5;
 
-    public async Task IssueAsync(string phoneNumber, string purpose, CancellationToken cancellationToken)
+    public async Task IssueAsync(string rawPhoneNumber, string purpose, CancellationToken cancellationToken)
     {
         var now = clock.UtcNow;
+        // The code is bound to the phone number, so issue and consume must agree on its
+        // form; normalizing both ends lets a code requested as +84… be entered as 0… (CR-06).
+        var phoneNumber = AuthValidationRules.NormalizePhone(rawPhoneNumber);
 
         var latest = await dbContext.OtpChallenges
             .Where(c => c.phone_number == phoneNumber && c.purpose == purpose)
@@ -52,9 +55,10 @@ public sealed class OtpService(
         await smsSender.SendAsync(phoneNumber, $"Your StreetBiz verification code is {code}.", cancellationToken);
     }
 
-    public async Task ConsumeAsync(string phoneNumber, string purpose, string code, CancellationToken cancellationToken)
+    public async Task ConsumeAsync(string rawPhoneNumber, string purpose, string code, CancellationToken cancellationToken)
     {
         var now = clock.UtcNow;
+        var phoneNumber = AuthValidationRules.NormalizePhone(rawPhoneNumber);
 
         var challenge = await dbContext.OtpChallenges
             .Where(c => c.phone_number == phoneNumber && c.purpose == purpose && c.consumed_at == null)

@@ -26,8 +26,8 @@ public sealed class SubmitRegistrationCommandValidator : AbstractValidator<Submi
             .WithMessage(RegMessages.SelectVendorType);
 
         RuleFor(x => x.DisplayName)
-            .NotEmpty().WithMessage("Business/display name is required.")
-            .MaximumLength(180).WithMessage("Business/display name must be 180 characters or fewer.");
+            .NotEmpty().WithMessage(RegMessages.DisplayNameRequired)
+            .MaximumLength(180).WithMessage(RegMessages.DisplayNameTooLong);
 
         // BR-07: a fixed storefront must declare an address.
         RuleFor(x => x.DeclaredAddress)

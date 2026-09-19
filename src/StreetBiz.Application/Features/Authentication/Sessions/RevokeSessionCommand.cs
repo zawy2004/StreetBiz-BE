@@ -14,7 +14,7 @@ public sealed class RevokeSessionCommandHandler(
 {
     public async Task<Unit> Handle(RevokeSessionCommand request, CancellationToken cancellationToken)
     {
-        var userId = currentUser.UserId ?? throw new AuthenticationException("No active session.");
+        var userId = currentUser.UserId ?? throw new AuthenticationException(AppMessages.SessionExpired);
 
         if (currentUser.SessionId is { } current && current == request.SessionId)
         {
@@ -22,7 +22,7 @@ public sealed class RevokeSessionCommandHandler(
         }
 
         var session = await sessionRepository.GetByIdAsync(request.SessionId, cancellationToken)
-            ?? throw new NotFoundException("Session not found.");
+            ?? throw new NotFoundException(AppMessages.SessionNotFound);
 
         if (session.UserId != userId)
         {

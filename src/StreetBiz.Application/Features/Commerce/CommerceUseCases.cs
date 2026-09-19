@@ -397,7 +397,7 @@ public sealed class DecideSellerOrderCommandHandler(
         CancellationToken cancellationToken)
     {
         var vendorId = await vendorContext.RequireVendorIdAsync(cancellationToken);
-        var actorUserId = currentUser.UserId ?? throw new AuthenticationException("No active session.");
+        var actorUserId = currentUser.UserId ?? throw new AuthenticationException(AppMessages.SessionExpired);
         return (await repository.DecideSellerOrderAsync(
             vendorId,
             actorUserId,
@@ -439,7 +439,7 @@ public sealed class UpdateSellerOrderStatusCommandHandler(
         CancellationToken cancellationToken)
     {
         var vendorId = await vendorContext.RequireVendorIdAsync(cancellationToken);
-        var actorUserId = currentUser.UserId ?? throw new AuthenticationException("No active session.");
+        var actorUserId = currentUser.UserId ?? throw new AuthenticationException(AppMessages.SessionExpired);
         return (await repository.UpdateSellerOrderStatusAsync(
             vendorId,
             actorUserId,
@@ -473,7 +473,7 @@ public sealed class ConfirmSellerHandoverCommandHandler(
         CancellationToken cancellationToken)
     {
         var vendorId = await vendorContext.RequireVendorIdAsync(cancellationToken);
-        var actorUserId = currentUser.UserId ?? throw new AuthenticationException("No active session.");
+        var actorUserId = currentUser.UserId ?? throw new AuthenticationException(AppMessages.SessionExpired);
         return (await repository.ConfirmSellerHandoverAsync(
             vendorId,
             actorUserId,

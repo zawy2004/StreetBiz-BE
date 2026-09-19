@@ -16,8 +16,8 @@ public sealed class LoginCommandValidator : AbstractValidator<LoginCommand>
 {
     public LoginCommandValidator()
     {
-        RuleFor(x => x.PhoneNumber).NotEmpty().WithMessage("Please enter a valid phone number.");
-        RuleFor(x => x.Password).NotEmpty().WithMessage("Password is required.");
+        RuleFor(x => x.PhoneNumber).NotEmpty().WithMessage(AppMessages.InvalidPhone);
+        RuleFor(x => x.Password).NotEmpty().WithMessage(AppMessages.PasswordRequired);
     }
 }
 

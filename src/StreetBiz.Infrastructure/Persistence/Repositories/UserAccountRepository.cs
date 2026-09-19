@@ -12,14 +12,20 @@ public sealed class UserAccountRepository(
     StreetBizDbContext dbContext,
     IDateTimeProvider clock) : IUserAccountRepository
 {
-    public Task<bool> PhoneExistsAsync(string phoneNumber, CancellationToken cancellationToken) =>
-        dbContext.UserAccounts.AsNoTracking()
-            .AnyAsync(u => u.phone_number == phoneNumber, cancellationToken);
+    // Every phone lookup and insert goes through NormalizePhone here, so no caller can
+    // create or miss an account by passing the +84 form instead of the local one (CR-06).
+    public Task<bool> PhoneExistsAsync(string phoneNumber, CancellationToken cancellationToken)
+    {
+        var normalized = AuthValidationRules.NormalizePhone(phoneNumber);
+        return dbContext.UserAccounts.AsNoTracking()
+            .AnyAsync(u => u.phone_number == normalized, cancellationToken);
+    }
 
     public async Task<AppUser?> GetByPhoneAsync(string phoneNumber, CancellationToken cancellationToken)
     {
+        var normalized = AuthValidationRules.NormalizePhone(phoneNumber);
         var entity = await dbContext.UserAccounts.AsNoTracking()
-            .FirstOrDefaultAsync(u => u.phone_number == phoneNumber, cancellationToken);
+            .FirstOrDefaultAsync(u => u.phone_number == normalized, cancellationToken);
         return entity is null ? null : Map(entity);
     }
 
@@ -34,7 +40,7 @@ public sealed class UserAccountRepository(
     {
         var entity = new UserAccount
         {
-            phone_number = user.PhoneNumber,
+            phone_number = AuthValidationRules.NormalizePhone(user.PhoneNumber),
             password_hash = user.PasswordHash,
             full_name = user.FullName,
             role_code = user.RoleCode,

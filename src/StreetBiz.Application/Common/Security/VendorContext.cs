@@ -20,7 +20,7 @@ public sealed class VendorContext(
 {
     public async Task<long> RequireVendorIdAsync(CancellationToken cancellationToken)
     {
-        var userId = currentUser.UserId ?? throw new AuthenticationException("No active session.");
+        var userId = currentUser.UserId ?? throw new AuthenticationException(AppMessages.SessionExpired);
 
         if (currentUser.RoleCode != RoleCodes.Vendor)
         {
