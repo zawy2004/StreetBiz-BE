@@ -49,6 +49,8 @@ public partial class BusinessRegistration
 
     public virtual ICollection<SidewalkSlot> SidewalkSlots { get; set; } = new List<SidewalkSlot>();
 
+    public virtual ICollection<SlotHold> SlotHolds { get; set; } = new List<SlotHold>();
+
     public virtual Storefront? Storefront { get; set; }
 
     public virtual UserAccount? UserAccount { get; set; }
