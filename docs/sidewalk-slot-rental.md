@@ -46,6 +46,10 @@ update, documented in
 How to run and test all of this end to end:
 [testing-sidewalk-slot-rental.md](testing-sidewalk-slot-rental.md).
 
+A transfer request carries `slotCode`, `zoneName`, `contractStartDate` and `contractEndDate` of the contract being handed over,
+in both directions. Only the contract's holder can read the contract itself (`GET /api/vendor/rental-contracts/{id}`), so without
+these fields the receiver could not tell which slot they are being asked to accept.
+
 ## Slot workspace (vendor "Ô thuê" screen)
 
 The redesigned `/vendor/slots` screen needs data the original schema did not
