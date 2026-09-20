@@ -1,0 +1,264 @@
+{
+  "info": {
+    "name": "StreetBiz Commerce additions (manual test)",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "description": "Manual requests, NOT an ordered collection run. TEST DATABASE ONLY: these requests change data. Set role tokens from /auth/login and IDs. Sandbox requires Development and never moves money. Store requires matching approved registration/current active contract. Reviews require COMPLETED; refund completion requires an approved PENDING refund on a successful SANDBOX payment."
+  },
+  "variable": [
+    { "key": "baseUrl", "value": "http://localhost:5023/api" },
+    { "key": "vendorToken", "value": "" },
+    { "key": "customerToken", "value": "" },
+    { "key": "registrationId", "value": "" },
+    { "key": "contractId", "value": "" },
+    { "key": "storefrontId", "value": "" },
+    { "key": "categoryId", "value": "" },
+    { "key": "menuItemId", "value": "" },
+    { "key": "orderId", "value": "" }
+  ],
+  "item": [
+    {
+      "name": "List stores",
+      "request": {
+        "method": "GET",
+        "url": "{{baseUrl}}/seller/storefronts",
+        "auth": {
+          "type": "bearer",
+          "bearer": [
+            { "key": "token", "value": "{{vendorToken}}", "type": "string" }
+          ]
+        }
+      }
+    },
+    {
+      "name": "Create store",
+      "request": {
+        "method": "POST",
+        "url": "{{baseUrl}}/seller/storefronts",
+        "auth": {
+          "type": "bearer",
+          "bearer": [
+            { "key": "token", "value": "{{vendorToken}}", "type": "string" }
+          ]
+        },
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "body": {
+          "mode": "raw",
+          "raw": "{\"registrationId\":{{registrationId}},\"contractId\":{{contractId}},\"name\":\"Test store\",\"description\":null,\"availabilityStatus\":\"OPEN\"}",
+          "options": { "raw": { "language": "json" } }
+        }
+      }
+    },
+    {
+      "name": "Update store",
+      "request": {
+        "method": "PUT",
+        "url": "{{baseUrl}}/seller/storefronts/{{storefrontId}}",
+        "auth": {
+          "type": "bearer",
+          "bearer": [
+            { "key": "token", "value": "{{vendorToken}}", "type": "string" }
+          ]
+        },
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "body": {
+          "mode": "raw",
+          "raw": "{\"registrationId\":{{registrationId}},\"contractId\":{{contractId}},\"name\":\"Test store\",\"description\":null,\"availabilityStatus\":\"PAUSED\"}",
+          "options": { "raw": { "language": "json" } }
+        }
+      }
+    },
+    {
+      "name": "Categories",
+      "request": {
+        "method": "GET",
+        "url": "{{baseUrl}}/seller/storefronts/food-categories",
+        "auth": {
+          "type": "bearer",
+          "bearer": [
+            { "key": "token", "value": "{{vendorToken}}", "type": "string" }
+          ]
+        }
+      }
+    },
+    {
+      "name": "Menu",
+      "request": {
+        "method": "GET",
+        "url": "{{baseUrl}}/seller/storefronts/{{storefrontId}}/menu-items",
+        "auth": {
+          "type": "bearer",
+          "bearer": [
+            { "key": "token", "value": "{{vendorToken}}", "type": "string" }
+          ]
+        }
+      }
+    },
+    {
+      "name": "Create meal",
+      "request": {
+        "method": "POST",
+        "url": "{{baseUrl}}/seller/storefronts/{{storefrontId}}/menu-items",
+        "auth": {
+          "type": "bearer",
+          "bearer": [
+            { "key": "token", "value": "{{vendorToken}}", "type": "string" }
+          ]
+        },
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "body": {
+          "mode": "raw",
+          "raw": "{\"categoryId\":{{categoryId}},\"name\":\"Test meal\",\"description\":null,\"unitPrice\":25000,\"availabilityStatus\":\"AVAILABLE\"}",
+          "options": { "raw": { "language": "json" } }
+        }
+      }
+    },
+    {
+      "name": "Edit meal",
+      "request": {
+        "method": "PUT",
+        "url": "{{baseUrl}}/seller/storefronts/{{storefrontId}}/menu-items/{{menuItemId}}",
+        "auth": {
+          "type": "bearer",
+          "bearer": [
+            { "key": "token", "value": "{{vendorToken}}", "type": "string" }
+          ]
+        },
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "body": {
+          "mode": "raw",
+          "raw": "{\"categoryId\":{{categoryId}},\"name\":\"Test meal\",\"description\":null,\"unitPrice\":25000,\"availabilityStatus\":\"SOLD_OUT\"}",
+          "options": { "raw": { "language": "json" } }
+        }
+      }
+    },
+    {
+      "name": "Archive meal",
+      "request": {
+        "method": "DELETE",
+        "url": "{{baseUrl}}/seller/storefronts/{{storefrontId}}/menu-items/{{menuItemId}}",
+        "auth": {
+          "type": "bearer",
+          "bearer": [
+            { "key": "token", "value": "{{vendorToken}}", "type": "string" }
+          ]
+        }
+      }
+    },
+    {
+      "name": "Read review",
+      "request": {
+        "method": "GET",
+        "url": "{{baseUrl}}/orders/{{orderId}}/review",
+        "auth": {
+          "type": "bearer",
+          "bearer": [
+            { "key": "token", "value": "{{customerToken}}", "type": "string" }
+          ]
+        }
+      }
+    },
+    {
+      "name": "Save review",
+      "request": {
+        "method": "PUT",
+        "url": "{{baseUrl}}/orders/{{orderId}}/review",
+        "auth": {
+          "type": "bearer",
+          "bearer": [
+            { "key": "token", "value": "{{customerToken}}", "type": "string" }
+          ]
+        },
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "body": {
+          "mode": "raw",
+          "raw": "{\"rating\":4,\"text\":\"Test review\"}",
+          "options": { "raw": { "language": "json" } }
+        }
+      }
+    },
+    {
+      "name": "Read complaints",
+      "request": {
+        "method": "GET",
+        "url": "{{baseUrl}}/orders/{{orderId}}/complaints",
+        "auth": {
+          "type": "bearer",
+          "bearer": [
+            { "key": "token", "value": "{{customerToken}}", "type": "string" }
+          ]
+        }
+      }
+    },
+    {
+      "name": "Create refund complaint",
+      "request": {
+        "method": "POST",
+        "url": "{{baseUrl}}/orders/{{orderId}}/complaints",
+        "auth": {
+          "type": "bearer",
+          "bearer": [
+            { "key": "token", "value": "{{customerToken}}", "type": "string" }
+          ]
+        },
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "body": {
+          "mode": "raw",
+          "raw": "{\"complaintType\":\"REFUND_REQUEST\",\"description\":\"Test partial refund\",\"requestedRefundAmount\":5000}",
+          "options": { "raw": { "language": "json" } }
+        }
+      }
+    },
+    {
+      "name": "Payment options",
+      "request": {
+        "method": "GET",
+        "url": "{{baseUrl}}/orders/payment-options",
+        "auth": {
+          "type": "bearer",
+          "bearer": [
+            { "key": "token", "value": "{{customerToken}}", "type": "string" }
+          ]
+        }
+      }
+    },
+    {
+      "name": "Sandbox failure",
+      "request": {
+        "method": "POST",
+        "url": "{{baseUrl}}/orders/{{orderId}}/payment/sandbox-fail",
+        "auth": {
+          "type": "bearer",
+          "bearer": [
+            { "key": "token", "value": "{{customerToken}}", "type": "string" }
+          ]
+        }
+      }
+    },
+    {
+      "name": "Sandbox success/retry",
+      "request": {
+        "method": "POST",
+        "url": "{{baseUrl}}/orders/{{orderId}}/payment/sandbox-confirm",
+        "auth": {
+          "type": "bearer",
+          "bearer": [
+            { "key": "token", "value": "{{customerToken}}", "type": "string" }
+          ]
+        }
+      }
+    },
+    {
+      "name": "Sandbox refund",
+      "request": {
+        "method": "POST",
+        "url": "{{baseUrl}}/orders/{{orderId}}/refund/sandbox-confirm",
+        "auth": {
+          "type": "bearer",
+          "bearer": [
+            { "key": "token", "value": "{{customerToken}}", "type": "string" }
+          ]
+        }
+      }
+    }
+  ]
+}
