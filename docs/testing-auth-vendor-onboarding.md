@@ -26,26 +26,45 @@ Phần mềm cần có:
 
 ### 1.1 Tạo database local
 
-Repo **không có sẵn script tạo bảng**: StreetBizDB theo hướng database-first, và
-migration `InitialBaseline` cố ý để trống (xem `docs/migration-guide.md`). Script
-dưới đây sinh schema từ model EF, tạo DB trên LocalDB và nạp dữ liệu tham chiếu
-(4 vai trò + 3 phường):
+StreetBizDB theo hướng database-first, và migration `InitialBaseline` cố ý để
+trống (xem `docs/migration-guide.md`). Schema chuẩn nằm ở
+`db/StreetBiz_SQL_Server.sql`. Script dưới đây tạo lại toàn bộ database trên
+LocalDB từ schema đó, rồi nạp dữ liệu tham chiếu và bộ dữ liệu demo:
 
 ```powershell
 cd StreetBiz-BE
-powershell -ExecutionPolicy Bypass -File scripts/setup-local-db.ps1
+powershell -ExecutionPolicy Bypass -File scripts/setup-local-db.ps1 -Recreate
 ```
 
-Kết quả đúng: dòng cuối là `Done. Wards available: 3`. Script chạy lại nhiều
-lần vẫn an toàn: nếu đã có bảng, nó giữ nguyên schema và chỉ bổ sung dữ liệu còn
-thiếu.
+Kết quả đúng:
 
-> Hãy **tắt API** trước khi chạy script lần đầu. Bước sinh schema phải build
-> project API, và build sẽ lỗi nếu API đang chạy (file `.exe` bị khoá).
+```
+tables=50  triggers=5  views=2  checks=77  migrations=2
+Wards available: 5
+accounts=10  registrations=9  slots=27  contracts=2  storefronts=2  orders=5
+```
 
-Schema sinh ra **không có** CHECK constraint, trigger và 2 view của DB thật. Vì
-vậy chỉ dùng DB này để phát triển local, và chạy thêm một lượt trên DB thật của
-nhóm trước khi nộp.
+> ⚠️ `-Recreate` **xoá toàn bộ dữ liệu** của StreetBizDB rồi dựng lại. Không có
+> `-Recreate`, script từ chối đụng vào một database đã có bảng. Sao lưu trước nếu
+> cần:
+> `sqlcmd -S "(localdb)\MSSQLLocalDB" -E -Q "BACKUP DATABASE [StreetBizDB] TO DISK='C:\Temp\StreetBizDB.bak' WITH INIT"`
+
+> Hãy **tắt API** trước khi chạy: một kết nối đang mở sẽ chặn `DROP DATABASE`.
+
+Khác với trước đây, schema này có **đầy đủ** 5 trigger, 2 view và 77 CHECK
+constraint của DB thật — nên DB local giờ từ chối đúng những dữ liệu mà DB thật
+từ chối (ví dụ hai hợp đồng trùng ngày trên cùng một ô, hoặc `unit_type` ngoài
+PROVINCE/DISTRICT/WARD). Các script seed chạy theo thứ tự:
+
+| Thứ tự | File | Nội dung |
+|---|---|---|
+| 1 | `db/StreetBiz_SQL_Server.sql` | Schema: 49 bảng, 5 trigger, 2 view, CHECK constraint |
+| 2 | `db/StreetBiz_SQL_Server_Data.sql` | 4 vai trò, 10 đơn vị hành chính (5 phường), 10 loại vi phạm |
+| 3 | `docs/dev-seed-demo.sql` | 10 tài khoản, 9 hồ sơ đăng ký đủ 7 trạng thái, ô vỉa hè, hợp đồng, gian hàng, đơn hàng |
+| 4 | `db/post-schema-migrations.sql` | Cột `Orders.storefront_address_snapshot` + đóng dấu `__EFMigrationsHistory` |
+
+Tài khoản đăng nhập: xem [dev-test-accounts.md](dev-test-accounts.md) — tất cả
+dùng mật khẩu `Password123!`.
 
 ### 1.2 Cấu hình frontend
 
@@ -247,9 +266,16 @@ phường mình:
 | 0983000002 | Phường Thanh Khê Đông (ward 11) |
 | 0983000003 | Phường An Hải Bắc (ward 12) |
 
-Vào **Phường → Hộ sơ xét duyệt** (tab **Hồ sơ đăng ký**), mở một hồ sơ rồi bấm
-một trong các nút: **Nhận xét duyệt** (chuyển sang ĐANG XÉT DUYỆT), **Phê duyệt**,
-**Từ chối**, **Yêu cầu bổ sung**. Mọi quyết định đều bắt buộc nhập lý do.
+Vào tab **Hộp duyệt** (`/ward/inbox`) → tab **Hồ sơ đăng ký**, mở một hồ sơ rồi
+bấm một trong các nút: **Nhận xét duyệt** (chuyển sang ĐANG XÉT DUYỆT),
+**Phê duyệt**, **Từ chối**, **Yêu cầu bổ sung**. Mọi quyết định đều bắt buộc
+nhập lý do.
+
+> Chỉ cần đăng nhập bằng tài khoản cán bộ phường là dùng được ngay. Trước đây màn
+> này bắt dán access token vào một form riêng (màn "Kết nối cán bộ phường"); form
+> đó đã bị bỏ — hàng đợi hồ sơ nay dùng chung phiên đăng nhập của ứng dụng.
+> Nếu tài khoản chưa được gán phường, màn hình báo "Tài khoản chưa được gán
+> phường" thay vì lỗi chung chung.
 
 | # | Thao tác | Kết quả mong đợi |
 |---|---|---|
@@ -267,7 +293,7 @@ Kiểm tra phía vendor (F5 trang chi tiết sau mỗi lần xét duyệt):
 | `MORE_INFORMATION_REQUIRED` | Nhãn **CẦN BỔ SUNG**, thẻ đỏ **Phản hồi từ Phường** hiện lý do; có **Chỉnh sửa** và **Rút hồ sơ**. Sửa + tải thêm ảnh → gửi lại → nhãn về **ĐÃ NỘP**, ảnh mới xuất hiện trong mục giấy tờ |
 | `MORE_INFORMATION_REQUIRED` khi đang có **hồ sơ khác** ở trạng thái SUBMITTED | Gửi lại bị chặn: "Bạn đang có một hồ sơ chờ xét duyệt…" (BR-09) |
 | `UNDER_REVIEW` | Nhãn **ĐANG XÉT**; không có Chỉnh sửa, vẫn có **Rút hồ sơ** |
-| `APPROVED` (Cửa hàng cố định) | Nhãn **ĐÃ DUYỆT**, ngày xét duyệt; mục **Tiếp theo** có nút thuê ô liền kề / cập nhật địa chỉ (hai màn này vẫn là mock); không có Chỉnh sửa, vẫn có **Rút hồ sơ** (BE chặn nếu đã có hợp đồng thuê, BR-16) |
+| `APPROVED` (Cửa hàng cố định) | Nhãn **ĐÃ DUYỆT**, ngày xét duyệt; không có Chỉnh sửa, vẫn có **Rút hồ sơ** (BE chặn nếu đã có hợp đồng thuê, BR-16). Mục **Tiếp theo** (thuê ô liền kề / cập nhật địa chỉ) **bị ẩn khi chạy với Backend** — hai màn đó chưa có API client, nên ẩn thay vì dẫn tới ngõ cụt |
 | `REJECTED` | Nhãn **TỪ CHỐI**, hiện lý do; không có nút thao tác |
 
 ---
