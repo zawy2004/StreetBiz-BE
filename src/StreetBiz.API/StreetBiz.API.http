@@ -176,13 +176,36 @@ Authorization: Bearer {{token}}
 GET {{host}}/api/sidewalk-slots/{{slotId}}
 Authorization: Bearer {{token}}
 
-### SIDE-03B Nộp đơn thuê ô trống (chọn thủ công)
+### Thông tin một tuyến: quyết định, đoạn, hạn nộp, liên hệ Phường, bảng phí, hạng mục kỹ thuật
+GET {{host}}/api/sidewalk-zones/1002
+Authorization: Bearer {{token}}
+
+### Báo giá dự kiến thuê ô trong N ngày (chỉ để tham khảo, không lưu)
+GET {{host}}/api/sidewalk-slots/{{slotId}}/quote?termDays=90
+Authorization: Bearer {{token}}
+
+### Giữ ô 15 phút (giữ lại đúng ô đó = gia hạn; tối đa 3 ô mỗi hồ sơ)
+POST {{host}}/api/vendor/slot-holds
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{ "registrationId": {{registrationId}}, "slotId": {{slotId}} }
+
+### Các ô đang giữ còn hạn của hồ sơ
+GET {{host}}/api/vendor/slot-holds?registrationId={{registrationId}}
+Authorization: Bearer {{token}}
+
+### Nhả ô đang giữ
+DELETE {{host}}/api/vendor/slot-holds/{{slotId}}?registrationId={{registrationId}}
+Authorization: Bearer {{token}}
+
+### SIDE-03B Nộp đơn thuê ô trống (chọn thủ công; phải chấp nhận cam kết, nộp xong tự nhả hold của mình)
 # @name submitOpenSlot
 POST {{host}}/api/vendor/rental-applications/open-slot
 Authorization: Bearer {{token}}
 Content-Type: application/json
 
-{ "registrationId": {{registrationId}}, "slotId": {{slotId}}, "requestedTermDays": 90 }
+{ "registrationId": {{registrationId}}, "slotId": {{slotId}}, "requestedTermDays": 90, "commitmentsAccepted": true }
 
 ###
 @applicationId = {{submitOpenSlot.response.body.data.applicationId}}
@@ -313,3 +336,29 @@ Authorization: Bearer {{receiverToken}}
 ### SIDE-13 Từ chối chuyển nhượng (dùng thay cho accept ở trên nếu muốn test nhánh từ chối)
 POST {{host}}/api/vendor/slot-transfers/{{transferId}}/decline
 Authorization: Bearer {{receiverToken}}
+
+### ---------------------------------------------------------------------------
+### Customer discovery (DISC-01..06) -- public, no token. Needs docs/dev-seed-discovery.sql.
+### latitude/longitude are the customer's detected position (DISC-01); all filters are optional.
+### ---------------------------------------------------------------------------
+
+### DISC-02 Khu vực có quán đang mở bán (gần nhất trước nếu có vị trí)
+GET {{host}}/api/marketplace/service-areas?latitude=16.0605&longitude=108.2145
+
+### DISC-05 Danh mục món để lọc
+GET {{host}}/api/marketplace/categories
+
+### DISC-03 Quán đang mở bán, gần nhất trước (sort = distance | rating | name)
+GET {{host}}/api/marketplace/storefronts?latitude=16.0605&longitude=108.2145&sort=distance
+
+### DISC-03/05 Lọc theo phường, danh mục, đang mở cửa, bán kính
+GET {{host}}/api/marketplace/storefronts?wardId=1003&categoryId=1&openNow=true&latitude=16.0605&longitude=108.2145&radiusMeters=2000
+
+### DISC-04 Tìm quán (gõ không dấu vẫn ra: "bun" -> "Bún chả")
+GET {{host}}/api/marketplace/storefronts?query=bun
+
+### DISC-06 Chi tiết quán: giờ cả tuần + thực đơn theo danh mục
+GET {{host}}/api/marketplace/storefronts/1?latitude=16.0605&longitude=108.2145
+
+### DISC-04/05 Tìm món, lọc theo phường/danh mục/giá/đang mở, sắp theo giá (name | price_asc | price_desc)
+GET {{host}}/api/marketplace/menu-items?query=xoi&maxPrice=30000&openNow=true&sort=price_asc

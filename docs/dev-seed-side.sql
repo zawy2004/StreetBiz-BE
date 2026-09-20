@@ -23,10 +23,17 @@ SET ANSI_NULLS ON;
 -- 0) Pilot area: Đường Nguyễn Văn Linh, phường Nam Dương, quận Hải Châu.
 --    StreetBiz_SQL_Server_Data.sql's own 7 slots are only approximately
 --    placed inside Hoà Quý city blocks, not on any real street; these 20 sit
---    on the actual Nguyễn Văn Linh road centerline (anchored on the original
---    6 geocoded points, walked along their fitted axis at a 4 m pitch) so the
---    map -- and the street-strip diagram in particular -- has one deliberately
---    accurate, contiguous area instead of scattered points 40 m apart.
+--    on the actual Nguyễn Văn Linh road centerline -- NVL-01..10 walk the
+--    original 6 geocoded points' fitted axis at a 15 m pitch, and NVL-11..20
+--    mirror them 38 m across to the far side of the road (confirmed against
+--    OpenStreetMap: this is a divided one-way primary road -- near carriageway
+--    ~14 m away, far carriageway ~20 m, building line beyond that -- so a
+--    small offset would still land both rows on the same near side; a 4 m
+--    pitch also made the 38 m offset wider than the along-street length,
+--    which street-geometry.ts's straightness check rejects as "not a street"
+--    -- 15 m keeps the segment properly elongated). NVL-1x faces NVL-0x
+--    directly across the roadway, matching the street-strip
+--    diagram's two-sided rendering to what's actually across the street.
 IF NOT EXISTS (SELECT 1 FROM AdministrativeUnits WHERE unit_type = 'DISTRICT' AND unit_name = N'Quận Hải Châu')
 BEGIN
     INSERT INTO AdministrativeUnits (unit_type, unit_name, parent_unit_id)
@@ -57,11 +64,11 @@ DECLARE @nvlZoneId INT = (SELECT zone_id FROM PricingZones WHERE zone_name = N'�
 
 IF @nvlZoneId IS NOT NULL
 BEGIN
-    -- Reposition the original six onto the same 4 m lattice as the rest: their
-    -- geocoded positions were ~40 m apart, which draws as an almost empty
-    -- strip on the street-strip diagram. UPDATE rather than DELETE + re-INSERT
-    -- -- slot_id is an FK target for RentalApplications/RentalContracts, so a
-    -- vendor who already applied for one of these slots would break the script.
+    -- Reposition all 20 -- NVL-01..10 keep the original fitted-axis lattice,
+    -- NVL-11..20 move to the real far side of the road. UPDATE rather than
+    -- DELETE + re-INSERT -- slot_id is an FK target for
+    -- RentalApplications/RentalContracts, so a vendor who already applied for
+    -- (or holds a contract on) one of these slots would break the script.
     -- Geometry only, never slot_status: re-running must not erase a status a
     -- developer set by using the app.
     UPDATE s
@@ -69,39 +76,128 @@ BEGIN
         width_meters = v.width_meters, length_meters = v.length_meters
     FROM SidewalkSlots s
     JOIN (VALUES
-        ('NVL-01', 16.060523, 108.214228, 1.80, 2.50),
-        ('NVL-02', 16.060530, 108.214265, 2.00, 3.00),
-        ('NVL-03', 16.060537, 108.214301, 2.50, 3.20),
-        ('NVL-04', 16.060544, 108.214338, 2.00, 4.00),
-        ('NVL-05', 16.060551, 108.214375, 1.80, 2.50),
-        ('NVL-06', 16.060558, 108.214412, 2.00, 3.00)
+        ('NVL-01', 16.060429, 108.213724, 1.80, 2.50),
+        ('NVL-02', 16.060455, 108.213861, 2.00, 3.00),
+        ('NVL-03', 16.060480, 108.213999, 2.50, 3.20),
+        ('NVL-04', 16.060506, 108.214137, 2.00, 4.00),
+        ('NVL-05', 16.060532, 108.214274, 1.80, 2.50),
+        ('NVL-06', 16.060558, 108.214412, 2.00, 3.00),
+        ('NVL-07', 16.060584, 108.214550, 2.50, 3.20),
+        ('NVL-08', 16.060610, 108.214687, 2.00, 4.00),
+        ('NVL-09', 16.060636, 108.214825, 1.80, 2.50),
+        ('NVL-10', 16.060661, 108.214963, 2.00, 3.00),
+        -- 38 m across the road from the matching NVL-0x above (see block comment).
+        ('NVL-11', 16.060091, 108.213791, 2.50, 3.20),
+        ('NVL-12', 16.060117, 108.213929, 2.00, 4.00),
+        ('NVL-13', 16.060143, 108.214067, 1.80, 2.50),
+        ('NVL-14', 16.060169, 108.214204, 2.00, 3.00),
+        ('NVL-15', 16.060195, 108.214342, 2.50, 3.20),
+        ('NVL-16', 16.060221, 108.214480, 2.00, 4.00),
+        ('NVL-17', 16.060246, 108.214617, 1.80, 2.50),
+        ('NVL-18', 16.060272, 108.214755, NULL,  NULL),
+        ('NVL-19', 16.060298, 108.214893, 2.50, 3.20),
+        ('NVL-20', 16.060324, 108.215030, 2.00, 4.00)
     ) AS v(slot_code, latitude, longitude, width_meters, length_meters)
       ON s.slot_code = v.slot_code
     WHERE s.source = 'WARD_DEFINED';  -- never touch a vendor proposal
 
-    -- The remaining fourteen extend the same lattice; a few carry non-default
-    -- statuses (set here, at INSERT time, so a re-run leaves them alone too)
-    -- so the diagram has taken/pending/suspended slots to draw, and NVL-18
-    -- deliberately has no recorded size to exercise the "chưa đo" rendering.
+    -- Same 20 rows, for a schema-only database that has none of them yet. A
+    -- few carry non-default statuses (set here, at INSERT time, so a re-run
+    -- leaves them alone too) so the diagram has taken/pending/suspended slots
+    -- to draw, and NVL-18 deliberately has no recorded size to exercise the
+    -- "chưa đo" rendering.
     INSERT INTO SidewalkSlots (slot_code, zone_id, latitude, longitude, width_meters, length_meters, slot_status, source)
     SELECT v.slot_code, @nvlZoneId, v.latitude, v.longitude, v.width_meters, v.length_meters, v.slot_status, 'WARD_DEFINED'
     FROM (VALUES
-        ('NVL-07', 16.060564, 108.214448, 2.50,  3.20, 'AVAILABLE'),
-        ('NVL-08', 16.060571, 108.214485, 2.00,  4.00, 'AVAILABLE'),
-        ('NVL-09', 16.060578, 108.214522, 1.80,  2.50, 'ACTIVE'),
-        ('NVL-10', 16.060585, 108.214558, 2.00,  3.00, 'AVAILABLE'),
-        ('NVL-11', 16.060592, 108.214595, 2.50,  3.20, 'AVAILABLE'),
-        ('NVL-12', 16.060599, 108.214632, 2.00,  4.00, 'PENDING_APPLICATION'),
-        ('NVL-13', 16.060606, 108.214668, 1.80,  2.50, 'ACTIVE'),
-        ('NVL-14', 16.060613, 108.214705, 2.00,  3.00, 'AVAILABLE'),
-        ('NVL-15', 16.060620, 108.214742, 2.50,  3.20, 'AVAILABLE'),
-        ('NVL-16', 16.060627, 108.214779, 2.00,  4.00, 'SUSPENDED'),
-        ('NVL-17', 16.060633, 108.214815, 1.80,  2.50, 'AVAILABLE'),
-        ('NVL-18', 16.060640, 108.214852, NULL,  NULL, 'AVAILABLE'),
-        ('NVL-19', 16.060647, 108.214889, 2.50,  3.20, 'AVAILABLE'),
-        ('NVL-20', 16.060654, 108.214925, 2.00,  4.00, 'AVAILABLE')
+        ('NVL-01', 16.060429, 108.213724, 1.80,  2.50, 'AVAILABLE'),
+        ('NVL-02', 16.060455, 108.213861, 2.00,  3.00, 'AVAILABLE'),
+        ('NVL-03', 16.060480, 108.213999, 2.50,  3.20, 'AVAILABLE'),
+        ('NVL-04', 16.060506, 108.214137, 2.00,  4.00, 'AVAILABLE'),
+        ('NVL-05', 16.060532, 108.214274, 1.80,  2.50, 'AVAILABLE'),
+        ('NVL-06', 16.060558, 108.214412, 2.00,  3.00, 'AVAILABLE'),
+        ('NVL-07', 16.060584, 108.214550, 2.50,  3.20, 'AVAILABLE'),
+        ('NVL-08', 16.060610, 108.214687, 2.00,  4.00, 'AVAILABLE'),
+        ('NVL-09', 16.060636, 108.214825, 1.80,  2.50, 'ACTIVE'),
+        ('NVL-10', 16.060661, 108.214963, 2.00,  3.00, 'AVAILABLE'),
+        ('NVL-11', 16.060091, 108.213791, 2.50,  3.20, 'AVAILABLE'),
+        ('NVL-12', 16.060117, 108.213929, 2.00,  4.00, 'PENDING_APPLICATION'),
+        ('NVL-13', 16.060143, 108.214067, 1.80,  2.50, 'ACTIVE'),
+        ('NVL-14', 16.060169, 108.214204, 2.00,  3.00, 'AVAILABLE'),
+        ('NVL-15', 16.060195, 108.214342, 2.50,  3.20, 'AVAILABLE'),
+        ('NVL-16', 16.060221, 108.214480, 2.00,  4.00, 'SUSPENDED'),
+        ('NVL-17', 16.060246, 108.214617, 1.80,  2.50, 'AVAILABLE'),
+        ('NVL-18', 16.060272, 108.214755, NULL,  NULL, 'AVAILABLE'),
+        ('NVL-19', 16.060298, 108.214893, 2.50,  3.20, 'AVAILABLE'),
+        ('NVL-20', 16.060324, 108.215030, 2.00,  4.00, 'AVAILABLE')
     ) AS v(slot_code, latitude, longitude, width_meters, length_meters, slot_status)
     WHERE NOT EXISTS (SELECT 1 FROM SidewalkSlots s WHERE s.slot_code = v.slot_code);
+END;
+
+-- 0b) Slot workspace data for the Nguyễn Văn Linh zone (needs
+--     docs/slot-workspace-schema.sql applied first): zone info, ward contact,
+--     fee table, per-slot amenities/category and street features. All values
+--     are placeholders for local development, not real legal references.
+--     Only fills what is empty or is pure descriptive data, never a status.
+IF @nvlZoneId IS NOT NULL
+BEGIN
+    UPDATE PricingZones
+    SET zone_code = COALESCE(zone_code, N'KZ-NVL'),
+        regulation_ref = COALESCE(regulation_ref, N'QĐ-DEV-2026'),
+        segment_from = COALESCE(segment_from, N'Đầu tuyến'),
+        segment_to = COALESCE(segment_to, N'Cuối tuyến'),
+        application_deadline = COALESCE(application_deadline, DATEADD(DAY, 30, CAST(SYSUTCDATETIME() AS DATE)))
+    WHERE zone_id = @nvlZoneId;
+
+    UPDATE AdministrativeUnits
+    SET contact_name = COALESCE(contact_name, N'Tổ Quản lý Trật tự Đô thị'),
+        contact_phone = COALESCE(contact_phone, N'0236 000 0000')
+    WHERE unit_id = @namDuongWardId;
+
+    -- PER_DAY lines are multiplied by the term, PER_TERM lines are charged once.
+    INSERT INTO ZoneFeeComponents (zone_id, component_name, calc_basis, unit_amount, sort_order)
+    SELECT @nvlZoneId, v.component_name, v.calc_basis, v.unit_amount, v.sort_order
+    FROM (VALUES
+        (N'Phí vệ sinh môi trường', 'PER_DAY',  3000, 1),
+        (N'Phí quản lý và an ninh', 'PER_TERM', 150000, 2),
+        (N'Tiền đặt cọc',           'PER_TERM', 500000, 3)
+    ) AS v(component_name, calc_basis, unit_amount, sort_order)
+    WHERE NOT EXISTS (
+        SELECT 1 FROM ZoneFeeComponents c WHERE c.zone_id = @nvlZoneId AND c.component_name = v.component_name);
+
+    UPDATE s
+    SET has_power = v.has_power, has_water = v.has_water, has_trash_bin = v.has_trash_bin,
+        business_category = v.business_category
+    FROM SidewalkSlots s
+    JOIN (VALUES
+        ('NVL-01', 1, 0, 1, 'FOOD_BEVERAGE'), ('NVL-02', 1, 0, 1, 'FOOD_BEVERAGE'),
+        ('NVL-03', 1, 0, 0, 'RETAIL'),        ('NVL-04', 0, 0, 1, 'RETAIL'),
+        ('NVL-05', 0, 0, 0, 'SERVICES'),      ('NVL-06', 1, 1, 1, 'GENERAL'),
+        ('NVL-07', 0, 0, 1, 'CRAFTS'),        ('NVL-08', 1, 0, 0, 'GENERAL'),
+        ('NVL-09', 1, 1, 1, 'FOOD_BEVERAGE'), ('NVL-10', 0, 0, 0, 'RETAIL'),
+        ('NVL-11', 1, 1, 0, 'FOOD_BEVERAGE'), ('NVL-12', 1, 0, 1, 'SERVICES'),
+        ('NVL-13', 0, 0, 1, 'RETAIL'),        ('NVL-14', 1, 0, 0, 'GENERAL'),
+        ('NVL-15', 0, 0, 0, 'CRAFTS'),        ('NVL-16', 0, 0, 0, 'SERVICES'),
+        ('NVL-17', 1, 1, 1, 'FOOD_BEVERAGE'), ('NVL-18', 0, 0, 0, NULL),
+        ('NVL-19', 1, 0, 1, 'RETAIL'),        ('NVL-20', 0, 0, 1, 'GENERAL')
+    ) AS v(slot_code, has_power, has_water, has_trash_bin, business_category)
+      ON s.slot_code = v.slot_code
+    WHERE s.source = 'WARD_DEFINED';
+
+    -- Placed between neighbouring slots of the two rows so the corridor plan
+    -- shows them in line with the slots. blocks_business = 1 means no slot can
+    -- operate there.
+    INSERT INTO StreetFeatures (zone_id, feature_type, label, latitude, longitude, blocks_business, note)
+    SELECT @nvlZoneId, v.feature_type, v.label, v.latitude, v.longitude, v.blocks_business, v.note
+    FROM (VALUES
+        ('TRANSFORMER', N'Trạm biến áp',  16.060493, 108.214068, 1, N'Hành lang an toàn lưới điện, không kinh doanh'),
+        ('TREE',        N'Cây xanh',      16.060597, 108.214619, 0, NULL),
+        ('BUS_STOP',    N'Trạm xe buýt',  16.060649, 108.214894, 1, N'Khu vực dừng đón khách'),
+        ('LIGHT_POLE',  N'Cột đèn',       16.060130, 108.213998, 0, NULL),
+        ('HYDRANT',     N'Họng cứu hỏa',  16.060208, 108.214411, 0, N'Giữ lối tiếp cận cho xe cứu hỏa'),
+        ('PARKING',     N'Bãi giữ xe',    16.060311, 108.214962, 0, NULL)
+    ) AS v(feature_type, label, latitude, longitude, blocks_business, note)
+    WHERE NOT EXISTS (
+        SELECT 1 FROM StreetFeatures f WHERE f.zone_id = @nvlZoneId AND f.label = v.label);
 END;
 
 -- 1) A ward-defined pricing zone (StreetBiz_SQL_Server_Data.sql already seeds

@@ -9,6 +9,26 @@ public static class SlotStatuses
     public const string Suspended = "SUSPENDED";
 }
 
+/// <summary>SidewalkSlots.business_category values (DB CHECK). Advisory, not enforced on applications.</summary>
+public static class BusinessCategories
+{
+    public const string FoodBeverage = "FOOD_BEVERAGE";
+    public const string Retail = "RETAIL";
+    public const string Services = "SERVICES";
+    public const string Crafts = "CRAFTS";
+    public const string General = "GENERAL";
+}
+
+/// <summary>ZoneFeeComponents.calc_basis values (DB CHECK).</summary>
+public static class FeeBases
+{
+    /// <summary>Multiplied by the term in days.</summary>
+    public const string PerDay = "PER_DAY";
+
+    /// <summary>Charged once per term.</summary>
+    public const string PerTerm = "PER_TERM";
+}
+
 /// <summary>SidewalkSlots.source values (DB CHECK).</summary>
 public static class SlotSources
 {
@@ -172,4 +192,11 @@ public static class SideMessages
     public const string TransferRequested = "Your slot transfer request has been submitted successfully.";
     public const string TransferAccepted = "You have accepted the slot transfer request.";
     public const string TransferDeclined = "You have declined the slot transfer request.";
+    public const string ZoneDetailNotFound = "Pricing zone not found.";
+    public const string SlotHeldByAnother = "This slot is being held by another vendor. Please try again later.";
+    public const string SlotHoldLimitReached = "You have reached the maximum number of held slots. Release one to hold another.";
+    public const string SlotHoldNotFound = "You have no active hold on this slot.";
+    public const string SlotHeld = "The slot is held for you.";
+    public const string SlotHoldReleased = "The slot hold has been released.";
+    public const string CommitmentsRequired = "You must accept the commitments before submitting an application.";
 }

@@ -1,6 +1,7 @@
 using System.Data;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
+using StreetBiz.Application.Common.Exceptions;
 using StreetBiz.Application.Common.Interfaces;
 using StreetBiz.Application.Common.Models;
 using StreetBiz.Application.Common.Security;
@@ -8,7 +9,7 @@ using StreetBiz.Infrastructure.Persistence.ScaffoldedModels;
 
 namespace StreetBiz.Infrastructure.Persistence.Repositories;
 
-public sealed class CommerceRepository(
+public sealed partial class CommerceRepository(
     StreetBizDbContext db,
     TimeProvider clock) : ICommerceRepository
 {
@@ -27,23 +28,58 @@ public sealed class CommerceRepository(
     private const string RefundOrderRejected = "ORDER_REJECTED";
 
     private DateTime Now => clock.GetUtcNow().UtcDateTime;
+    private DateOnly Today => DateOnly.FromDateTime(TimeZoneInfo.ConvertTimeFromUtc(Now, BusinessTimeZone));
+
+    private IQueryable<Storefront> EligibleStores() => db.Storefronts.Where(store =>
+        store.availability_status == StorefrontOpen && store.registration.registration_status == "APPROVED"
+        && store.contract.contract_status == "ACTIVE" && store.contract.start_date <= Today && store.contract.end_date >= Today
+        && store.contract.vendor_id == store.registration.vendor_id
+        && store.contract.application.registration_id == store.registration_id);
 
     public async Task<IReadOnlyList<MarketplaceMenuItemRow>> SearchMenuItemsAsync(
-        string? query,
+        MarketplaceMenuFilter filter,
         int take,
         CancellationToken cancellationToken)
     {
         var items = MarketplaceMenuQuery();
-        if (query is not null)
+        if (filter.Query is { } query)
         {
-            items = items.Where(item => item.item_name.Contains(query)
-                || item.storefront.storefront_name.Contains(query)
-                || item.category.category_name.Contains(query));
+            var collation = TextCollation;
+            items = items.Where(item => EF.Functions.Collate(item.item_name, collation).Contains(query)
+                || EF.Functions.Collate(item.storefront.storefront_name, collation).Contains(query)
+                || EF.Functions.Collate(item.category.category_name, collation).Contains(query));
         }
 
-        return await ProjectMarketplaceMenuItems(items
-            .OrderBy(item => item.storefront.storefront_name)
+        if (filter.CategoryId is { } categoryId)
+        {
+            items = items.Where(item => item.category_id == categoryId);
+        }
+
+        if (filter.MinPrice is { } minPrice)
+        {
+            items = items.Where(item => item.unit_price >= minPrice);
+        }
+
+        if (filter.MaxPrice is { } maxPrice)
+        {
+            items = items.Where(item => item.unit_price <= maxPrice);
+        }
+
+        if (filter.WardId.HasValue || filter.OpenAt is not null)
+        {
+            var storefronts = StorefrontsWhere(filter.WardId, filter.OpenAt).Select(s => s.storefront_id);
+            items = items.Where(item => storefronts.Contains(item.storefront_id));
+        }
+
+        var ordered = filter.Sort switch
+        {
+            MarketplaceMenuSorts.PriceAsc => items.OrderBy(item => item.unit_price),
+            MarketplaceMenuSorts.PriceDesc => items.OrderByDescending(item => item.unit_price),
+            _ => items.OrderBy(item => item.storefront.storefront_name),
+        };
+        return await ProjectMarketplaceMenuItems(ordered
             .ThenBy(item => item.item_name)
+            .ThenBy(item => item.menu_item_id)
             .Take(take)
         ).ToListAsync(cancellationToken);
     }
@@ -102,9 +138,14 @@ public sealed class CommerceRepository(
                 return (CartMutationOutcome.MenuItemUnavailable, (long?)null);
             }
 
-            if (menuItem.StorefrontStatus != StorefrontOpen)
+            if (menuItem.StorefrontStatus != StorefrontOpen || !await EligibleStores().AnyAsync(x => x.storefront_id == menuItem.storefront_id, cancellationToken))
             {
                 return (CartMutationOutcome.StorefrontUnavailable, (long?)null);
+            }
+
+            if (await HasPendingCheckoutAsync(customerUserId, cancellationToken))
+            {
+                return (CartMutationOutcome.Conflict, (long?)null);
             }
 
             var otherCarts = await db.ShoppingCarts
@@ -188,6 +229,11 @@ public sealed class CommerceRepository(
             return new CartMutationResult(CartMutationOutcome.NotFound, null);
         }
 
+        if (await HasPendingCheckoutAsync(customerUserId, cancellationToken))
+        {
+            return new CartMutationResult(CartMutationOutcome.Conflict, null);
+        }
+
         item.quantity = quantity;
         item.note = note;
         await db.SaveChangesAsync(cancellationToken);
@@ -218,6 +264,11 @@ public sealed class CommerceRepository(
                 return (CartMutationOutcome.NotFound, (long?)null);
             }
 
+            if (await HasPendingCheckoutAsync(customerUserId, cancellationToken))
+            {
+                return (CartMutationOutcome.Conflict, (long?)null);
+            }
+
             var cartId = item.cart_id;
             db.ShoppingCartItems.Remove(item);
             await db.SaveChangesAsync(cancellationToken);
@@ -243,6 +294,12 @@ public sealed class CommerceRepository(
 
     public async Task ClearCartAsync(long customerUserId, CancellationToken cancellationToken)
     {
+        if (await HasPendingCheckoutAsync(customerUserId, cancellationToken))
+        {
+            throw new ConflictException(
+                "The cart is locked while its order is awaiting payment.");
+        }
+
         var carts = await db.ShoppingCarts
             .Where(cart => cart.customer_user_id == customerUserId
                 && cart.cart_status == CartStatuses.Active)
@@ -259,6 +316,24 @@ public sealed class CommerceRepository(
         long customerUserId,
         string provider,
         string idempotencyKey,
+        CancellationToken cancellationToken) =>
+        await CreatePrepaidOrderAsync(
+            customerUserId, null, provider, idempotencyKey, cancellationToken);
+
+    public async Task<OrderMutationResult> CheckoutAsync(
+        long customerUserId,
+        long cartId,
+        string provider,
+        string idempotencyKey,
+        CancellationToken cancellationToken) =>
+        await CreatePrepaidOrderAsync(
+            customerUserId, cartId, provider, idempotencyKey, cancellationToken);
+
+    private async Task<OrderMutationResult> CreatePrepaidOrderAsync(
+        long customerUserId,
+        long? requestedCartId,
+        string provider,
+        string idempotencyKey,
         CancellationToken cancellationToken)
     {
         var strategy = db.Database.CreateExecutionStrategy();
@@ -272,14 +347,27 @@ public sealed class CommerceRepository(
                 .Select(payment => new
                 {
                     payment.order_id,
+                    payment.provider,
                     CustomerUserId = payment.order != null
                         ? payment.order.customer_user_id
+                        : (long?)null,
+                    StorefrontId = payment.order != null
+                        ? payment.order.storefront_id
                         : (long?)null,
                 })
                 .SingleOrDefaultAsync(cancellationToken);
             if (existing is not null)
             {
-                if (existing.order_id.HasValue && existing.CustomerUserId == customerUserId)
+                var sameCart = !requestedCartId.HasValue
+                    || await db.ShoppingCarts.AnyAsync(cart =>
+                        cart.cart_id == requestedCartId.Value
+                        && cart.customer_user_id == customerUserId
+                        && cart.storefront_id == existing.StorefrontId,
+                        cancellationToken);
+                if (existing.order_id.HasValue
+                    && existing.CustomerUserId == customerUserId
+                    && existing.provider == provider
+                    && sameCart)
                 {
                     return (OrderMutationOutcome.Updated, existing.order_id);
                 }
@@ -289,10 +377,12 @@ public sealed class CommerceRepository(
 
             var cart = await db.ShoppingCarts
                 .Include(row => row.storefront)
+                    .ThenInclude(storefront => storefront.registration)
                 .Include(row => row.ShoppingCartItems)
                     .ThenInclude(row => row.menu_item)
                 .Where(row => row.customer_user_id == customerUserId
-                    && row.cart_status == CartStatuses.Active)
+                    && row.cart_status == CartStatuses.Active
+                    && (!requestedCartId.HasValue || row.cart_id == requestedCartId.Value))
                 .OrderByDescending(row => row.created_at)
                 .ThenByDescending(row => row.cart_id)
                 .FirstOrDefaultAsync(cancellationToken);
@@ -301,7 +391,7 @@ public sealed class CommerceRepository(
                 return (OrderMutationOutcome.EmptyCart, (long?)null);
             }
 
-            if (cart.storefront.availability_status != StorefrontOpen)
+            if (!await EligibleStores().AnyAsync(x => x.storefront_id == cart.storefront_id, cancellationToken))
             {
                 return (OrderMutationOutcome.StorefrontUnavailable, (long?)null);
             }
@@ -321,6 +411,7 @@ public sealed class CommerceRepository(
                 order_code = $"SB-{now:yyyyMMdd}-{Guid.NewGuid():N}"[..30],
                 customer_user_id = customerUserId,
                 storefront_id = cart.storefront_id,
+                storefront_address_snapshot = cart.storefront.registration.declared_address,
                 order_status = OrderStatuses.PendingPayment,
                 subtotal_amount = subtotal,
                 total_amount = subtotal,
@@ -354,7 +445,6 @@ public sealed class CommerceRepository(
                 transaction_status = PaymentPending,
                 created_at = now,
             });
-            cart.cart_status = CartStatuses.CheckedOut;
             db.Orders.Add(order);
             await db.SaveChangesAsync(cancellationToken);
             Audit(customerUserId, "ORD_PREPAID_CREATE", "Order", order.order_id,
@@ -365,6 +455,153 @@ public sealed class CommerceRepository(
         });
 
         return await BuildOrderResultAsync(result, cancellationToken);
+    }
+
+    public async Task SetPaymentProviderReferenceAsync(
+        long transactionId,
+        string providerReference,
+        CancellationToken cancellationToken)
+    {
+        var payment = await db.PaymentTransactions.SingleAsync(
+            row => row.transaction_id == transactionId, cancellationToken);
+        if (payment.provider_reference is null)
+        {
+            payment.provider_reference = providerReference;
+            await db.SaveChangesAsync(cancellationToken);
+        }
+        else if (!string.Equals(
+                     payment.provider_reference,
+                     providerReference,
+                     StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                "The payment provider returned a different reference for the same idempotency key.");
+        }
+    }
+
+    public async Task<PaymentCallbackMutationResult> ApplyPaymentCallbackAsync(
+        PaymentCallbackData callback,
+        CancellationToken cancellationToken)
+    {
+        var strategy = db.Database.CreateExecutionStrategy();
+        return await strategy.ExecuteAsync(async () =>
+        {
+            db.ChangeTracker.Clear();
+            await using var transaction = await db.Database.BeginTransactionAsync(
+                IsolationLevel.Serializable, cancellationToken);
+
+            PaymentTransaction? payment = null;
+            if (!string.IsNullOrWhiteSpace(callback.ProviderReference))
+            {
+                payment = await db.PaymentTransactions
+                    .Include(row => row.order)
+                    .SingleOrDefaultAsync(row =>
+                        row.provider_reference == callback.ProviderReference,
+                        cancellationToken);
+            }
+
+            if (payment is null && !string.IsNullOrWhiteSpace(callback.IdempotencyKey))
+            {
+                payment = await db.PaymentTransactions
+                    .Include(row => row.order)
+                    .SingleOrDefaultAsync(row =>
+                        row.idempotency_key == callback.IdempotencyKey,
+                        cancellationToken);
+            }
+
+            var callbackEvent = new PaymentCallbackEvent
+            {
+                provider = callback.Provider,
+                provider_reference = callback.ProviderReference,
+                transaction_id = payment?.transaction_id,
+                raw_payload = callback.RawPayload,
+                signature_valid = callback.SignatureValid,
+                processing_result = "REJECTED",
+                received_at = Now,
+            };
+            db.PaymentCallbackEvents.Add(callbackEvent);
+
+            async Task<PaymentCallbackMutationResult> Finish(
+                PaymentCallbackOutcome outcome,
+                string databaseResult)
+            {
+                callbackEvent.processing_result = databaseResult;
+                await db.SaveChangesAsync(cancellationToken);
+                await transaction.CommitAsync(cancellationToken);
+                return new PaymentCallbackMutationResult(
+                    outcome,
+                    callbackEvent.callback_event_id,
+                    payment?.transaction_id,
+                    payment?.order_id,
+                    payment?.order?.order_status);
+            }
+
+            if (!callback.SignatureValid)
+            {
+                return await Finish(PaymentCallbackOutcome.Rejected, "REJECTED");
+            }
+
+            if (payment is null)
+            {
+                return await Finish(PaymentCallbackOutcome.Unmatched, "UNMATCHED");
+            }
+
+            var normalizedStatus = callback.Status?.Trim().ToUpperInvariant();
+            if (!string.Equals(payment.provider, callback.Provider, StringComparison.Ordinal)
+                || callback.Amount != payment.amount
+                || normalizedStatus is not (PaymentSuccess or PaymentFailed)
+                || payment.order is null)
+            {
+                return await Finish(PaymentCallbackOutcome.Rejected, "REJECTED");
+            }
+
+            if (payment.transaction_status is PaymentSuccess or PaymentFailed)
+            {
+                return await Finish(PaymentCallbackOutcome.Duplicate, "DUPLICATE");
+            }
+
+            var order = payment.order;
+            if (order.order_status != OrderStatuses.PendingPayment)
+            {
+                return await Finish(PaymentCallbackOutcome.Rejected, "REJECTED");
+            }
+
+            var now = Now;
+            payment.provider_reference ??= callback.ProviderReference;
+            payment.callback_received_at = now;
+            payment.transaction_status = normalizedStatus;
+            if (normalizedStatus == PaymentSuccess)
+            {
+                Transition(order, OrderStatuses.Placed, null, "Payment callback confirmed.", now);
+                order.placed_at = now;
+                var carts = await db.ShoppingCarts.Where(cart =>
+                    cart.customer_user_id == order.customer_user_id
+                    && cart.storefront_id == order.storefront_id
+                    && cart.cart_status == CartStatuses.Active).ToListAsync(cancellationToken);
+                foreach (var cart in carts)
+                {
+                    cart.cart_status = CartStatuses.CheckedOut;
+                }
+
+                var vendorUserId = await StorefrontVendorUserIdAsync(
+                    order.storefront_id, cancellationToken);
+                Notify(order.customer_user_id, "ORDER", "Thanh toán thành công",
+                    $"Đơn {order.order_code} đã được ghi nhận.", "ORDER", order.order_id);
+                Notify(vendorUserId, "ORDER", "Có đơn hàng mới",
+                    $"Đơn {order.order_code} đã thanh toán và đang chờ xác nhận.",
+                    "ORDER", order.order_id);
+            }
+            else
+            {
+                Transition(order, OrderStatuses.Cancelled, null, "Payment failed.", now);
+                order.completed_at = now;
+                Notify(order.customer_user_id, "ORDER", "Thanh toán thất bại",
+                    $"Đơn {order.order_code} đã bị huỷ; giỏ hàng vẫn còn hiệu lực.",
+                    "ORDER", order.order_id);
+            }
+
+            return await Finish(PaymentCallbackOutcome.Applied, "APPLIED");
+        });
     }
 
     public async Task<OrderMutationResult> ConfirmSandboxPaymentAsync(
@@ -397,28 +634,42 @@ public sealed class CommerceRepository(
             }
 
             if (payment.transaction_status == PaymentSuccess
-                && order.order_status == OrderStatuses.Placed)
+                && payment.provider_reference != null && payment.provider_reference.StartsWith("SANDBOX-"))
             {
                 await transaction.CommitAsync(cancellationToken);
                 return OrderMutationOutcome.Updated;
             }
 
-            if (payment.transaction_status != PaymentPending
+            if ((payment.transaction_status != PaymentPending && payment.transaction_status != PaymentFailed)
+                || (payment.provider_reference != null && !payment.provider_reference.StartsWith("SANDBOX-"))
                 || order.order_status != OrderStatuses.PendingPayment)
             {
                 return OrderMutationOutcome.Conflict;
             }
 
+            if (!await EligibleStores().AnyAsync(x => x.storefront_id == order.storefront_id, cancellationToken))
+                return OrderMutationOutcome.StorefrontUnavailable;
+
             var now = Now;
             payment.transaction_status = PaymentSuccess;
             payment.provider_reference = $"SANDBOX-{payment.provider}-{payment.transaction_id}";
             payment.callback_received_at = now;
-            Transition(order, OrderStatuses.Placed, customerUserId, "Sandbox payment confirmed.", now);
+            Transition(order, OrderStatuses.Placed, null, "Sandbox payment callback confirmed.", now);
             order.placed_at = now;
+            var carts = await db.ShoppingCarts.Where(cart =>
+                cart.customer_user_id == order.customer_user_id
+                && cart.storefront_id == order.storefront_id
+                && cart.cart_status == CartStatuses.Active).ToListAsync(cancellationToken);
+            foreach (var cart in carts)
+            {
+                cart.cart_status = CartStatuses.CheckedOut;
+            }
             var vendorUserId = await StorefrontVendorUserIdAsync(
                 order.storefront_id, cancellationToken);
+            Notify(order.customer_user_id, "ORDER", "Thanh toán thành công",
+                $"Đơn {order.order_code} đã được ghi nhận.", "ORDER", orderId);
             Notify(vendorUserId, "ORDER", "Có đơn hàng mới",
-                $"Đơn {order.order_code} đã thanh toán và đang chờ xác nhận.", "Order", orderId);
+                $"Đơn {order.order_code} đã thanh toán và đang chờ xác nhận.", "ORDER", orderId);
             Audit(customerUserId, "ORD_PAYMENT_SANDBOX_SUCCESS", "Order", orderId,
                 new { payment.transaction_id, payment.provider });
             await db.SaveChangesAsync(cancellationToken);
@@ -492,13 +743,22 @@ public sealed class CommerceRepository(
                 }
             }
 
+            var previousStatus = order.order_status;
             var now = Now;
             Transition(order, OrderStatuses.Cancelled, customerUserId, "Cancelled by customer.", now);
             order.completed_at = now;
-            var vendorUserId = await StorefrontVendorUserIdAsync(
-                order.storefront_id, cancellationToken);
-            Notify(vendorUserId, "ORDER", "Đơn hàng đã bị huỷ",
-                $"Khách hàng đã huỷ đơn {order.order_code}.", "Order", orderId);
+            Notify(order.customer_user_id, "ORDER", "Đơn hàng đã huỷ",
+                previousStatus == OrderStatuses.Placed
+                    ? $"Đơn {order.order_code} đã được huỷ; yêu cầu hoàn tiền đang được xử lý."
+                    : $"Đơn {order.order_code} đã được huỷ.",
+                "ORDER", orderId);
+            if (previousStatus == OrderStatuses.Placed)
+            {
+                var vendorUserId = await StorefrontVendorUserIdAsync(
+                    order.storefront_id, cancellationToken);
+                Notify(vendorUserId, "ORDER", "Đơn hàng đã bị huỷ",
+                    $"Khách hàng đã huỷ đơn {order.order_code}.", "ORDER", orderId);
+            }
             Audit(customerUserId, "ORD_CANCEL", "Order", orderId, new { expectedStatus });
             await db.SaveChangesAsync(cancellationToken);
             await transaction.CommitAsync(cancellationToken);
@@ -525,7 +785,9 @@ public sealed class CommerceRepository(
     {
         var query = db.Orders.AsNoTracking()
             .Where(order => order.storefront.registration.vendor_id == vendorId
-                && order.order_status != OrderStatuses.PendingPayment);
+                && order.order_status != OrderStatuses.PendingPayment
+                && order.OrderStatusHistories.Any(history =>
+                    history.to_status == OrderStatuses.Placed));
         if (status is not null)
         {
             query = query.Where(order => order.order_status == status);
@@ -541,7 +803,9 @@ public sealed class CommerceRepository(
         (await BuildOrdersAsync(
             db.Orders.AsNoTracking().Where(order => order.order_id == orderId
                 && order.storefront.registration.vendor_id == vendorId
-                && order.order_status != OrderStatuses.PendingPayment),
+                && order.order_status != OrderStatuses.PendingPayment
+                && order.OrderStatusHistories.Any(history =>
+                    history.to_status == OrderStatuses.Placed)),
             cancellationToken)).SingleOrDefault();
 
     public async Task<OrderMutationResult> DecideSellerOrderAsync(
@@ -591,7 +855,7 @@ public sealed class CommerceRepository(
                 decision == SellerOrderDecisions.Reject
                     ? $"Đơn {order.order_code} bị từ chối; yêu cầu hoàn tiền đang được xử lý."
                     : $"Đơn {order.order_code} đã được người bán nhận.",
-                "Order", orderId);
+                "ORDER", orderId);
             Audit(actorUserId, $"SORD_{decision}", "Order", orderId,
                 new { expectedStatus, reason });
             await db.SaveChangesAsync(cancellationToken);
@@ -683,9 +947,13 @@ public sealed class CommerceRepository(
 
     private IQueryable<MenuItem> MarketplaceMenuQuery() =>
         db.MenuItems.AsNoTracking()
-            .Where(item => item.storefront.availability_status == StorefrontOpen
+            .Where(item => EligibleStores().Select(store => store.storefront_id).Contains(item.storefront_id)
                 && (item.availability_status == MenuAvailable
                     || item.availability_status == MenuSoldOut));
+        PublicStorefronts()
+            .SelectMany(storefront => storefront.MenuItems)
+            .Where(item => item.availability_status == MenuAvailable
+                || item.availability_status == MenuSoldOut);
 
     private static IQueryable<MarketplaceMenuItemRow> ProjectMarketplaceMenuItems(
         IQueryable<MenuItem> items) =>
@@ -712,6 +980,7 @@ public sealed class CommerceRepository(
                 cart.cart_id,
                 cart.storefront_id,
                 cart.storefront.storefront_name,
+                StorefrontAddress = cart.storefront.registration.declared_address,
                 StorefrontStatus = cart.storefront.availability_status,
             })
             .SingleOrDefaultAsync(cancellationToken);
@@ -737,9 +1006,10 @@ public sealed class CommerceRepository(
             header.cart_id,
             header.storefront_id,
             header.storefront_name,
-            header.StorefrontStatus,
+            await EligibleStores().AnyAsync(x => x.storefront_id == header.storefront_id, cancellationToken) ? header.StorefrontStatus : "CLOSED",
             items,
-            items.Sum(item => item.UnitPrice * item.Quantity));
+            items.Sum(item => item.UnitPrice * item.Quantity),
+            header.StorefrontAddress);
     }
 
     private async Task<IReadOnlyList<CommerceOrderRow>> BuildOrdersAsync(
@@ -756,6 +1026,8 @@ public sealed class CommerceRepository(
                 order.customer_user.full_name ?? $"User #{order.customer_user_id}",
                 order.storefront_id,
                 order.storefront.storefront_name,
+                order.storefront.image_url,
+                order.storefront_address_snapshot ?? order.storefront.registration.declared_address,
                 order.order_status,
                 order.subtotal_amount,
                 order.total_amount,
@@ -808,7 +1080,11 @@ public sealed class CommerceRepository(
             .ThenByDescending(payment => payment.transaction_id)
             .Select(payment => new PaymentData(
                 payment.order_id!.Value,
+                payment.transaction_id,
+                payment.idempotency_key,
                 payment.provider,
+                payment.amount,
+                payment.provider_reference,
                 payment.transaction_status))
             .ToListAsync(cancellationToken);
         var refunds = await db.RefundTransactions.AsNoTracking()
@@ -860,7 +1136,13 @@ public sealed class CommerceRepository(
                 header.CompletedAt,
                 header.CreatedAt,
                 itemsByOrder.GetValueOrDefault(header.OrderId) ?? [],
-                historyByOrder.GetValueOrDefault(header.OrderId) ?? []);
+                historyByOrder.GetValueOrDefault(header.OrderId) ?? [],
+                payment?.TransactionId,
+                payment?.IdempotencyKey,
+                payment?.Amount,
+                payment?.ProviderReference,
+                header.StorefrontImageUrl,
+                header.StorefrontAddress);
         }).ToArray();
     }
 
@@ -904,7 +1186,7 @@ public sealed class CommerceRepository(
 
             Transition(order, targetStatus, actorUserId, null, Now);
             Notify(order.customer_user_id, "ORDER", "Trạng thái đơn hàng",
-                notificationBody, "Order", orderId);
+                notificationBody, "ORDER", orderId);
             Audit(actorUserId, "SORD_STATUS_UPDATE", "Order", orderId,
                 new { expectedStatus, targetStatus });
             await db.SaveChangesAsync(cancellationToken);
@@ -949,14 +1231,14 @@ public sealed class CommerceRepository(
             if (sellerAction)
             {
                 Notify(order.customer_user_id, "ORDER", "Đơn hàng hoàn tất",
-                    $"Người bán đã xác nhận bàn giao đơn {order.order_code}.", "Order", orderId);
+                    $"Người bán đã xác nhận bàn giao đơn {order.order_code}.", "ORDER", orderId);
             }
             else
             {
                 var vendorUserId = await StorefrontVendorUserIdAsync(
                     order.storefront_id, cancellationToken);
                 Notify(vendorUserId, "ORDER", "Đơn hàng hoàn tất",
-                    $"Khách hàng đã xác nhận nhận đơn {order.order_code}.", "Order", orderId);
+                    $"Khách hàng đã xác nhận nhận đơn {order.order_code}.", "ORDER", orderId);
             }
 
             Audit(actorUserId, sellerAction ? "SORD_HANDOVER" : "ORD_PICKUP", "Order", orderId,
@@ -979,7 +1261,20 @@ public sealed class CommerceRepository(
         long orderId,
         CancellationToken cancellationToken) =>
         db.Orders.SingleOrDefaultAsync(order => order.order_id == orderId
-            && order.storefront.registration.vendor_id == vendorId, cancellationToken);
+            && order.storefront.registration.vendor_id == vendorId
+            && order.OrderStatusHistories.Any(history =>
+                history.to_status == OrderStatuses.Placed), cancellationToken);
+
+    private Task<bool> HasPendingCheckoutAsync(
+        long customerUserId,
+        CancellationToken cancellationToken) =>
+        db.Orders.AnyAsync(order =>
+            order.customer_user_id == customerUserId
+            && order.order_status == OrderStatuses.PendingPayment
+            && order.PaymentTransactions.Any(payment =>
+                payment.payment_purpose == PaymentPurposeOrder
+                && payment.transaction_status == PaymentPending),
+            cancellationToken);
 
     private async Task<bool> AddFullRefundAsync(
         Order order,
@@ -1081,6 +1376,8 @@ public sealed class CommerceRepository(
         string CustomerName,
         long StorefrontId,
         string StorefrontName,
+        string? StorefrontImageUrl,
+        string? StorefrontAddress,
         string OrderStatus,
         decimal SubtotalAmount,
         decimal TotalAmount,
@@ -1089,7 +1386,14 @@ public sealed class CommerceRepository(
         DateTime? CompletedAt,
         DateTime CreatedAt);
 
-    private sealed record PaymentData(long OrderId, string Provider, string Status);
+    private sealed record PaymentData(
+        long OrderId,
+        long TransactionId,
+        string IdempotencyKey,
+        string Provider,
+        decimal Amount,
+        string? ProviderReference,
+        string Status);
 
     private sealed record RefundData(
         long OrderId,

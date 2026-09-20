@@ -5,12 +5,27 @@ namespace StreetBiz.Application.Common.Interfaces;
 public interface ICommerceRepository
 {
     Task<IReadOnlyList<MarketplaceMenuItemRow>> SearchMenuItemsAsync(
-        string? query,
+        MarketplaceMenuFilter filter,
         int take,
         CancellationToken cancellationToken);
 
     Task<MarketplaceMenuItemRow?> GetMenuItemAsync(
         long menuItemId,
+        CancellationToken cancellationToken);
+
+    Task<IReadOnlyList<MarketplaceStorefrontRow>> ListStorefrontsAsync(
+        MarketplaceStorefrontFilter filter,
+        int take,
+        CancellationToken cancellationToken);
+
+    Task<MarketplaceStorefrontDetailRow?> GetStorefrontAsync(
+        long storefrontId,
+        CancellationToken cancellationToken);
+
+    Task<IReadOnlyList<StorefrontLocationRow>> ListStorefrontLocationsAsync(
+        CancellationToken cancellationToken);
+
+    Task<IReadOnlyList<MarketplaceCategoryRow>> ListMarketplaceCategoriesAsync(
         CancellationToken cancellationToken);
 
     Task<CommerceCartRow?> GetActiveCartAsync(
@@ -42,6 +57,22 @@ public interface ICommerceRepository
         long customerUserId,
         string provider,
         string idempotencyKey,
+        CancellationToken cancellationToken);
+
+    Task<OrderMutationResult> CheckoutAsync(
+        long customerUserId,
+        long cartId,
+        string provider,
+        string idempotencyKey,
+        CancellationToken cancellationToken);
+
+    Task SetPaymentProviderReferenceAsync(
+        long transactionId,
+        string providerReference,
+        CancellationToken cancellationToken);
+
+    Task<PaymentCallbackMutationResult> ApplyPaymentCallbackAsync(
+        PaymentCallbackData callback,
         CancellationToken cancellationToken);
 
     Task<OrderMutationResult> ConfirmSandboxPaymentAsync(

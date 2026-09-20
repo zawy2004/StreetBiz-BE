@@ -13,6 +13,23 @@ public partial class StreetBizDbContext
 {
     partial void OnModelCreatingPartial(ModelBuilder modelBuilder)
     {
+        // The scaffold uses --use-database-names, so property names already equal
+        // column names. Keep the commerce table names explicit so a future DbSet
+        // rename cannot silently redirect order/payment mappings.
+        modelBuilder.Entity<ShoppingCart>().ToTable("ShoppingCarts");
+        modelBuilder.Entity<ShoppingCartItem>().ToTable("ShoppingCartItems");
+        modelBuilder.Entity<Storefront>().ToTable("Storefronts",
+            table => table.HasTrigger("TR_Storefronts_Phase2Gate"));
+        modelBuilder.Entity<MenuItem>().ToTable("MenuItems");
+        modelBuilder.Entity<Order>().ToTable("Orders");
+        modelBuilder.Entity<OrderItem>().ToTable("OrderItems");
+        modelBuilder.Entity<OrderStatusHistory>().ToTable("OrderStatusHistory");
+        modelBuilder.Entity<PaymentTransaction>().ToTable("PaymentTransactions");
+        modelBuilder.Entity<PaymentCallbackEvent>().ToTable("PaymentCallbackEvents");
+        modelBuilder.Entity<RefundTransaction>().ToTable("RefundTransactions",
+            table => table.HasTrigger("TR_RefundTransactions_NotMoreThanPaid"));
+        modelBuilder.Entity<Notification>().ToTable("Notifications");
+
         // SQL Server rejects OUTPUT without INTO for tables with enabled triggers.
         modelBuilder.Entity<RentalContract>()
             .ToTable("RentalContracts", table => table.UseSqlOutputClause(false));

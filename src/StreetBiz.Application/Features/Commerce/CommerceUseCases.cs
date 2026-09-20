@@ -8,8 +8,15 @@ using StreetBiz.Application.DTOs.Commerce;
 
 namespace StreetBiz.Application.Features.Commerce;
 
-public sealed record SearchMarketplaceMenuQuery(string? Query, int Take = 50)
-    : IRequest<IReadOnlyList<MarketplaceMenuItemDto>>;
+public sealed record SearchMarketplaceMenuQuery(
+    string? Query,
+    int Take = 50,
+    int? WardId = null,
+    int? CategoryId = null,
+    decimal? MinPrice = null,
+    decimal? MaxPrice = null,
+    bool? OpenNow = null,
+    string? Sort = null) : IRequest<IReadOnlyList<MarketplaceMenuItemDto>>;
 
 public sealed class SearchMarketplaceMenuQueryValidator : AbstractValidator<SearchMarketplaceMenuQuery>
 {
@@ -17,17 +24,34 @@ public sealed class SearchMarketplaceMenuQueryValidator : AbstractValidator<Sear
     {
         RuleFor(x => x.Query).MaximumLength(100);
         RuleFor(x => x.Take).InclusiveBetween(1, 100);
+        RuleFor(x => x.WardId).GreaterThan(0).When(x => x.WardId.HasValue);
+        RuleFor(x => x.CategoryId).GreaterThan(0).When(x => x.CategoryId.HasValue);
+        RuleFor(x => x.MinPrice).GreaterThanOrEqualTo(0).When(x => x.MinPrice.HasValue);
+        RuleFor(x => x.MaxPrice).GreaterThanOrEqualTo(0).When(x => x.MaxPrice.HasValue);
+        RuleFor(x => x).Must(x => !x.MinPrice.HasValue || !x.MaxPrice.HasValue || x.MinPrice <= x.MaxPrice)
+            .WithMessage("minPrice must not be greater than maxPrice.");
+        RuleFor(x => x.Sort).Must(sort => sort is null || MarketplaceMenuSorts.IsValid(sort))
+            .WithMessage("sort must be name, price_asc or price_desc.");
     }
 }
 
-public sealed class SearchMarketplaceMenuQueryHandler(ICommerceRepository repository)
+public sealed class SearchMarketplaceMenuQueryHandler(
+    ICommerceRepository repository,
+    IDateTimeProvider clock)
     : IRequestHandler<SearchMarketplaceMenuQuery, IReadOnlyList<MarketplaceMenuItemDto>>
 {
     public async Task<IReadOnlyList<MarketplaceMenuItemDto>> Handle(
         SearchMarketplaceMenuQuery request,
         CancellationToken cancellationToken) =>
         (await repository.SearchMenuItemsAsync(
-            string.IsNullOrWhiteSpace(request.Query) ? null : request.Query.Trim(),
+            new MarketplaceMenuFilter(
+                string.IsNullOrWhiteSpace(request.Query) ? null : request.Query.Trim(),
+                request.WardId,
+                request.CategoryId,
+                request.MinPrice,
+                request.MaxPrice,
+                request.OpenNow == true ? StorefrontHours.LocalNow(clock.UtcNow) : null,
+                request.Sort ?? MarketplaceMenuSorts.Name),
             request.Take,
             cancellationToken))
         .Select(row => row.ToDto())
@@ -512,6 +536,10 @@ public sealed class GetSalesSummaryQueryHandler(
 
 internal static class CommerceMapping
 {
+    // SQL datetime2 stores UTC values without DateTime.Kind. Preserve their instant
+    // in JSON instead of making browsers interpret UTC clock time as local time.
+    private static DateTime Utc(DateTime value) => DateTime.SpecifyKind(value, DateTimeKind.Utc);
+    private static DateTime? Utc(DateTime? value) => value.HasValue ? Utc(value.Value) : null;
     public static MarketplaceMenuItemDto ToDto(this MarketplaceMenuItemRow row) => new(
         row.MenuItemId, row.StorefrontId, row.StorefrontName, row.ItemName,
         row.Description, row.ImageUrl, row.UnitPrice, row.AvailabilityStatus,
@@ -525,23 +553,28 @@ internal static class CommerceMapping
         row.Items.Select(item => new CartItemDto(
             item.CartItemId, item.MenuItemId, item.ItemName, item.ImageUrl,
             item.UnitPrice, item.AvailabilityStatus, item.Quantity, item.Note)).ToArray(),
-        row.Subtotal);
+        row.Subtotal)
+        { StorefrontAddress = row.StorefrontAddress };
 
     public static OrderDto ToDto(this CommerceOrderRow row) => new(
         row.OrderId, row.OrderCode, row.CustomerUserId, row.CustomerName,
         row.StorefrontId, row.StorefrontName, row.OrderStatus, row.SubtotalAmount,
         row.TotalAmount, row.RejectionReason, row.PaymentProvider, row.PaymentStatus,
         row.RefundAmount, row.RefundReason, row.RefundStatus,
-        row.RefundRequestedAt, row.RefundCompletedAt,
-        row.PlacedAt, row.CompletedAt, row.CreatedAt,
+        Utc(row.RefundRequestedAt), Utc(row.RefundCompletedAt),
+        Utc(row.PlacedAt), Utc(row.CompletedAt), Utc(row.CreatedAt),
         row.Items.Select(item => new OrderItemDto(
             item.OrderItemId, item.MenuItemId, item.ItemName, item.UnitPrice,
             item.Quantity, item.Note)).ToArray(),
         row.History.Select(item => new OrderHistoryDto(
-            item.HistoryId, item.FromStatus, item.ToStatus, item.Note, item.ChangedAt)).ToArray());
+            item.HistoryId, item.FromStatus, item.ToStatus, item.Note, Utc(item.ChangedAt))).ToArray())
+        {
+            StorefrontImageUrl = row.StorefrontImageUrl,
+            StorefrontAddress = row.StorefrontAddress,
+        };
 
     public static SalesSummaryDto ToDto(this CommerceSalesSummaryRow row) => new(
-        row.Period, row.FromUtc, row.ToUtc, row.CompletedOrderCount, row.GrossSales,
+        row.Period, Utc(row.FromUtc), Utc(row.ToUtc), row.CompletedOrderCount, row.GrossSales,
         row.RefundedAmount, row.NetSales,
         row.Orders.Select(order => order.ToDto()).ToArray());
 

@@ -149,6 +149,14 @@ namespace StreetBiz.Infrastructure.Persistence.Migrations
 
                     SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<int>("unit_id"));
 
+                    b.Property<string>("contact_name")
+                        .HasMaxLength(150)
+                        .HasColumnType("nvarchar(150)");
+
+                    b.Property<string>("contact_phone")
+                        .HasMaxLength(20)
+                        .HasColumnType("nvarchar(20)");
+
                     b.Property<DateTime>("created_at")
                         .ValueGeneratedOnAdd()
                         .HasColumnType("datetime2")
@@ -637,7 +645,7 @@ namespace StreetBiz.Infrastructure.Persistence.Migrations
 
                     b.HasIndex(new[] { "storefront_id" }, "IX_MenuItems_Storefront");
 
-                    b.ToTable("MenuItems");
+                    b.ToTable("MenuItems", (string)null);
                 });
 
             modelBuilder.Entity("StreetBiz.Infrastructure.Persistence.ScaffoldedModels.Notification", b =>
@@ -686,7 +694,7 @@ namespace StreetBiz.Infrastructure.Persistence.Migrations
 
                     b.HasIndex(new[] { "user_id", "is_read" }, "IX_Notifications_User_Read");
 
-                    b.ToTable("Notifications");
+                    b.ToTable("Notifications", (string)null);
                 });
 
             modelBuilder.Entity("StreetBiz.Infrastructure.Persistence.ScaffoldedModels.Order", b =>
@@ -727,6 +735,10 @@ namespace StreetBiz.Infrastructure.Persistence.Migrations
                         .HasMaxLength(500)
                         .HasColumnType("nvarchar(500)");
 
+                    b.Property<string>("storefront_address_snapshot")
+                        .HasMaxLength(500)
+                        .HasColumnType("nvarchar(500)");
+
                     b.Property<long>("storefront_id")
                         .HasColumnType("bigint");
 
@@ -746,7 +758,7 @@ namespace StreetBiz.Infrastructure.Persistence.Migrations
                     b.HasIndex(new[] { "order_code" }, "UQ__Orders__99D12D3FD02B875C")
                         .IsUnique();
 
-                    b.ToTable("Orders");
+                    b.ToTable("Orders", (string)null);
                 });
 
             modelBuilder.Entity("StreetBiz.Infrastructure.Persistence.ScaffoldedModels.OrderItem", b =>
@@ -785,7 +797,7 @@ namespace StreetBiz.Infrastructure.Persistence.Migrations
 
                     b.HasIndex("order_id");
 
-                    b.ToTable("OrderItems");
+                    b.ToTable("OrderItems", (string)null);
                 });
 
             modelBuilder.Entity("StreetBiz.Infrastructure.Persistence.ScaffoldedModels.OrderStatusHistory", b =>
@@ -924,7 +936,7 @@ namespace StreetBiz.Infrastructure.Persistence.Migrations
 
                     b.HasIndex(new[] { "provider", "provider_reference" }, "IX_PaymentCallbackEvents_Reference");
 
-                    b.ToTable("PaymentCallbackEvents");
+                    b.ToTable("PaymentCallbackEvents", (string)null);
                 });
 
             modelBuilder.Entity("StreetBiz.Infrastructure.Persistence.ScaffoldedModels.PaymentTransaction", b =>
@@ -993,7 +1005,7 @@ namespace StreetBiz.Infrastructure.Persistence.Migrations
                     b.HasIndex(new[] { "idempotency_key" }, "UQ__PaymentT__A7BA59F41B3C497A")
                         .IsUnique();
 
-                    b.ToTable("PaymentTransactions");
+                    b.ToTable("PaymentTransactions", (string)null);
                 });
 
             modelBuilder.Entity("StreetBiz.Infrastructure.Persistence.ScaffoldedModels.Penalty", b =>
@@ -1193,6 +1205,9 @@ namespace StreetBiz.Infrastructure.Persistence.Migrations
 
                     SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<int>("zone_id"));
 
+                    b.Property<DateOnly?>("application_deadline")
+                        .HasColumnType("date");
+
                     b.Property<TimeOnly?>("available_from")
                         .HasColumnType("time");
 
@@ -1216,6 +1231,18 @@ namespace StreetBiz.Infrastructure.Persistence.Migrations
                     b.Property<decimal>("price_per_day")
                         .HasColumnType("decimal(18, 0)");
 
+                    b.Property<string>("regulation_ref")
+                        .HasMaxLength(120)
+                        .HasColumnType("nvarchar(120)");
+
+                    b.Property<string>("segment_from")
+                        .HasMaxLength(150)
+                        .HasColumnType("nvarchar(150)");
+
+                    b.Property<string>("segment_to")
+                        .HasMaxLength(150)
+                        .HasColumnType("nvarchar(150)");
+
                     b.Property<int>("ward_unit_id")
                         .HasColumnType("int");
 
@@ -1224,6 +1251,10 @@ namespace StreetBiz.Infrastructure.Persistence.Migrations
                         .HasMaxLength(20)
                         .HasColumnType("nvarchar(20)")
                         .HasComputedColumnSql("(CONVERT([nvarchar](20),N'WARD'))", true);
+
+                    b.Property<string>("zone_code")
+                        .HasMaxLength(30)
+                        .HasColumnType("nvarchar(30)");
 
                     b.Property<string>("zone_name")
                         .IsRequired()
@@ -1309,7 +1340,7 @@ namespace StreetBiz.Infrastructure.Persistence.Migrations
                     b.HasIndex(new[] { "idempotency_key" }, "UQ__RefundTr__A7BA59F46A1D1DDC")
                         .IsUnique();
 
-                    b.ToTable("RefundTransactions", t =>
+                    b.ToTable("RefundTransactions", null, t =>
                         {
                             t.HasTrigger("TR_RefundTransactions_NotMoreThanPaid");
                         });
@@ -1434,6 +1465,9 @@ namespace StreetBiz.Infrastructure.Persistence.Migrations
                         .HasColumnType("nvarchar(30)")
                         .HasDefaultValue("PENDING");
 
+                    b.Property<DateTime?>("commitments_accepted_at")
+                        .HasColumnType("datetime2");
+
                     b.Property<DateTime>("created_at")
                         .ValueGeneratedOnAdd()
                         .HasColumnType("datetime2")
@@ -1538,7 +1572,7 @@ namespace StreetBiz.Infrastructure.Persistence.Migrations
                     b.HasIndex(new[] { "application_id" }, "UQ__RentalCo__3BCBDCF310B09590")
                         .IsUnique();
 
-                    b.ToTable("RentalContracts", t =>
+                    b.ToTable("RentalContracts", null, t =>
                         {
                             t.HasTrigger("TR_RentalContracts_NoCancelWithDebt");
 
@@ -1748,7 +1782,7 @@ namespace StreetBiz.Infrastructure.Persistence.Migrations
                         .IsUnique()
                         .HasFilter("([cart_status]='ACTIVE')");
 
-                    b.ToTable("ShoppingCarts");
+                    b.ToTable("ShoppingCarts", (string)null);
                 });
 
             modelBuilder.Entity("StreetBiz.Infrastructure.Persistence.ScaffoldedModels.ShoppingCartItem", b =>
@@ -1779,7 +1813,7 @@ namespace StreetBiz.Infrastructure.Persistence.Migrations
 
                     b.HasIndex("menu_item_id");
 
-                    b.ToTable("ShoppingCartItems");
+                    b.ToTable("ShoppingCartItems", (string)null);
                 });
 
             modelBuilder.Entity("StreetBiz.Infrastructure.Persistence.ScaffoldedModels.SidewalkSlot", b =>
@@ -1790,10 +1824,33 @@ namespace StreetBiz.Infrastructure.Persistence.Migrations
 
                     SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<long>("slot_id"));
 
+                    b.Property<string>("business_category")
+                        .HasMaxLength(30)
+                        .HasColumnType("nvarchar(30)");
+
                     b.Property<DateTime>("created_at")
                         .ValueGeneratedOnAdd()
                         .HasColumnType("datetime2")
                         .HasDefaultValueSql("(sysutcdatetime())");
+
+                    b.Property<bool>("has_power")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bit")
+                        .HasDefaultValue(false);
+
+                    b.Property<bool>("has_trash_bin")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bit")
+                        .HasDefaultValue(false);
+
+                    b.Property<bool>("has_water")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bit")
+                        .HasDefaultValue(false);
+
+                    b.Property<string>("image_url")
+                        .HasMaxLength(500)
+                        .HasColumnType("nvarchar(500)");
 
                     b.Property<decimal>("latitude")
                         .HasColumnType("decimal(9, 6)");
@@ -1868,6 +1925,30 @@ namespace StreetBiz.Infrastructure.Persistence.Migrations
                         .IsUnique();
 
                     b.ToTable("SidewalkSlots");
+                });
+
+            modelBuilder.Entity("StreetBiz.Infrastructure.Persistence.ScaffoldedModels.SlotHold", b =>
+                {
+                    b.Property<long>("slot_id")
+                        .HasColumnType("bigint");
+
+                    b.Property<DateTime>("expires_at")
+                        .HasColumnType("datetime2");
+
+                    b.Property<DateTime>("held_at")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("datetime2")
+                        .HasDefaultValueSql("(sysutcdatetime())");
+
+                    b.Property<long>("registration_id")
+                        .HasColumnType("bigint");
+
+                    b.HasKey("slot_id")
+                        .HasName("PK__SlotHold__971A01BB0168B98B");
+
+                    b.HasIndex(new[] { "registration_id" }, "IX_SlotHolds_Registration");
+
+                    b.ToTable("SlotHolds");
                 });
 
             modelBuilder.Entity("StreetBiz.Infrastructure.Persistence.ScaffoldedModels.SlotTransferRequest", b =>
@@ -1983,7 +2064,7 @@ namespace StreetBiz.Infrastructure.Persistence.Migrations
                     b.HasIndex(new[] { "registration_id" }, "UQ_Storefronts_Registration")
                         .IsUnique();
 
-                    b.ToTable("Storefronts", t =>
+                    b.ToTable("Storefronts", null, t =>
                         {
                             t.HasTrigger("TR_Storefronts_Phase2Gate");
                         });
@@ -2017,6 +2098,50 @@ namespace StreetBiz.Infrastructure.Persistence.Migrations
                     b.HasIndex("storefront_id");
 
                     b.ToTable("StorefrontBusinessHours");
+                });
+
+            modelBuilder.Entity("StreetBiz.Infrastructure.Persistence.ScaffoldedModels.StreetFeature", b =>
+                {
+                    b.Property<int>("feature_id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<int>("feature_id"));
+
+                    b.Property<bool>("blocks_business")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bit")
+                        .HasDefaultValue(false);
+
+                    b.Property<string>("feature_type")
+                        .IsRequired()
+                        .HasMaxLength(30)
+                        .HasColumnType("nvarchar(30)");
+
+                    b.Property<string>("label")
+                        .IsRequired()
+                        .HasMaxLength(150)
+                        .HasColumnType("nvarchar(150)");
+
+                    b.Property<decimal>("latitude")
+                        .HasColumnType("decimal(9, 6)");
+
+                    b.Property<decimal>("longitude")
+                        .HasColumnType("decimal(9, 6)");
+
+                    b.Property<string>("note")
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<int>("zone_id")
+                        .HasColumnType("int");
+
+                    b.HasKey("feature_id")
+                        .HasName("PK__StreetFe__7906CBD70F99586B");
+
+                    b.HasIndex(new[] { "zone_id" }, "IX_StreetFeatures_Zone");
+
+                    b.ToTable("StreetFeatures");
                 });
 
             modelBuilder.Entity("StreetBiz.Infrastructure.Persistence.ScaffoldedModels.UserAccount", b =>
@@ -2421,6 +2546,43 @@ namespace StreetBiz.Infrastructure.Persistence.Migrations
                     b.ToTable("ViolationTypes");
                 });
 
+            modelBuilder.Entity("StreetBiz.Infrastructure.Persistence.ScaffoldedModels.ZoneFeeComponent", b =>
+                {
+                    b.Property<int>("component_id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<int>("component_id"));
+
+                    b.Property<string>("calc_basis")
+                        .IsRequired()
+                        .HasMaxLength(10)
+                        .HasColumnType("nvarchar(10)");
+
+                    b.Property<string>("component_name")
+                        .IsRequired()
+                        .HasMaxLength(150)
+                        .HasColumnType("nvarchar(150)");
+
+                    b.Property<int>("sort_order")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int")
+                        .HasDefaultValue(0);
+
+                    b.Property<decimal>("unit_amount")
+                        .HasColumnType("decimal(18, 0)");
+
+                    b.Property<int>("zone_id")
+                        .HasColumnType("int");
+
+                    b.HasKey("component_id")
+                        .HasName("PK__ZoneFeeC__AEB1DA59DCF20270");
+
+                    b.HasIndex(new[] { "zone_id" }, "IX_ZoneFeeComponents_Zone");
+
+                    b.ToTable("ZoneFeeComponents");
+                });
+
             modelBuilder.Entity("StreetBiz.Infrastructure.Persistence.ScaffoldedModels.vw_PermitValidity", b =>
                 {
                     b.Property<long>("contract_id")
@@ -2502,8 +2664,8 @@ namespace StreetBiz.Infrastructure.Persistence.Migrations
             modelBuilder.Entity("StreetBiz.Infrastructure.Persistence.ScaffoldedModels.AddressChangeRequest", b =>
                 {
                     b.HasOne("StreetBiz.Infrastructure.Persistence.ScaffoldedModels.BusinessRegistration", "registration")
-                        .WithOne("AddressChangeRequest")
-                        .HasForeignKey("StreetBiz.Infrastructure.Persistence.ScaffoldedModels.AddressChangeRequest", "registration_id")
+                        .WithMany()
+                        .HasForeignKey("registration_id")
                         .IsRequired()
                         .HasConstraintName("FK_AddressChangeRequests_Registration");
 
@@ -2610,8 +2772,8 @@ namespace StreetBiz.Infrastructure.Persistence.Migrations
             modelBuilder.Entity("StreetBiz.Infrastructure.Persistence.ScaffoldedModels.DigitalPermit", b =>
                 {
                     b.HasOne("StreetBiz.Infrastructure.Persistence.ScaffoldedModels.RentalContract", "contract")
-                        .WithOne("DigitalPermit")
-                        .HasForeignKey("StreetBiz.Infrastructure.Persistence.ScaffoldedModels.DigitalPermit", "contract_id")
+                        .WithMany()
+                        .HasForeignKey("contract_id")
                         .IsRequired()
                         .HasConstraintName("FK_DigitalPermits_Contract");
 
@@ -2621,8 +2783,8 @@ namespace StreetBiz.Infrastructure.Persistence.Migrations
             modelBuilder.Entity("StreetBiz.Infrastructure.Persistence.ScaffoldedModels.FeeSchedule", b =>
                 {
                     b.HasOne("StreetBiz.Infrastructure.Persistence.ScaffoldedModels.RentalContract", "contract")
-                        .WithOne("FeeSchedule")
-                        .HasForeignKey("StreetBiz.Infrastructure.Persistence.ScaffoldedModels.FeeSchedule", "contract_id")
+                        .WithMany()
+                        .HasForeignKey("contract_id")
                         .IsRequired()
                         .HasConstraintName("FK_FeeSchedules_Contract");
 
@@ -2927,8 +3089,8 @@ namespace StreetBiz.Infrastructure.Persistence.Migrations
             modelBuilder.Entity("StreetBiz.Infrastructure.Persistence.ScaffoldedModels.RenewalRequest", b =>
                 {
                     b.HasOne("StreetBiz.Infrastructure.Persistence.ScaffoldedModels.RentalContract", "contract")
-                        .WithOne("RenewalRequest")
-                        .HasForeignKey("StreetBiz.Infrastructure.Persistence.ScaffoldedModels.RenewalRequest", "contract_id")
+                        .WithMany()
+                        .HasForeignKey("contract_id")
                         .IsRequired()
                         .HasConstraintName("FK_RenewalRequests_Contract");
 
@@ -3117,6 +3279,25 @@ namespace StreetBiz.Infrastructure.Persistence.Migrations
                     b.Navigation("zone");
                 });
 
+            modelBuilder.Entity("StreetBiz.Infrastructure.Persistence.ScaffoldedModels.SlotHold", b =>
+                {
+                    b.HasOne("StreetBiz.Infrastructure.Persistence.ScaffoldedModels.BusinessRegistration", "registration")
+                        .WithMany("SlotHolds")
+                        .HasForeignKey("registration_id")
+                        .IsRequired()
+                        .HasConstraintName("FK_SlotHolds_Registration");
+
+                    b.HasOne("StreetBiz.Infrastructure.Persistence.ScaffoldedModels.SidewalkSlot", "slot")
+                        .WithOne("SlotHold")
+                        .HasForeignKey("StreetBiz.Infrastructure.Persistence.ScaffoldedModels.SlotHold", "slot_id")
+                        .IsRequired()
+                        .HasConstraintName("FK_SlotHolds_Slot");
+
+                    b.Navigation("registration");
+
+                    b.Navigation("slot");
+                });
+
             modelBuilder.Entity("StreetBiz.Infrastructure.Persistence.ScaffoldedModels.SlotTransferRequest", b =>
                 {
                     b.HasOne("StreetBiz.Infrastructure.Persistence.ScaffoldedModels.RentalContract", "contract")
@@ -3180,6 +3361,17 @@ namespace StreetBiz.Infrastructure.Persistence.Migrations
                         .HasConstraintName("FK_StorefrontBusinessHours_Storefront");
 
                     b.Navigation("storefront");
+                });
+
+            modelBuilder.Entity("StreetBiz.Infrastructure.Persistence.ScaffoldedModels.StreetFeature", b =>
+                {
+                    b.HasOne("StreetBiz.Infrastructure.Persistence.ScaffoldedModels.PricingZone", "zone")
+                        .WithMany("StreetFeatures")
+                        .HasForeignKey("zone_id")
+                        .IsRequired()
+                        .HasConstraintName("FK_StreetFeatures_Zone");
+
+                    b.Navigation("zone");
                 });
 
             modelBuilder.Entity("StreetBiz.Infrastructure.Persistence.ScaffoldedModels.UserAccount", b =>
@@ -3340,6 +3532,17 @@ namespace StreetBiz.Infrastructure.Persistence.Migrations
                     b.Navigation("violation_typeNavigation");
                 });
 
+            modelBuilder.Entity("StreetBiz.Infrastructure.Persistence.ScaffoldedModels.ZoneFeeComponent", b =>
+                {
+                    b.HasOne("StreetBiz.Infrastructure.Persistence.ScaffoldedModels.PricingZone", "zone")
+                        .WithMany("ZoneFeeComponents")
+                        .HasForeignKey("zone_id")
+                        .IsRequired()
+                        .HasConstraintName("FK_ZoneFeeComponents_Zone");
+
+                    b.Navigation("zone");
+                });
+
             modelBuilder.Entity("StreetBiz.Infrastructure.Persistence.ScaffoldedModels.AdministrativeUnit", b =>
                 {
                     b.Navigation("BusinessRegistrations");
@@ -3355,13 +3558,13 @@ namespace StreetBiz.Infrastructure.Persistence.Migrations
 
             modelBuilder.Entity("StreetBiz.Infrastructure.Persistence.ScaffoldedModels.BusinessRegistration", b =>
                 {
-                    b.Navigation("AddressChangeRequest");
-
                     b.Navigation("RegistrationEvidences");
 
                     b.Navigation("RentalApplications");
 
                     b.Navigation("SidewalkSlots");
+
+                    b.Navigation("SlotHolds");
 
                     b.Navigation("Storefront");
                 });
@@ -3439,6 +3642,10 @@ namespace StreetBiz.Infrastructure.Persistence.Migrations
             modelBuilder.Entity("StreetBiz.Infrastructure.Persistence.ScaffoldedModels.PricingZone", b =>
                 {
                     b.Navigation("SidewalkSlots");
+
+                    b.Navigation("StreetFeatures");
+
+                    b.Navigation("ZoneFeeComponents");
                 });
 
             modelBuilder.Entity("StreetBiz.Infrastructure.Persistence.ScaffoldedModels.RentalApplication", b =>
@@ -3449,12 +3656,6 @@ namespace StreetBiz.Infrastructure.Persistence.Migrations
             modelBuilder.Entity("StreetBiz.Infrastructure.Persistence.ScaffoldedModels.RentalContract", b =>
                 {
                     b.Navigation("AddressChangeRequests");
-
-                    b.Navigation("DigitalPermit");
-
-                    b.Navigation("FeeSchedule");
-
-                    b.Navigation("RenewalRequest");
 
                     b.Navigation("SlotTransferRequests");
 
@@ -3480,6 +3681,8 @@ namespace StreetBiz.Infrastructure.Persistence.Migrations
                     b.Navigation("RentalApplications");
 
                     b.Navigation("RentalContracts");
+
+                    b.Navigation("SlotHold");
 
                     b.Navigation("VendorReports");
 
