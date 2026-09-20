@@ -25,4 +25,11 @@ public interface IBusinessRegistrationRepository
 
     /// <summary>BR-26 (SIDE-12/13): true when the vendor holds at least one APPROVED registration.</summary>
     Task<bool> HasApprovedRegistrationAsync(long vendorId, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Separate, explicit consent to run AI-OCR on the registration's uploaded ID photo
+    /// (biometric data). Luat Bao ve du lieu ca nhan 2025 / Nghi dinh 356/2025/ND-CP requires
+    /// this to be its own affirmative action, not folded into a general terms checkbox.
+    /// </summary>
+    Task RecordBiometricConsentAsync(long registrationId, CancellationToken cancellationToken);
 }

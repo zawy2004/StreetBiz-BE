@@ -1,4 +1,4 @@
--- Reference data required by Authentication and Vendor Onboarding in a LOCAL
+﻿-- Reference data required by Authentication and Vendor Onboarding in a LOCAL
 -- development database. Idempotent: safe to run more than once.
 --
 --   * Roles: UserAccounts.role_code is a foreign key to Roles.

@@ -15,6 +15,8 @@ public partial class PenaltyFeeSchedule
 
     public decimal penalty_amount { get; set; }
 
+    public string? legal_basis { get; set; }
+
     public DateOnly effective_from { get; set; }
 
     public DateOnly? effective_to { get; set; }

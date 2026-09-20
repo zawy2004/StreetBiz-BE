@@ -20,11 +20,15 @@ public sealed class VendorRegistrationController(ISender sender) : ControllerBas
     /// <summary>REG-01: submit a business registration.</summary>
     [HttpPost]
     public async Task<ActionResult<BusinessRegistrationDto>> Submit(
-        SubmitRegistrationRequest request, CancellationToken cancellationToken)
+        [FromBody] SubmitRegistrationRequest request, CancellationToken cancellationToken)
     {
         var result = await sender.Send(new SubmitRegistrationCommand(
-            request.VendorType, request.DisplayName, request.DeclaredAddress,
-            request.AddressLatitude, request.AddressLongitude, request.WardUnitId), cancellationToken);
+            request.VendorType ?? string.Empty,
+            request.DisplayName ?? string.Empty,
+            request.DeclaredAddress,
+            request.AddressLatitude,
+            request.AddressLongitude,
+            request.WardUnitId ?? 0), cancellationToken);
         return Ok(new { message = RegMessages.Submitted, data = result });
     }
 
@@ -41,21 +45,30 @@ public sealed class VendorRegistrationController(ISender sender) : ControllerBas
     /// <summary>REG-02: upload an evidence document for a registration.</summary>
     [HttpPost("{registrationId:long}/evidence")]
     public async Task<ActionResult<RegistrationEvidenceDto>> SubmitEvidence(
-        long registrationId, SubmitEvidenceRequest request, CancellationToken cancellationToken)
+        long registrationId, [FromBody] SubmitEvidenceRequest request, CancellationToken cancellationToken)
     {
         var result = await sender.Send(new SubmitEvidenceCommand(
-            registrationId, request.EvidenceType, request.FileUrl, request.OcrExtractedData), cancellationToken);
+            registrationId,
+            request.EvidenceType ?? string.Empty,
+            request.FileUrl ?? string.Empty,
+            request.OcrExtractedData,
+            request.BiometricConsent), cancellationToken);
         return Ok(result);
     }
 
     /// <summary>REG-04: update and re-submit an editable registration.</summary>
     [HttpPut("{registrationId:long}")]
     public async Task<ActionResult<BusinessRegistrationDto>> Update(
-        long registrationId, UpdateRegistrationRequest request, CancellationToken cancellationToken)
+        long registrationId, [FromBody] UpdateRegistrationRequest request, CancellationToken cancellationToken)
     {
         var result = await sender.Send(new UpdateRegistrationCommand(
-            registrationId, request.VendorType, request.DisplayName, request.DeclaredAddress,
-            request.AddressLatitude, request.AddressLongitude, request.WardUnitId), cancellationToken);
+            registrationId,
+            request.VendorType ?? string.Empty,
+            request.DisplayName ?? string.Empty,
+            request.DeclaredAddress,
+            request.AddressLatitude,
+            request.AddressLongitude,
+            request.WardUnitId ?? 0), cancellationToken);
         return Ok(result);
     }
 

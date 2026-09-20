@@ -4,6 +4,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using StreetBiz.Application.Common.Interfaces;
 using StreetBiz.Application.Common.Security;
+using StreetBiz.Application.Features.WardCompliance;
 using StreetBiz.Application.Features.WardSlots;
 using StreetBiz.Infrastructure.Common;
 using StreetBiz.Infrastructure.Geocoding;
@@ -33,6 +34,7 @@ public static class DependencyInjection
         services.AddSingleton<IGeolocation, WardGeolocation>();
         services.AddScoped<WardSlots>();
         services.AddScoped<IWardSlots>(provider => provider.GetRequiredService<WardSlots>());
+        services.AddScoped<IWardComplianceService, WardComplianceService>();
 
         services.AddDbContext<StreetBizDbContext>(options =>
         {
@@ -92,6 +94,21 @@ public static class DependencyInjection
             client.BaseAddress = new Uri(settings.BaseUrl.TrimEnd('/') + "/");
             client.Timeout = TimeSpan.FromSeconds(settings.TimeoutSeconds);
             client.DefaultRequestHeaders.UserAgent.ParseAdd(settings.UserAgent);
+        });
+
+        // Key comes from configuration (dotnet user-secrets / env var) only --
+        // never hardcode AiCompliance:Gemini:ApiKey/FptAi:ApiKey/Groq:ApiKeys in
+        // appsettings*.json. A prior draft of this feature did exactly that and
+        // leaked live keys twice.
+        //
+        // AiKeyPools MUST be Singleton: AddHttpClient's typed client is Transient
+        // by default (a fresh AiComplianceService per DI resolution, effectively
+        // per request), so a key-rotation counter built inline in its constructor
+        // would reset every request and never actually round-robin across calls.
+        services.AddSingleton<AiKeyPools>();
+        services.AddHttpClient<IAiComplianceService, AiComplianceService>(client =>
+        {
+            client.Timeout = TimeSpan.FromSeconds(30);
         });
 
         return services;

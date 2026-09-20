@@ -41,6 +41,7 @@ public sealed partial class CommerceRepository(
         int take,
         CancellationToken cancellationToken)
     {
+        filter ??= new(null, null, null, null, null, null, MarketplaceMenuSorts.Name);
         var items = MarketplaceMenuQuery();
         if (filter.Query is { } query)
         {
@@ -946,10 +947,6 @@ public sealed partial class CommerceRepository(
     }
 
     private IQueryable<MenuItem> MarketplaceMenuQuery() =>
-        db.MenuItems.AsNoTracking()
-            .Where(item => EligibleStores().Select(store => store.storefront_id).Contains(item.storefront_id)
-                && (item.availability_status == MenuAvailable
-                    || item.availability_status == MenuSoldOut));
         PublicStorefronts()
             .SelectMany(storefront => storefront.MenuItems)
             .Where(item => item.availability_status == MenuAvailable

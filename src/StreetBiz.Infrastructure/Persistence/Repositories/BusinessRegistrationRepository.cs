@@ -125,6 +125,19 @@ public sealed class BusinessRegistrationRepository(
         dbContext.BusinessRegistrations.AsNoTracking()
             .AnyAsync(r => r.vendor_id == vendorId && r.registration_status == RegistrationStatuses.Approved, cancellationToken);
 
+    public async Task RecordBiometricConsentAsync(long registrationId, CancellationToken cancellationToken)
+    {
+        var e = await dbContext.BusinessRegistrations
+            .FirstOrDefaultAsync(r => r.registration_id == registrationId, cancellationToken);
+        if (e is null || e.biometric_consent_at.HasValue)
+        {
+            return;
+        }
+
+        e.biometric_consent_at = clock.UtcNow;
+        await dbContext.SaveChangesAsync(cancellationToken);
+    }
+
     private static BizRegistration Map(BusinessRegistration r) => new(
         r.registration_id, r.vendor_id, r.vendor_type, r.display_name, r.declared_address,
         r.address_latitude, r.address_longitude, r.ward_unit_id, r.registration_status,

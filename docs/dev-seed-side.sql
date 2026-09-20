@@ -1,4 +1,4 @@
--- Sidewalk Slot & Rental (SIDE) fixture for local development.
+﻿-- Sidewalk Slot & Rental (SIDE) fixture for local development.
 --
 -- SIDE-05..08, SIDE-12 and SIDE-13 all act on an ACTIVE rental contract, but a
 -- contract is only ever created by WARD-08 (ward approves an application),

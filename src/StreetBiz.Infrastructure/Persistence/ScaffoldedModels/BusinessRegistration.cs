@@ -25,6 +25,10 @@ public partial class BusinessRegistration
 
     public string registration_status { get; set; } = null!;
 
+    public string? id_number { get; set; }
+
+    public DateTime? biometric_consent_at { get; set; }
+
     public bool fast_track_flag { get; set; }
 
     public long? reviewed_by { get; set; }

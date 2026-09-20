@@ -26,9 +26,11 @@ public sealed class UploadsController(IFileStorage storage, ICurrentUser current
     {
         var userId = currentUser.UserId ?? throw new AuthenticationException("No active session.");
 
-        // Only REG-02 needs this endpoint; scoping it to Vendor stops other roles
-        // from filling the disk with files that can never be attached to anything.
-        if (currentUser.RoleCode != RoleCodes.Vendor)
+        // REG-02 (vendor registration evidence) and WARD-11/12 (on-site
+        // inspection photos, violation evidence) are the only callers; scoping
+        // to these two roles stops others from filling the disk with files
+        // that can never be attached to anything.
+        if (currentUser.RoleCode != RoleCodes.Vendor && currentUser.RoleCode != RoleCodes.WardAuthority)
         {
             throw new ForbiddenException(RegMessages.NotAVendor);
         }

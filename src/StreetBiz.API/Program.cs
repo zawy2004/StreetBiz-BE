@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Microsoft.OpenApi.Models;
 using Serilog;
+using System.Security.Claims;
 using StreetBiz.API.Extensions;
 using StreetBiz.Application;
 using StreetBiz.Infrastructure;
@@ -48,6 +49,22 @@ builder.Services.AddSwaggerGen(options =>
 builder.Services.AddProblemDetails();
 builder.Services.AddWardApi();
 builder.Services.AddCommunityApi();
+// ai/vendor-assistant calls a paid LLM per request; an earlier draft left it [AllowAnonymous]
+// with no limit. Now [Authorize]-only, plus this per-account cap.
+builder.Services.AddRateLimiter(options =>
+{
+    options.AddPolicy("VendorAssistantAi", context =>
+        System.Threading.RateLimiting.RateLimitPartition.GetFixedWindowLimiter(
+            context.User.FindFirstValue("sub")
+            ?? context.Connection.RemoteIpAddress?.ToString()
+            ?? "anonymous",
+            _ => new System.Threading.RateLimiting.FixedWindowRateLimiterOptions
+            {
+                PermitLimit = 15,
+                Window = TimeSpan.FromMinutes(1),
+                QueueLimit = 0,
+            }));
+});
 builder.Services.AddSingleton<IOrderRealtimePublisher, OrderRealtimePublisher>();
 builder.Services
     .AddHealthChecks()
