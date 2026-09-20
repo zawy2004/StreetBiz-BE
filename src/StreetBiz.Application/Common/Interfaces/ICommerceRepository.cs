@@ -5,12 +5,27 @@ namespace StreetBiz.Application.Common.Interfaces;
 public interface ICommerceRepository
 {
     Task<IReadOnlyList<MarketplaceMenuItemRow>> SearchMenuItemsAsync(
-        string? query,
+        MarketplaceMenuFilter filter,
         int take,
         CancellationToken cancellationToken);
 
     Task<MarketplaceMenuItemRow?> GetMenuItemAsync(
         long menuItemId,
+        CancellationToken cancellationToken);
+
+    Task<IReadOnlyList<MarketplaceStorefrontRow>> ListStorefrontsAsync(
+        MarketplaceStorefrontFilter filter,
+        int take,
+        CancellationToken cancellationToken);
+
+    Task<MarketplaceStorefrontDetailRow?> GetStorefrontAsync(
+        long storefrontId,
+        CancellationToken cancellationToken);
+
+    Task<IReadOnlyList<StorefrontLocationRow>> ListStorefrontLocationsAsync(
+        CancellationToken cancellationToken);
+
+    Task<IReadOnlyList<MarketplaceCategoryRow>> ListMarketplaceCategoriesAsync(
         CancellationToken cancellationToken);
 
     Task<CommerceCartRow?> GetActiveCartAsync(
