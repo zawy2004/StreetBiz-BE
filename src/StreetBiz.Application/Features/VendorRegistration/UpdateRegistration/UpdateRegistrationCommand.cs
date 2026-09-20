@@ -44,8 +44,8 @@ public sealed class UpdateRegistrationCommandValidator : AbstractValidator<Updat
             .Must(t => VendorTypes.All.Contains(t))
             .WithMessage(RegMessages.SelectVendorType);
         RuleFor(x => x.DisplayName)
-            .NotEmpty().WithMessage("Business/display name is required.")
-            .MaximumLength(180).WithMessage("Business/display name must be 180 characters or fewer.");
+            .NotEmpty().WithMessage(RegMessages.DisplayNameRequired)
+            .MaximumLength(180).WithMessage(RegMessages.DisplayNameTooLong);
         RuleFor(x => x.DeclaredAddress)
             .NotEmpty()
             .When(x => x.VendorType == VendorTypes.FixedStorefront)
@@ -91,7 +91,7 @@ public sealed class UpdateRegistrationCommandHandler(
         if (!RegistrationStatuses.Editable.Contains(registration.RegistrationStatus))
         {
             throw new DomainRuleException(
-                string.Format(RegMessages.NotEditable, registration.RegistrationStatus));
+                string.Format(RegMessages.NotEditable, RegMessages.StatusWord(registration.RegistrationStatus)));
         }
 
         await units.EnsureWardAsync(request.WardUnitId, cancellationToken);

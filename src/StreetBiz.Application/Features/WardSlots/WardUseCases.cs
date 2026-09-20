@@ -31,7 +31,7 @@ public sealed class WardActorResolver(IUserAccountRepository users) : IWardActor
         return new WardActor(
             user.Id,
             user.WardUnitId.Value,
-            user.FullName ?? $"Ward officer #{user.Id}");
+            user.FullName ?? $"Cán bộ #{user.Id}");
     }
 }
 
@@ -42,10 +42,10 @@ public sealed class WardActorContext(
     public async Task<WardActor> RequireAsync(CancellationToken cancellationToken)
     {
         var userId = currentUser.UserId
-            ?? throw new AuthenticationException("No active session.");
+            ?? throw new AuthenticationException(AppMessages.SessionExpired);
 
         return await actors.ResolveAsync(userId, cancellationToken)
-            ?? throw new ForbiddenException("The active account is not a ward authority.");
+            ?? throw new ForbiddenException("Tài khoản hiện tại không phải cán bộ phường.");
     }
 }
 
@@ -71,7 +71,7 @@ public sealed class ListWardCasesQueryValidator : AbstractValidator<ListWardCase
     public ListWardCasesQueryValidator()
     {
         RuleFor(x => x.Kind).Must(WardCaseKinds.IsValid)
-            .WithMessage("Unsupported ward case kind.");
+            .WithMessage("Loại hồ sơ không hợp lệ.");
         RuleFor(x => x.Page).InclusiveBetween(1, 10_000);
     }
 }
@@ -96,7 +96,7 @@ public sealed class GetWardCaseQueryValidator : AbstractValidator<GetWardCaseQue
     public GetWardCaseQueryValidator()
     {
         RuleFor(x => x.Kind).Must(WardCaseKinds.IsValid)
-            .WithMessage("Unsupported ward case kind.");
+            .WithMessage("Loại hồ sơ không hợp lệ.");
         RuleFor(x => x.Id).GreaterThan(0);
     }
 }
@@ -126,12 +126,12 @@ public sealed class DecideWardCaseCommandValidator : AbstractValidator<DecideWar
     public DecideWardCaseCommandValidator()
     {
         RuleFor(x => x.Kind).Must(WardCaseKinds.IsValid)
-            .WithMessage("Unsupported ward case kind.");
+            .WithMessage("Loại hồ sơ không hợp lệ.");
         RuleFor(x => x.Id).GreaterThan(0);
         RuleFor(x => x.Reason).NotEmpty().MaximumLength(500);
         RuleFor(x => x.ExpectedStatus).NotEmpty().MaximumLength(30);
         RuleFor(x => x).Must(x => WardCaseKinds.SupportsDecision(x.Kind, x.Decision))
-            .WithMessage("The decision is not supported for this ward case kind.");
+            .WithMessage("Quyết định không áp dụng cho loại hồ sơ này.");
     }
 }
 
@@ -238,6 +238,13 @@ public static class WardCaseKinds
     public const string Proposals = "proposals";
     public const string Conflicts = "conflicts";
     public const string Transfers = "transfers";
+
+    // Business-registration review deliberately does NOT live here: it goes through
+    // WardComplianceController/WardComplianceService's dedicated /ward/enrollments
+    // endpoints instead, which enforce the BR-41 identity-verification gate
+    // (ConfirmIdentityAsync must run before APPROVE). A registrations case-kind was
+    // briefly added here in parallel and has been removed to avoid a second,
+    // gate-less path to approve a BusinessRegistration.
 
     public static bool IsValid(string kind) =>
         kind is Proposals or Conflicts or Transfers;

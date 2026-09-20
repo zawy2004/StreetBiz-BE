@@ -327,14 +327,20 @@ public sealed class WardSlots(
             created_at = Now
         });
 
-    private async Task NotifyVendor(long vendorId, string kind, long id, string reason, CancellationToken ct)
+    private async Task NotifyVendor(
+        long vendorId,
+        string kind,
+        long id,
+        string reason,
+        CancellationToken ct,
+        string title = "Kết quả xử lý hồ sơ vị trí")
     {
         var userId = await db.Vendors.Where(x => x.vendor_id == vendorId).Select(x => x.user_id).SingleAsync(ct);
         db.Notifications.Add(new Notification
         {
             user_id = userId,
             notification_type = "WARD_REVIEW",
-            title = "Kết quả xử lý hồ sơ vị trí",
+            title = title,
             body = reason,
             related_entity_type = kind,
             related_entity_id = id,

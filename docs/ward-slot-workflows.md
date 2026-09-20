@@ -127,14 +127,22 @@ dotnet run --project src/StreetBiz.API --launch-profile https
 npm run dev
 ```
 
-Open http://localhost:5173/ward/inbox/reviews. The legacy /ward-reviews URL
-redirects here. This workspace uses real Backend
-authentication independently from the existing mock login screens.
-In a Vite development build, choose "Khóa phát triển cục bộ" and enter the
-WardDevelopment:AccessKey configured above; alternatively paste a valid access token.
-Only the token is stored in sessionStorage, not the development key.
-The three tabs load real database records and show an empty state when none exist.
-The existing Ward dashboard and inbox link to this real-data workspace.
+Sign in through the ordinary login screen as a seeded WARD_AUTHORITY account
+(`0983000001` / `Password123!`, see docs/dev-test-accounts.md) and open
+http://localhost:5173/ward/inbox. `/ward/inbox/reviews` and the legacy
+/ward-reviews URL both still resolve here.
+
+The workspace shares the application's own session: the bearer token comes from
+the signed-in user, an expired access token is refreshed and the call retried,
+and a revoked session drops straight back to the sign-in screen. It no longer has
+an auth system of its own — the earlier "Kết nối cán bộ phường" form, its
+sessionStorage token and the `WardDevelopment:AccessKey` path are gone from the
+frontend. (`POST /api/dev/ward-session` still exists on the backend for
+Development/Testing, but nothing in the UI calls it.)
+
+An account that is not an ACTIVE ward officer with a ward assigned gets a 403 from
+WardActorResolver, which the UI renders as "Tài khoản chưa được gán phường".
+The tabs load real database records and show an empty state when none exist.
 
 Change Cors:AllowedOrigins if the frontend runs on another origin; the development
 defaults allow localhost:5173 and 127.0.0.1:5173. Do not enable wildcard origins.

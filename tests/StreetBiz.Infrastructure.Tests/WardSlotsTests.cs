@@ -218,6 +218,11 @@ public sealed class WardSlotsTests
             f.Service.ListAsync(f.Actor, "unknown", 1, default))).Status);
     }
 
+    // Business-registration review ("registrations" case kind) was removed from WardSlots:
+    // it duplicated WardComplianceController's dedicated /ward/enrollments endpoints without
+    // that path's BR-41 identity-verification gate. See WardComplianceServiceTests.cs for the
+    // registration-review test coverage instead.
+
     private sealed class Fixture : IDisposable
     {
         public SqliteConnection Connection { get; } = new("Data Source=:memory:");

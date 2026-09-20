@@ -11,7 +11,8 @@ AI / Storefront use cases are the next increments.
 |---|---|
 | AUTH-02 Send OTP | `POST /api/auth/send-otp` |
 | AUTH-01 Register | `POST /api/auth/register` |
-| AUTH-03 Sign in | `POST /api/auth/login` |
+| AUTH-03 Sign in | `POST /api/auth/login` (phone + password) |
+| AUTH-03 Sign in with OTP | `POST /api/auth/login-otp` (passwordless, FE-01 / BR-03) |
 | (token rotation) | `POST /api/auth/refresh` |
 | AUTH-04 Sign out | `POST /api/auth/logout` (auth) |
 | AUTH-07 Change password | `POST /api/auth/change-password` (auth) |
@@ -31,7 +32,11 @@ Vendor Business Registration (REG-01…05):
 | REG-03 Registration detail | `GET /api/vendor/registrations/{id}` (auth) → registration + evidence |
 | REG-04 Update & re-submit | `PUT /api/vendor/registrations/{id}` (auth) |
 | REG-05 Withdraw | `POST /api/vendor/registrations/{id}/withdraw` (auth) |
-| Evidence download | `GET /api/uploads/evidence/{ownerUserId}/{file}` (auth: owner, WARD_AUTHORITY, PLATFORM_ADMIN) |
+| Evidence download | `GET /api/uploads/evidence/{ownerUserId}/{file}` (auth: owner, or the reviewing ward officer) |
+
+PLATFORM_ADMIN is deliberately **not** on that list: BR-44 keeps the platform
+administrator out of registration identity evidence entirely. `UploadsController`
+enforces this and `UploadsControllerTests` asserts it.
 
 Reference data for the ward pickers (anonymous, because a guest picks a ward
 before an account exists):
@@ -113,7 +118,7 @@ dotnet build StreetBiz.Backend.sln
 dotnet run --project src/StreetBiz.API
 ~~~
 
-The `http` profile listens on **http://localhost:5000**, which is what
+The `http` profile listens on **http://localhost:5023**, which is what
 `StreetBiz-FE/.env` points `VITE_API_BASE_URL` at. HTTPS redirection is disabled
 in Development so the SPA's plain-HTTP preflight is not answered with a 307.
 

@@ -52,7 +52,7 @@ public sealed class SubmitEvidenceCommandHandler(
         // BR-62: documents can only be added while the application is still editable.
         if (!RegistrationStatuses.Editable.Contains(registration.RegistrationStatus))
         {
-            throw new DomainRuleException(string.Format(RegMessages.NotEditable, registration.RegistrationStatus));
+            throw new DomainRuleException(string.Format(RegMessages.NotEditable, RegMessages.StatusWord(registration.RegistrationStatus)));
         }
 
         // The file must be one this caller uploaded, not another user's document.

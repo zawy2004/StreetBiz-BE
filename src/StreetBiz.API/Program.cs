@@ -49,6 +49,7 @@ builder.Services.AddSwaggerGen(options =>
 builder.Services.AddProblemDetails();
 builder.Services.AddWardApi();
 builder.Services.AddCommunityApi();
+builder.Services.AddAuthRateLimits(builder.Environment);
 // ai/vendor-assistant calls a paid LLM per request; an earlier draft left it [AllowAnonymous]
 // with no limit. Now [Authorize]-only, plus this per-account cap.
 builder.Services.AddRateLimiter(options =>

@@ -13,13 +13,13 @@ public sealed class ChangePasswordCommandValidator : AbstractValidator<ChangePas
 {
     public ChangePasswordCommandValidator()
     {
-        RuleFor(x => x.CurrentPassword).NotEmpty().WithMessage("Your current password is required.");
+        RuleFor(x => x.CurrentPassword).NotEmpty().WithMessage(AppMessages.CurrentPasswordRequired);
         RuleFor(x => x.NewPassword)
             .Must(p => AuthValidationRules.PasswordRegex().IsMatch(p))
-            .WithMessage("The new password does not meet the security requirements.");
+            .WithMessage(AppMessages.NewPasswordPolicy);
         RuleFor(x => x.NewPassword)
             .NotEqual(x => x.CurrentPassword)
-            .WithMessage("The new password must be different from the current password.");
+            .WithMessage(AppMessages.NewPasswordMustDiffer);
     }
 }
 
@@ -31,7 +31,7 @@ public sealed class ChangePasswordCommandHandler(
 {
     public async Task<Unit> Handle(ChangePasswordCommand request, CancellationToken cancellationToken)
     {
-        var userId = currentUser.UserId ?? throw new AuthenticationException("No active session.");
+        var userId = currentUser.UserId ?? throw new AuthenticationException(AppMessages.SessionExpired);
         var user = await userRepository.GetByIdAsync(userId, cancellationToken)
             ?? throw new NotFoundException("Account not found.");
 

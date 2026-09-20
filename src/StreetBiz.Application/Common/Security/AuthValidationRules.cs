@@ -16,4 +16,19 @@ public static partial class AuthValidationRules
 
     [GeneratedRegex(@"^\d{6}$")]
     public static partial Regex OtpRegex();
+
+    /// <summary>
+    /// CR-06 / BR-04: `+84905000001` and `0905000001` are the same subscriber, so both
+    /// collapse to the local 0-prefixed form before a number is stored or looked up.
+    /// Without this the unique index on phone_number would happily hold both as two
+    /// separate accounts. Input that is not a recognised Vietnamese number is returned
+    /// trimmed and unchanged — validation, not this method, decides whether to reject it.
+    /// </summary>
+    public static string NormalizePhone(string? phoneNumber)
+    {
+        var value = phoneNumber?.Trim() ?? string.Empty;
+        return value.StartsWith("+84", StringComparison.Ordinal) && value.Length == 12
+            ? string.Concat("0", value.AsSpan(3))
+            : value;
+    }
 }

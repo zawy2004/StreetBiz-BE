@@ -3,7 +3,7 @@
 # Thứ tự: 1 → 2 → 3, sau đó các request có Bearer token.
 # OTP không gửi SMS thật: đọc dòng [DEV-SMS] trong cửa sổ console của API rồi dán vào @otp.
 
-@host = http://localhost:5000
+@host = http://localhost:5023
 @phone = 0905123456
 @password = Str0ng!Pass
 @otp = 000000

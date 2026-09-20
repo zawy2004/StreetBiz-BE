@@ -26,33 +26,52 @@ Phần mềm cần có:
 
 ### 1.1 Tạo database local
 
-Repo **không có sẵn script tạo bảng**: StreetBizDB theo hướng database-first, và
-migration `InitialBaseline` cố ý để trống (xem `docs/migration-guide.md`). Script
-dưới đây sinh schema từ model EF, tạo DB trên LocalDB và nạp dữ liệu tham chiếu
-(4 vai trò + 3 phường):
+StreetBizDB theo hướng database-first, và migration `InitialBaseline` cố ý để
+trống (xem `docs/migration-guide.md`). Schema chuẩn nằm ở
+`db/StreetBiz_SQL_Server.sql`. Script dưới đây tạo lại toàn bộ database trên
+LocalDB từ schema đó, rồi nạp dữ liệu tham chiếu và bộ dữ liệu demo:
 
 ```powershell
 cd StreetBiz-BE
-powershell -ExecutionPolicy Bypass -File scripts/setup-local-db.ps1
+powershell -ExecutionPolicy Bypass -File scripts/setup-local-db.ps1 -Recreate
 ```
 
-Kết quả đúng: dòng cuối là `Done. Wards available: 3`. Script chạy lại nhiều
-lần vẫn an toàn: nếu đã có bảng, nó giữ nguyên schema và chỉ bổ sung dữ liệu còn
-thiếu.
+Kết quả đúng:
 
-> Hãy **tắt API** trước khi chạy script lần đầu. Bước sinh schema phải build
-> project API, và build sẽ lỗi nếu API đang chạy (file `.exe` bị khoá).
+```
+tables=50  triggers=5  views=2  checks=77  migrations=2
+Wards available: 5
+accounts=10  registrations=9  slots=27  contracts=2  storefronts=2  orders=5
+```
 
-Schema sinh ra **không có** CHECK constraint, trigger và 2 view của DB thật. Vì
-vậy chỉ dùng DB này để phát triển local, và chạy thêm một lượt trên DB thật của
-nhóm trước khi nộp.
+> ⚠️ `-Recreate` **xoá toàn bộ dữ liệu** của StreetBizDB rồi dựng lại. Không có
+> `-Recreate`, script từ chối đụng vào một database đã có bảng. Sao lưu trước nếu
+> cần:
+> `sqlcmd -S "(localdb)\MSSQLLocalDB" -E -Q "BACKUP DATABASE [StreetBizDB] TO DISK='C:\Temp\StreetBizDB.bak' WITH INIT"`
+
+> Hãy **tắt API** trước khi chạy: một kết nối đang mở sẽ chặn `DROP DATABASE`.
+
+Khác với trước đây, schema này có **đầy đủ** 5 trigger, 2 view và 77 CHECK
+constraint của DB thật — nên DB local giờ từ chối đúng những dữ liệu mà DB thật
+từ chối (ví dụ hai hợp đồng trùng ngày trên cùng một ô, hoặc `unit_type` ngoài
+PROVINCE/DISTRICT/WARD). Các script seed chạy theo thứ tự:
+
+| Thứ tự | File | Nội dung |
+|---|---|---|
+| 1 | `db/StreetBiz_SQL_Server.sql` | Schema: 49 bảng, 5 trigger, 2 view, CHECK constraint |
+| 2 | `db/StreetBiz_SQL_Server_Data.sql` | 4 vai trò, 10 đơn vị hành chính (5 phường), 10 loại vi phạm |
+| 3 | `docs/dev-seed-demo.sql` | 10 tài khoản, 9 hồ sơ đăng ký đủ 7 trạng thái, ô vỉa hè, hợp đồng, gian hàng, đơn hàng |
+| 4 | `db/post-schema-migrations.sql` | Cột `Orders.storefront_address_snapshot` + đóng dấu `__EFMigrationsHistory` |
+
+Tài khoản đăng nhập: xem [dev-test-accounts.md](dev-test-accounts.md) — tất cả
+dùng mật khẩu `Password123!`.
 
 ### 1.2 Cấu hình frontend
 
 Trong `StreetBiz-FE/.env`:
 
 ```dotenv
-VITE_API_BASE_URL=http://localhost:5000/api
+VITE_API_BASE_URL=http://localhost:5023/api
 VITE_USE_MOCK_API=false
 ```
 
@@ -72,8 +91,8 @@ cd StreetBiz-BE
 dotnet run --project src/StreetBiz.API 2>&1 | tee api.log
 ```
 
-Chờ đến dòng `Now listening on: http://localhost:5000`. Swagger ở
-http://localhost:5000/swagger.
+Chờ đến dòng `Now listening on: http://localhost:5023`. Swagger ở
+http://localhost:5023/swagger.
 
 **Terminal 2: Frontend:**
 
@@ -126,15 +145,21 @@ cd StreetBiz-BE
 bash scripts/e2e-auth-onboarding.sh
 ```
 
-Kỳ vọng: dòng cuối `RESULT: 44 passed, 0 failed`. Script tự tạo 2 tài khoản
+Kỳ vọng: dòng cuối `RESULT: 59 passed, 0 failed`. Script tự tạo 2 tài khoản
 vendor với số điện thoại ngẫu nhiên, rồi chạy toàn bộ luồng, gồm cả các trường
 hợp lỗi:
 
 - đăng ký, OTP cooldown (429), số đã đăng ký (409), phường không tồn tại (400);
 - đăng nhập, quên mật khẩu trả kết quả giống nhau cho mọi số điện thoại;
+- đăng nhập bằng OTP (mã dùng một lần), số `+84…` vào đúng tài khoản `0…`;
 - upload file hợp lệ / giả mạo / quá 5 MB, người khác không tải được file;
 - nộp, xem chi tiết, BR-09 khi gửi lại, rút hồ sơ;
+- Phường xét duyệt hồ sơ: mở hàng chờ, yêu cầu bổ sung, chặn ghi đè khi hồ sơ đã
+  đổi trạng thái (409), vendor không vào được hàng chờ của Phường (403);
 - token bị thu hồi (đăng xuất, đăng xuất thiết bị khác) bị từ chối **ngay lập tức**.
+
+Script cần một tài khoản cán bộ phường 10 đang tồn tại (mặc định `0983000001` do
+`docs/dev-seed-demo.sql` tạo); đổi bằng biến `WARD_PHONE` / `WARD_PW`.
 
 ---
 
@@ -229,37 +254,46 @@ nhập một tài khoản. Gọi là A và B.
 
 ---
 
-## 5. Giả lập Phường xét duyệt hồ sơ
+## 5. Phường xét duyệt hồ sơ (REG-06)
 
-API **chưa có** màn hình/endpoint cho cán bộ phường xét duyệt (module
-ward-administration vẫn dùng mock). Để test các trạng thái sau khi xét duyệt, hãy
-cập nhật trực tiếp trong DB (SSMS, Azure Data Studio, hoặc VS Code extension
-"SQL Server"). Kết nối tới `(localdb)\MSSQLLocalDB`, database `StreetBizDB`:
+Đăng nhập bằng tài khoản **cán bộ phường** (xem
+[dev-test-accounts.md](dev-test-accounts.md)) — mỗi cán bộ chỉ thấy hồ sơ thuộc
+phường mình:
 
-```sql
--- Xem hồ sơ gần nhất
-SELECT TOP 10 registration_id, display_name, registration_status FROM BusinessRegistrations ORDER BY registration_id DESC;
+| SĐT | Phường |
+|---|---|
+| 0983000001 | Phường Hải Châu 1 (ward 10) |
+| 0983000002 | Phường Thanh Khê Đông (ward 11) |
+| 0983000003 | Phường An Hải Bắc (ward 12) |
 
--- Phường yêu cầu bổ sung
-UPDATE BusinessRegistrations
-SET registration_status = 'MORE_INFORMATION_REQUIRED',
-    review_decision_reason = N'Ảnh CCCD bị mờ, vui lòng chụp lại mặt trước.',
-    reviewed_at = SYSUTCDATETIME()
-WHERE registration_id = 1;   -- đổi id
+Vào tab **Hộp duyệt** (`/ward/inbox`) → tab **Hồ sơ đăng ký**, mở một hồ sơ rồi
+bấm một trong các nút: **Nhận xét duyệt** (chuyển sang ĐANG XÉT DUYỆT),
+**Phê duyệt**, **Từ chối**, **Yêu cầu bổ sung**. Mọi quyết định đều bắt buộc
+nhập lý do.
 
--- Duyệt / Từ chối
-UPDATE BusinessRegistrations SET registration_status = 'APPROVED', reviewed_at = SYSUTCDATETIME() WHERE registration_id = 1;
-UPDATE BusinessRegistrations SET registration_status = 'REJECTED', review_decision_reason = N'Sai địa chỉ', reviewed_at = SYSUTCDATETIME() WHERE registration_id = 1;
-```
+> Chỉ cần đăng nhập bằng tài khoản cán bộ phường là dùng được ngay. Trước đây màn
+> này bắt dán access token vào một form riêng (màn "Kết nối cán bộ phường"); form
+> đó đã bị bỏ — hàng đợi hồ sơ nay dùng chung phiên đăng nhập của ứng dụng.
+> Nếu tài khoản chưa được gán phường, màn hình báo "Tài khoản chưa được gán
+> phường" thay vì lỗi chung chung.
 
-Kiểm tra trên giao diện (F5 trang chi tiết sau mỗi lần cập nhật):
+| # | Thao tác | Kết quả mong đợi |
+|---|---|---|
+| 1 | Mở tab **Hồ sơ đăng ký** | Chỉ thấy hồ sơ của phường mình; hồ sơ **Ưu tiên** (fast-track) nằm trên cùng |
+| 2 | Mở một hồ sơ thiếu giấy tờ bắt buộc | Mục **Điều kiện cần xử lý** báo thiếu giấy tờ; **không** có nút Phê duyệt, vẫn có Yêu cầu bổ sung / Từ chối (BR-07) |
+| 3 | Mở hồ sơ đủ giấy tờ | Mục **Giấy tờ minh chứng** hiện đúng ảnh vendor đã nộp; có đủ 4 nút |
+| 4 | Bấm **Yêu cầu bổ sung**, nhập lý do | Trạng thái → CHỜ BỔ SUNG GIẤY TỜ; vendor thấy lý do ở màn chi tiết hồ sơ và nhận thông báo |
+| 5 | Mở cùng hồ sơ ở 2 tab, quyết định ở tab 1 rồi quyết định ở tab 2 | Tab 2 báo lỗi "Hồ sơ đã thay đổi…" (409), không ghi đè |
+| 6 | Đăng nhập cán bộ phường khác, mở URL hồ sơ vừa xem | Không tìm thấy (404) |
+
+Kiểm tra phía vendor (F5 trang chi tiết sau mỗi lần xét duyệt):
 
 | Trạng thái | Kết quả mong đợi |
 |---|---|
 | `MORE_INFORMATION_REQUIRED` | Nhãn **CẦN BỔ SUNG**, thẻ đỏ **Phản hồi từ Phường** hiện lý do; có **Chỉnh sửa** và **Rút hồ sơ**. Sửa + tải thêm ảnh → gửi lại → nhãn về **ĐÃ NỘP**, ảnh mới xuất hiện trong mục giấy tờ |
 | `MORE_INFORMATION_REQUIRED` khi đang có **hồ sơ khác** ở trạng thái SUBMITTED | Gửi lại bị chặn: "Bạn đang có một hồ sơ chờ xét duyệt…" (BR-09) |
 | `UNDER_REVIEW` | Nhãn **ĐANG XÉT**; không có Chỉnh sửa, vẫn có **Rút hồ sơ** |
-| `APPROVED` (Cửa hàng cố định) | Nhãn **ĐÃ DUYỆT**, ngày xét duyệt; mục **Tiếp theo** có nút thuê ô liền kề / cập nhật địa chỉ (hai màn này vẫn là mock); không có Chỉnh sửa, vẫn có **Rút hồ sơ** (BE chặn nếu đã có hợp đồng thuê, BR-16) |
+| `APPROVED` (Cửa hàng cố định) | Nhãn **ĐÃ DUYỆT**, ngày xét duyệt; không có Chỉnh sửa, vẫn có **Rút hồ sơ** (BE chặn nếu đã có hợp đồng thuê, BR-16). Mục **Tiếp theo** (thuê ô liền kề / cập nhật địa chỉ) **bị ẩn khi chạy với Backend** — hai màn đó chưa có API client, nên ẩn thay vì dẫn tới ngõ cụt |
 | `REJECTED` | Nhãn **TỪ CHỐI**, hiện lý do; không có nút thao tác |
 
 ---
@@ -270,7 +304,7 @@ Kiểm tra trên giao diện (F5 trang chi tiết sau mỗi lần cập nhật):
   extension *REST Client*; Visual Studio 2022 hỗ trợ sẵn). Bấm **Send Request**
   lần lượt từ 0 → 3, dán OTP từ terminal vào biến `@otp`. Các request phía sau
   tự lấy token từ request đăng nhập.
-- **Swagger:** http://localhost:5000/swagger → gọi `POST /api/auth/login`, copy
+- **Swagger:** http://localhost:5023/swagger → gọi `POST /api/auth/login`, copy
   `accessToken`, bấm nút **Authorize** ở đầu trang, dán token (không cần gõ
   `Bearer`), rồi gọi các endpoint cần đăng nhập. Endpoint upload có nút chọn file.
 
@@ -292,7 +326,7 @@ Bảng mã lỗi mà FE dựa vào:
 
 | Hiện tượng | Nguyên nhân / cách xử lý |
 |---|---|
-| `Failed to bind to address http://127.0.0.1:5000: address already in use` | Một API khác đang chạy. PowerShell: `Get-NetTCPConnection -LocalPort 5000 -State Listen` để lấy `OwningProcess`, rồi `Stop-Process -Id <id>` |
+| `Failed to bind to address http://127.0.0.1:5023: address already in use` | Một API khác đang chạy. PowerShell: `Get-NetTCPConnection -LocalPort 5023 -State Listen` để lấy `OwningProcess`, rồi `Stop-Process -Id <id>` |
 | FE báo "Không kết nối được máy chủ", Console có lỗi **CORS** | API chưa chạy, hoặc chạy bản cũ. Ở Development, BE chấp nhận mọi cổng `localhost`; môi trường khác phải thêm địa chỉ FE vào `Cors:AllowedOrigins` |
 | Ô chọn phường trống / báo lỗi | Chưa seed phường → chạy lại `scripts/setup-local-db.ps1` |
 | Lỗi 500 khi đăng ký | Thiếu bảng `Roles` / DB trống → chạy `scripts/setup-local-db.ps1` |
@@ -306,10 +340,13 @@ Bảng mã lỗi mà FE dựa vào:
 ## 8. Giới hạn hiện tại (không phải lỗi)
 
 - **SMS:** OTP chỉ in ra console (`LoggingSmsSender`), chưa nối nhà cung cấp SMS.
-- **Xét duyệt của Phường:** chưa có API, phải giả lập bằng SQL (mục 5).
 - **Lưu file:** giấy tờ lưu trên ổ đĩa (`App_Data/uploads`), phù hợp chạy một
   server. Khi triển khai nhiều server cần đổi `IFileStorage` sang blob storage.
 - **OCR / AI kiểm tra giấy tờ:** giao diện có gợi ý, nhưng BE chưa xử lý
-  (`ocrExtractedData` luôn là `null`).
+  (`ocrExtractedData` là dữ liệu client gửi lên, không được kiểm chứng).
+- **Xoá giấy tờ hết hạn lưu trữ:** mỗi giấy tờ đã có `retention_expires_at`
+  (2 năm, BR-47) nhưng chưa có job nào dọn file quá hạn.
+- **Giới hạn tần suất:** ở Development được nới rộng để không cản trở demo và
+  script e2e; số liệu thật chỉ áp dụng ngoài Development.
 - Các module khác của FE (thuê ô, phí, cửa hàng…) vẫn chạy bằng dữ liệu mock,
   kể cả khi `VITE_USE_MOCK_API=false`.

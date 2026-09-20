@@ -32,4 +32,11 @@ public interface IBusinessRegistrationRepository
     /// this to be its own affirmative action, not folded into a general terms checkbox.
     /// </summary>
     Task RecordBiometricConsentAsync(long registrationId, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// PRI-02/PRI-07: true when an evidence file uploaded by <paramref name="ownerUserId"/> is
+    /// attached to a registration in <paramref name="wardUnitId"/>, i.e. the ward officer
+    /// reviewing that ward is entitled to open it.
+    /// </summary>
+    Task<bool> EvidenceBelongsToWardAsync(long ownerUserId, string fileUrl, int wardUnitId, CancellationToken cancellationToken);
 }
