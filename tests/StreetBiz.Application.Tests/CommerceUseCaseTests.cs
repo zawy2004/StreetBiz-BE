@@ -11,6 +11,25 @@ namespace StreetBiz.Application.Tests;
 public sealed class CommerceUseCaseTests
 {
     [Fact]
+    public async Task Sql_order_timestamps_are_serialized_as_utc_not_local_wall_clock()
+    {
+        var sqlTime = new DateTime(2026, 9, 19, 10, 30, 0, DateTimeKind.Unspecified);
+        var row = Order() with { CreatedAt = sqlTime, PlacedAt = sqlTime,
+            StorefrontAddress = "12 Nguyễn Văn Linh, Hải Châu, Đà Nẵng",
+            RefundRequestedAt = sqlTime, RefundCompletedAt = sqlTime,
+            History = [new(1, null, "PLACED", null, sqlTime)] };
+        var repository = new Mock<ICommerceRepository>();
+        repository.Setup(x => x.GetCustomerOrderAsync(7, row.OrderId, It.IsAny<CancellationToken>())).ReturnsAsync(row);
+        var dto = await new GetCustomerOrderQueryHandler(CustomerContext(), repository.Object)
+            .Handle(new(row.OrderId), default);
+        Assert.Equal(DateTimeKind.Utc, dto.CreatedAt.Kind);
+        Assert.Equal(DateTimeKind.Utc, dto.History[0].ChangedAt.Kind);
+        Assert.Equal(DateTimeKind.Utc, dto.RefundCompletedAt!.Value.Kind);
+        Assert.Equal(sqlTime.Ticks, dto.CreatedAt.Ticks);
+        Assert.Equal("12 Nguyễn Văn Linh, Hải Châu, Đà Nẵng", dto.Storefront.Address);
+    }
+
+    [Fact]
     public async Task Add_cart_item_uses_the_verified_customer_and_normalizes_the_note()
     {
         var repository = new Mock<ICommerceRepository>();
@@ -47,6 +66,46 @@ public sealed class CommerceUseCaseTests
         result.OrderStatus.Should().Be(OrderStatuses.Placed);
         result.PaymentProvider.Should().Be(PaymentProviders.Momo);
         repository.VerifyAll();
+    }
+
+    [Fact]
+    public async Task Checkout_returns_the_flat_payment_contract_and_uses_header_key()
+    {
+        var row = Order(OrderStatuses.PendingPayment) with
+        {
+            PaymentTransactionId = 42,
+            PaymentIdempotencyKey = "checkout-header-key",
+            PaymentAmount = 50_000,
+            PaymentProvider = PaymentProviders.Momo,
+            PaymentStatus = "PENDING",
+        };
+        var repository = new Mock<ICommerceRepository>();
+        repository.Setup(x => x.CheckoutAsync(
+                7, 3, PaymentProviders.Momo, "checkout-header-key",
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OrderMutationResult(OrderMutationOutcome.Updated, row));
+        var gateway = new Mock<IPaymentGateway>();
+        gateway.Setup(x => x.CreateCheckoutAsync(
+                It.Is<PaymentGatewayCheckoutRequest>(request =>
+                    request.TransactionId == 42
+                    && request.Amount == 50_000
+                    && request.IdempotencyKey == "checkout-header-key"),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PaymentGatewayCheckoutResult(
+                "streetbiz://payment/momo", null));
+
+        var result = await new CheckoutOrderCommandHandler(
+                CustomerContext(), repository.Object, gateway.Object)
+            .Handle(new CheckoutOrderCommand(
+                3, "momo", "  checkout-header-key  "), default);
+
+        result.OrderId.Should().Be(row.OrderId);
+        result.OrderStatus.Should().Be(OrderStatuses.PendingPayment);
+        result.PaymentTransactionId.Should().Be(42);
+        result.Amount.Should().Be(50_000);
+        result.PaymentUrl.Should().Be("streetbiz://payment/momo");
+        repository.VerifyAll();
+        gateway.VerifyAll();
     }
 
     [Fact]

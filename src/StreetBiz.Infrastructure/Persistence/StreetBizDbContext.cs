@@ -437,6 +437,7 @@ public partial class StreetBizDbContext : DbContext
                 .HasMaxLength(20)
                 .HasDefaultValue("PENDING_PAYMENT");
             entity.Property(e => e.rejection_reason).HasMaxLength(500);
+            entity.Property(e => e.storefront_address_snapshot).HasMaxLength(500);
             entity.Property(e => e.subtotal_amount).HasColumnType("decimal(18, 0)");
             entity.Property(e => e.total_amount).HasColumnType("decimal(18, 0)");
 

@@ -59,6 +59,22 @@ public interface ICommerceRepository
         string idempotencyKey,
         CancellationToken cancellationToken);
 
+    Task<OrderMutationResult> CheckoutAsync(
+        long customerUserId,
+        long cartId,
+        string provider,
+        string idempotencyKey,
+        CancellationToken cancellationToken);
+
+    Task SetPaymentProviderReferenceAsync(
+        long transactionId,
+        string providerReference,
+        CancellationToken cancellationToken);
+
+    Task<PaymentCallbackMutationResult> ApplyPaymentCallbackAsync(
+        PaymentCallbackData callback,
+        CancellationToken cancellationToken);
+
     Task<OrderMutationResult> ConfirmSandboxPaymentAsync(
         long customerUserId,
         long orderId,

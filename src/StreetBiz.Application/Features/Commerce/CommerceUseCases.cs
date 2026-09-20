@@ -536,6 +536,10 @@ public sealed class GetSalesSummaryQueryHandler(
 
 internal static class CommerceMapping
 {
+    // SQL datetime2 stores UTC values without DateTime.Kind. Preserve their instant
+    // in JSON instead of making browsers interpret UTC clock time as local time.
+    private static DateTime Utc(DateTime value) => DateTime.SpecifyKind(value, DateTimeKind.Utc);
+    private static DateTime? Utc(DateTime? value) => value.HasValue ? Utc(value.Value) : null;
     public static MarketplaceMenuItemDto ToDto(this MarketplaceMenuItemRow row) => new(
         row.MenuItemId, row.StorefrontId, row.StorefrontName, row.ItemName,
         row.Description, row.ImageUrl, row.UnitPrice, row.AvailabilityStatus,
@@ -549,23 +553,28 @@ internal static class CommerceMapping
         row.Items.Select(item => new CartItemDto(
             item.CartItemId, item.MenuItemId, item.ItemName, item.ImageUrl,
             item.UnitPrice, item.AvailabilityStatus, item.Quantity, item.Note)).ToArray(),
-        row.Subtotal);
+        row.Subtotal)
+        { StorefrontAddress = row.StorefrontAddress };
 
     public static OrderDto ToDto(this CommerceOrderRow row) => new(
         row.OrderId, row.OrderCode, row.CustomerUserId, row.CustomerName,
         row.StorefrontId, row.StorefrontName, row.OrderStatus, row.SubtotalAmount,
         row.TotalAmount, row.RejectionReason, row.PaymentProvider, row.PaymentStatus,
         row.RefundAmount, row.RefundReason, row.RefundStatus,
-        row.RefundRequestedAt, row.RefundCompletedAt,
-        row.PlacedAt, row.CompletedAt, row.CreatedAt,
+        Utc(row.RefundRequestedAt), Utc(row.RefundCompletedAt),
+        Utc(row.PlacedAt), Utc(row.CompletedAt), Utc(row.CreatedAt),
         row.Items.Select(item => new OrderItemDto(
             item.OrderItemId, item.MenuItemId, item.ItemName, item.UnitPrice,
             item.Quantity, item.Note)).ToArray(),
         row.History.Select(item => new OrderHistoryDto(
-            item.HistoryId, item.FromStatus, item.ToStatus, item.Note, item.ChangedAt)).ToArray());
+            item.HistoryId, item.FromStatus, item.ToStatus, item.Note, Utc(item.ChangedAt))).ToArray())
+        {
+            StorefrontImageUrl = row.StorefrontImageUrl,
+            StorefrontAddress = row.StorefrontAddress,
+        };
 
     public static SalesSummaryDto ToDto(this CommerceSalesSummaryRow row) => new(
-        row.Period, row.FromUtc, row.ToUtc, row.CompletedOrderCount, row.GrossSales,
+        row.Period, Utc(row.FromUtc), Utc(row.ToUtc), row.CompletedOrderCount, row.GrossSales,
         row.RefundedAmount, row.NetSales,
         row.Orders.Select(order => order.ToDto()).ToArray());
 

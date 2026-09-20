@@ -9,6 +9,7 @@ using StreetBiz.Infrastructure.Common;
 using StreetBiz.Infrastructure.Geocoding;
 using StreetBiz.Infrastructure.Identity;
 using StreetBiz.Infrastructure.Notifications;
+using StreetBiz.Infrastructure.Payments;
 using StreetBiz.Infrastructure.Persistence;
 using StreetBiz.Infrastructure.Persistence.Repositories;
 using StreetBiz.Infrastructure.Security;
@@ -45,12 +46,16 @@ public static class DependencyInjection
 
         services.Configure<JwtSettings>(configuration.GetSection(JwtSettings.SectionName));
         services.Configure<StorageSettings>(configuration.GetSection(StorageSettings.SectionName));
+        services.Configure<PaymentGatewaySettings>(
+            configuration.GetSection(PaymentGatewaySettings.SectionName));
 
         services.AddSingleton<IDateTimeProvider, DateTimeProvider>();
         services.AddSingleton<IPasswordHasher, PasswordHasher>();
         services.AddSingleton<IJwtTokenService, JwtTokenService>();
         services.AddSingleton<ISmsSender, LoggingSmsSender>();
         services.AddSingleton<IFileStorage, LocalFileStorage>();
+        services.AddSingleton<IPaymentGateway, ConfiguredPaymentGateway>();
+        services.AddSingleton<IRefundGateway, ConfiguredRefundGateway>();
 
         services.AddScoped<IOtpService, OtpService>();
         services.AddScoped<IUserAccountRepository, UserAccountRepository>();
@@ -70,6 +75,8 @@ public static class DependencyInjection
         services.AddScoped<ICommunityVendorRepository, CommunityVendorRepository>();
         services.AddScoped<IPlatformAdministrationRepository, PlatformAdministrationRepository>();
         services.AddScoped<ICommerceRepository, CommerceRepository>();
+        services.AddScoped<StreetBiz.Application.Features.Commerce.ICommerceManagement, CommerceManagement>();
+        services.AddScoped<StreetBiz.Application.Features.Commerce.IOrderPaymentTesting, OrderPaymentTesting>();
 
         services.Configure<PermitSettings>(configuration.GetSection(PermitSettings.SectionName));
         services.AddSingleton<IPermitTokenService, PermitTokenService>();
