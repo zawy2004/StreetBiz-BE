@@ -529,7 +529,8 @@ internal static class CommerceMapping
         row.Items.Select(item => new CartItemDto(
             item.CartItemId, item.MenuItemId, item.ItemName, item.ImageUrl,
             item.UnitPrice, item.AvailabilityStatus, item.Quantity, item.Note)).ToArray(),
-        row.Subtotal);
+        row.Subtotal)
+        { StorefrontAddress = row.StorefrontAddress };
 
     public static OrderDto ToDto(this CommerceOrderRow row) => new(
         row.OrderId, row.OrderCode, row.CustomerUserId, row.CustomerName,
@@ -542,7 +543,11 @@ internal static class CommerceMapping
             item.OrderItemId, item.MenuItemId, item.ItemName, item.UnitPrice,
             item.Quantity, item.Note)).ToArray(),
         row.History.Select(item => new OrderHistoryDto(
-            item.HistoryId, item.FromStatus, item.ToStatus, item.Note, Utc(item.ChangedAt))).ToArray());
+            item.HistoryId, item.FromStatus, item.ToStatus, item.Note, Utc(item.ChangedAt))).ToArray())
+        {
+            StorefrontImageUrl = row.StorefrontImageUrl,
+            StorefrontAddress = row.StorefrontAddress,
+        };
 
     public static SalesSummaryDto ToDto(this CommerceSalesSummaryRow row) => new(
         row.Period, Utc(row.FromUtc), Utc(row.ToUtc), row.CompletedOrderCount, row.GrossSales,

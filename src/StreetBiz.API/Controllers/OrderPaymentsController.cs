@@ -2,6 +2,7 @@ using MediatR;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using StreetBiz.Application.Features.Commerce;
+using StreetBiz.API.Hubs;
 
 namespace StreetBiz.API.Controllers;
 
@@ -9,7 +10,7 @@ namespace StreetBiz.API.Controllers;
 [Authorize]
 [Route("api/orders")]
 public sealed class OrderPaymentsController(IHostEnvironment environment, IConfiguration configuration,
-    ISender sender, IOrderPaymentTesting testing) : ControllerBase
+    ISender sender, IOrderPaymentTesting testing, IOrderRealtimePublisher realtime) : ControllerBase
 {
     private bool SandboxEnabled => environment.IsDevelopment() && configuration.GetValue<bool>("Payments:SandboxEnabled");
 
@@ -26,7 +27,9 @@ public sealed class OrderPaymentsController(IHostEnvironment environment, IConfi
     {
         if (!SandboxEnabled) return NotFound();
         await testing.Fail(orderId, ct);
-        return Ok(await sender.Send(new GetCustomerOrderQuery(orderId), ct));
+        var result = await sender.Send(new GetCustomerOrderQuery(orderId), ct);
+        await realtime.PublishAsync(result, ct);
+        return Ok(result);
     }
 
     [HttpPost("{orderId:long}/refund/sandbox-confirm")]
@@ -34,6 +37,8 @@ public sealed class OrderPaymentsController(IHostEnvironment environment, IConfi
     {
         if (!SandboxEnabled) return NotFound();
         await testing.Refund(orderId, ct);
-        return Ok(await sender.Send(new GetCustomerOrderQuery(orderId), ct));
+        var result = await sender.Send(new GetCustomerOrderQuery(orderId), ct);
+        await realtime.PublishAsync(result, ct);
+        return Ok(result);
     }
 }

@@ -44,10 +44,27 @@ public static class AuthenticationSetup
                 // A signature-valid JWT is not enough: sign-out (AUTH-04), revoking a device
                 // (AUTH-09), changing and resetting the password all revoke the session row,
                 // and without this check the access token would keep working until it expires.
-                options.Events = new JwtBearerEvents { OnTokenValidated = ValidateSessionAsync };
+                options.Events = new JwtBearerEvents
+                {
+                    OnMessageReceived = context =>
+                    {
+                        // Browsers cannot set Authorization headers for WebSocket upgrades.
+                        // SignalR sends this value only for the authenticated hub endpoint.
+                        var accessToken = context.Request.Query["access_token"].FirstOrDefault();
+                        if (!string.IsNullOrWhiteSpace(accessToken)
+                            && context.HttpContext.Request.Path.StartsWithSegments("/hubs/orders"))
+                        {
+                            context.Token = accessToken;
+                        }
+
+                        return Task.CompletedTask;
+                    },
+                    OnTokenValidated = ValidateSessionAsync,
+                };
             });
 
         services.AddAuthorization();
+        services.AddSignalR();
         return services;
     }
 

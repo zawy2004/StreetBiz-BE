@@ -3,6 +3,7 @@ using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using StreetBiz.Infrastructure.Persistence;
 
@@ -11,9 +12,11 @@ using StreetBiz.Infrastructure.Persistence;
 namespace StreetBiz.Infrastructure.Persistence.Migrations
 {
     [DbContext(typeof(StreetBizDbContext))]
-    partial class StreetBizDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260919163132_AddOrderStorefrontAddressSnapshot")]
+    partial class AddOrderStorefrontAddressSnapshot
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
