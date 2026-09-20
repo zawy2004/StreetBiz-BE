@@ -10,21 +10,65 @@ using StreetBiz.API.Hubs;
 namespace StreetBiz.API.Controllers;
 
 [ApiController]
-[Route("api/marketplace/menu-items")]
+[Route("api/marketplace")]
 public sealed class MarketplaceController(ISender sender) : ControllerBase
 {
-    [HttpGet]
+    [HttpGet("menu-items")]
     public async Task<ActionResult<IReadOnlyList<MarketplaceMenuItemDto>>> Search(
         [FromQuery] string? query,
+        [FromQuery] int? wardId,
+        [FromQuery] int? categoryId,
+        [FromQuery] decimal? minPrice,
+        [FromQuery] decimal? maxPrice,
+        [FromQuery] bool? openNow,
+        [FromQuery] string? sort,
         [FromQuery] int take = 50,
         CancellationToken cancellationToken = default) =>
-        Ok(await sender.Send(new SearchMarketplaceMenuQuery(query, take), cancellationToken));
+        Ok(await sender.Send(
+            new SearchMarketplaceMenuQuery(query, take, wardId, categoryId, minPrice, maxPrice, openNow, sort),
+            cancellationToken));
 
-    [HttpGet("{menuItemId:long}")]
+    [HttpGet("menu-items/{menuItemId:long}")]
     public async Task<ActionResult<MarketplaceMenuItemDto>> Get(
         long menuItemId,
         CancellationToken cancellationToken) =>
         Ok(await sender.Send(new GetMarketplaceMenuItemQuery(menuItemId), cancellationToken));
+
+    [HttpGet("service-areas")]
+    public async Task<ActionResult<IReadOnlyList<ServiceAreaDto>>> ServiceAreas(
+        [FromQuery] decimal? latitude,
+        [FromQuery] decimal? longitude,
+        CancellationToken cancellationToken) =>
+        Ok(await sender.Send(new ListServiceAreasQuery(latitude, longitude), cancellationToken));
+
+    [HttpGet("categories")]
+    public async Task<ActionResult<IReadOnlyList<MarketplaceCategoryDto>>> Categories(
+        CancellationToken cancellationToken) =>
+        Ok(await sender.Send(new ListMarketplaceCategoriesQuery(), cancellationToken));
+
+    [HttpGet("storefronts")]
+    public async Task<ActionResult<IReadOnlyList<StorefrontSummaryDto>>> Storefronts(
+        [FromQuery] string? query,
+        [FromQuery] int? wardId,
+        [FromQuery] int? categoryId,
+        [FromQuery] bool? openNow,
+        [FromQuery] decimal? latitude,
+        [FromQuery] decimal? longitude,
+        [FromQuery] double? radiusMeters,
+        [FromQuery] string? sort,
+        [FromQuery] int take = 50,
+        CancellationToken cancellationToken = default) =>
+        Ok(await sender.Send(
+            new ListStorefrontsQuery(query, wardId, categoryId, openNow, latitude, longitude, radiusMeters, sort, take),
+            cancellationToken));
+
+    [HttpGet("storefronts/{storefrontId:long}")]
+    public async Task<ActionResult<StorefrontDetailDto>> Storefront(
+        long storefrontId,
+        [FromQuery] decimal? latitude,
+        [FromQuery] decimal? longitude,
+        CancellationToken cancellationToken) =>
+        Ok(await sender.Send(new GetStorefrontQuery(storefrontId, latitude, longitude), cancellationToken));
 }
 
 [ApiController]

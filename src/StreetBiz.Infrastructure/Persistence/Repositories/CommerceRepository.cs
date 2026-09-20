@@ -9,7 +9,7 @@ using StreetBiz.Infrastructure.Persistence.ScaffoldedModels;
 
 namespace StreetBiz.Infrastructure.Persistence.Repositories;
 
-public sealed class CommerceRepository(
+public sealed partial class CommerceRepository(
     StreetBizDbContext db,
     TimeProvider clock) : ICommerceRepository
 {
@@ -37,21 +37,49 @@ public sealed class CommerceRepository(
         && store.contract.application.registration_id == store.registration_id);
 
     public async Task<IReadOnlyList<MarketplaceMenuItemRow>> SearchMenuItemsAsync(
-        string? query,
+        MarketplaceMenuFilter filter,
         int take,
         CancellationToken cancellationToken)
     {
         var items = MarketplaceMenuQuery();
-        if (query is not null)
+        if (filter.Query is { } query)
         {
-            items = items.Where(item => item.item_name.Contains(query)
-                || item.storefront.storefront_name.Contains(query)
-                || item.category.category_name.Contains(query));
+            var collation = TextCollation;
+            items = items.Where(item => EF.Functions.Collate(item.item_name, collation).Contains(query)
+                || EF.Functions.Collate(item.storefront.storefront_name, collation).Contains(query)
+                || EF.Functions.Collate(item.category.category_name, collation).Contains(query));
         }
 
-        return await ProjectMarketplaceMenuItems(items
-            .OrderBy(item => item.storefront.storefront_name)
+        if (filter.CategoryId is { } categoryId)
+        {
+            items = items.Where(item => item.category_id == categoryId);
+        }
+
+        if (filter.MinPrice is { } minPrice)
+        {
+            items = items.Where(item => item.unit_price >= minPrice);
+        }
+
+        if (filter.MaxPrice is { } maxPrice)
+        {
+            items = items.Where(item => item.unit_price <= maxPrice);
+        }
+
+        if (filter.WardId.HasValue || filter.OpenAt is not null)
+        {
+            var storefronts = StorefrontsWhere(filter.WardId, filter.OpenAt).Select(s => s.storefront_id);
+            items = items.Where(item => storefronts.Contains(item.storefront_id));
+        }
+
+        var ordered = filter.Sort switch
+        {
+            MarketplaceMenuSorts.PriceAsc => items.OrderBy(item => item.unit_price),
+            MarketplaceMenuSorts.PriceDesc => items.OrderByDescending(item => item.unit_price),
+            _ => items.OrderBy(item => item.storefront.storefront_name),
+        };
+        return await ProjectMarketplaceMenuItems(ordered
             .ThenBy(item => item.item_name)
+            .ThenBy(item => item.menu_item_id)
             .Take(take)
         ).ToListAsync(cancellationToken);
     }
@@ -922,6 +950,10 @@ public sealed class CommerceRepository(
             .Where(item => EligibleStores().Select(store => store.storefront_id).Contains(item.storefront_id)
                 && (item.availability_status == MenuAvailable
                     || item.availability_status == MenuSoldOut));
+        PublicStorefronts()
+            .SelectMany(storefront => storefront.MenuItems)
+            .Where(item => item.availability_status == MenuAvailable
+                || item.availability_status == MenuSoldOut);
 
     private static IQueryable<MarketplaceMenuItemRow> ProjectMarketplaceMenuItems(
         IQueryable<MenuItem> items) =>
