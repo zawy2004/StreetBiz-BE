@@ -10,7 +10,7 @@
 # OTP codes there. Use Git Bash's tee — PowerShell 5.1's Tee-Object writes UTF-16.
 # The ward-review leg signs in as a seeded WARD_AUTHORITY account for ward 10
 # (docs/dev-seed-demo.sql); override with WARD_PHONE / WARD_PW.
-API=${API:-http://localhost:5000/api}
+API=${API:-http://localhost:5023/api}
 LOG=${LOG:-api.log}
 [ -f "$LOG" ] || { echo "Không thấy $LOG. Chạy API trong Git Bash: dotnet run --project src/StreetBiz.API 2>&1 | tee api.log"; exit 2; }
 J="Content-Type: application/json"

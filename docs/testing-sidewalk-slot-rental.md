@@ -63,7 +63,7 @@ UPDATE SidewalkSlots SET slot_status = 'ACTIVE' WHERE slot_id = 1;
 ## 2. Chạy hệ thống
 
 Giống tài liệu Auth mục 2: `dotnet run --project src/StreetBiz.API`, mở
-Swagger ở `http://localhost:5000/swagger`. Module SIDE chưa có FE nên không
+Swagger ở `http://localhost:5023/swagger`. Module SIDE chưa có FE nên không
 cần chạy `StreetBiz-FE`.
 
 ---
