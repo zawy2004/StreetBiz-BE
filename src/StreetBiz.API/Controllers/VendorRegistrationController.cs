@@ -28,7 +28,23 @@ public sealed class VendorRegistrationController(ISender sender) : ControllerBas
             request.DeclaredAddress,
             request.AddressLatitude,
             request.AddressLongitude,
-            request.WardUnitId ?? 0), cancellationToken);
+            request.WardUnitId ?? 0,
+            request.OwnerDateOfBirth,
+            request.OwnerGender,
+            request.OwnerEthnicity,
+            request.OwnerNationality,
+            request.IdType,
+            request.IdIssuedDate,
+            request.IdIssuedPlace,
+            request.PermanentAddress,
+            request.ContactAddress,
+            request.BusinessLine,
+            request.BusinessLineCode,
+            request.CapitalAmount,
+            request.LaborCount,
+            request.PlannedStartDate,
+            request.FoodSafetyCommitment,
+            request.HouseholdMembers?.Select(m => m.ToModel()).ToList()), cancellationToken);
         return Ok(new { message = RegMessages.Submitted, data = result });
     }
 
@@ -68,7 +84,23 @@ public sealed class VendorRegistrationController(ISender sender) : ControllerBas
             request.DeclaredAddress,
             request.AddressLatitude,
             request.AddressLongitude,
-            request.WardUnitId ?? 0), cancellationToken);
+            request.WardUnitId ?? 0,
+            request.OwnerDateOfBirth,
+            request.OwnerGender,
+            request.OwnerEthnicity,
+            request.OwnerNationality,
+            request.IdType,
+            request.IdIssuedDate,
+            request.IdIssuedPlace,
+            request.PermanentAddress,
+            request.ContactAddress,
+            request.BusinessLine,
+            request.BusinessLineCode,
+            request.CapitalAmount,
+            request.LaborCount,
+            request.PlannedStartDate,
+            request.FoodSafetyCommitment,
+            request.HouseholdMembers?.Select(m => m.ToModel()).ToList()), cancellationToken);
         return Ok(result);
     }
 

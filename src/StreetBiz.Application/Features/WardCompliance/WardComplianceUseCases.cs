@@ -1,5 +1,6 @@
 using FluentValidation;
 using MediatR;
+using StreetBiz.Application.Common.Security;
 using StreetBiz.Application.Features.WardSlots;
 
 namespace StreetBiz.Application.Features.WardCompliance;
@@ -82,6 +83,37 @@ public sealed class DecideWardEnrollmentCommandHandler(
     {
         var actor = await actorContext.RequireAsync(cancellationToken);
         return await complianceService.DecideEnrollmentAsync(actor, request.Id, request.Decision, cancellationToken);
+    }
+}
+
+/// <summary>BR-41 KYC gate: the officer's manual confirmation that they compared the vendor
+/// against their physical/chip CCCD. Required before DecideWardEnrollmentCommand's APPROVE.</summary>
+public sealed record ConfirmEnrollmentIdentityCommand(
+    long Id,
+    ConfirmEnrollmentIdentity Request) : IRequest<WardEnrollmentDetailDto>;
+
+public sealed class ConfirmEnrollmentIdentityCommandValidator : AbstractValidator<ConfirmEnrollmentIdentityCommand>
+{
+    public ConfirmEnrollmentIdentityCommandValidator()
+    {
+        RuleFor(x => x.Id).GreaterThan(0);
+        RuleFor(x => x.Request.Note)
+            .NotEmpty().WithMessage(RegMessages.IdentityVerificationNoteRequired)
+            .MaximumLength(500);
+    }
+}
+
+public sealed class ConfirmEnrollmentIdentityCommandHandler(
+    IWardActorContext actorContext,
+    IWardComplianceService complianceService)
+    : IRequestHandler<ConfirmEnrollmentIdentityCommand, WardEnrollmentDetailDto>
+{
+    public async Task<WardEnrollmentDetailDto> Handle(
+        ConfirmEnrollmentIdentityCommand request,
+        CancellationToken cancellationToken)
+    {
+        var actor = await actorContext.RequireAsync(cancellationToken);
+        return await complianceService.ConfirmIdentityAsync(actor, request.Id, request.Request, cancellationToken);
     }
 }
 #endregion

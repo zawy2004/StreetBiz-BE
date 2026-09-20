@@ -1,3 +1,4 @@
+using StreetBiz.Application.Features.VendorKyc;
 using StreetBiz.Application.Features.WardSlots;
 
 namespace StreetBiz.Application.Features.WardCompliance;
@@ -35,12 +36,57 @@ public sealed record WardEnrollmentDetailDto(
     string? ReviewedBy,
     DateTime? ReviewedAt,
     IReadOnlyList<WardEvidenceDto> Evidence,
-    AiDocumentCheckResult? AiCheck);
+    AiDocumentCheckResult? AiCheck,
+    // ---- Mẫu số 01 Phụ lục II, Thông tư 68/2025/TT-BTC: hồ sơ đầy đủ để cán bộ thẩm định ----
+    WardOwnerProfileDto OwnerProfile,
+    WardBusinessProfileDto BusinessProfile,
+    DateTime? FoodSafetyCommitmentAt,
+    IReadOnlyList<WardHouseholdMemberDto> HouseholdMembers,
+    // ---- KYC gate: cán bộ phải tự xác nhận trước khi được Duyệt (BR-41) ----
+    bool IdentityVerified,
+    DateTime? IdentityVerifiedAt,
+    string? IdentityVerifiedByName,
+    string? IdentityVerificationNote,
+    /// <summary>Server-recorded eKYC scores (CCCD OCR, face match) for this registration.
+    /// Evidence for the officer's own decision -- never a substitute for it.</summary>
+    IReadOnlyList<KycCheckRecord> KycChecks);
+
+public sealed record WardOwnerProfileDto(
+    DateOnly? DateOfBirth,
+    string? Gender,
+    string? Ethnicity,
+    string? Nationality,
+    string? IdType,
+    DateOnly? IdIssuedDate,
+    string? IdIssuedPlace,
+    string? PermanentAddress,
+    string? ContactAddress);
+
+public sealed record WardBusinessProfileDto(
+    string? BusinessLine,
+    string? BusinessLineCode,
+    decimal? CapitalAmount,
+    int? LaborCount,
+    DateOnly? PlannedStartDate);
+
+public sealed record WardHouseholdMemberDto(
+    string FullName,
+    DateOnly? DateOfBirth,
+    string? IdNumber,
+    string? RelationshipToOwner,
+    decimal? CapitalContribution);
 
 public sealed record WardEnrollmentDecision(
     string Decision,
     string Reason,
     string ExpectedStatus);
+
+/// <summary>
+/// A Ward Authority officer's manual confirmation that they compared the vendor in person (or
+/// the uploaded photo) against the physical/chip CCCD. Required before DecideEnrollmentAsync
+/// will accept an APPROVE decision -- AI-OCR alone never satisfies this (BR-41).
+/// </summary>
+public sealed record ConfirmEnrollmentIdentity(string Note);
 #endregion
 
 #region DTOs - Temporary Sidewalk Usage Permit / Application
@@ -247,6 +293,12 @@ public interface IWardComplianceService
     Task<IReadOnlyList<WardEnrollmentListItemDto>> ListEnrollmentsAsync(WardActor actor, string? status, int page, CancellationToken ct);
     Task<WardEnrollmentDetailDto> GetEnrollmentDetailAsync(WardActor actor, long registrationId, CancellationToken ct);
     Task<WardEnrollmentDetailDto> DecideEnrollmentAsync(WardActor actor, long registrationId, WardEnrollmentDecision decision, CancellationToken ct);
+
+    /// <summary>
+    /// Records the officer's manual identity-verification confirmation (BR-41 KYC gate).
+    /// DecideEnrollmentAsync refuses an APPROVE decision until this has been called.
+    /// </summary>
+    Task<WardEnrollmentDetailDto> ConfirmIdentityAsync(WardActor actor, long registrationId, ConfirmEnrollmentIdentity request, CancellationToken ct);
 
     /// <summary>
     /// Re-runs AI-OCR against the registration's own stored evidence (server-authoritative --

@@ -63,7 +63,14 @@ public static class RegistrationMapper
         r.RegistrationId, r.VendorType, r.DisplayName, r.DeclaredAddress,
         r.AddressLatitude, r.AddressLongitude, r.WardUnitId,
         r.RegistrationStatus, r.FastTrackFlag, r.ReviewDecisionReason, r.ReviewedAt,
-        r.CreatedAt, r.UpdatedAt);
+        r.CreatedAt, r.UpdatedAt,
+        r.OwnerDateOfBirth, r.OwnerGender, r.OwnerEthnicity, r.OwnerNationality,
+        r.IdType, r.IdIssuedDate, r.IdIssuedPlace, r.PermanentAddress, r.ContactAddress,
+        r.BusinessLine, r.BusinessLineCode, r.CapitalAmount, r.LaborCount, r.PlannedStartDate,
+        r.FoodSafetyCommitmentAt, r.IdentityVerifiedAt, r.IdentityVerificationNote,
+        r.HouseholdMembersOrEmpty.Select(m => new HouseholdMemberDto(
+            m.MemberId, m.FullName, m.DateOfBirth, m.IdNumber, m.RelationshipToOwner, m.CapitalContribution))
+            .ToList());
 
     public static RegistrationEvidenceDto ToDto(this BizRegistrationEvidence e) => new(
         e.EvidenceId, e.RegistrationId, e.EvidenceType, e.FileUrl, e.UploadedAt);

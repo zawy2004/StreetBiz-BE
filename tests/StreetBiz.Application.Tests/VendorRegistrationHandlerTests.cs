@@ -4,6 +4,7 @@ using StreetBiz.Application.Common.Exceptions;
 using StreetBiz.Application.Common.Interfaces;
 using StreetBiz.Application.Common.Models;
 using StreetBiz.Application.Common.Security;
+using StreetBiz.Application.Features.VendorKyc;
 using StreetBiz.Application.Features.VendorRegistration.SubmitEvidence;
 using StreetBiz.Application.Features.VendorRegistration.SubmitRegistration;
 using StreetBiz.Application.Features.VendorRegistration.UpdateRegistration;
@@ -18,7 +19,9 @@ public sealed class VendorRegistrationHandlerTests
     private const int WardId = 10;
 
     private readonly Mock<IVendorContext> vendorContext = new();
+    private readonly Mock<ICurrentUser> submitCurrentUser = new();
     private readonly Mock<IBusinessRegistrationRepository> registrations = new();
+    private readonly Mock<IKycResultRepository> kycResults = new();
     private readonly Mock<IAdministrativeUnitRepository> units = new();
 
     public VendorRegistrationHandlerTests()
@@ -38,7 +41,8 @@ public sealed class VendorRegistrationHandlerTests
     [Fact]
     public async Task Submitting_with_an_unknown_ward_is_a_400_not_a_foreign_key_500()
     {
-        var handler = new SubmitRegistrationCommandHandler(vendorContext.Object, registrations.Object, units.Object);
+        var handler = new SubmitRegistrationCommandHandler(
+            vendorContext.Object, submitCurrentUser.Object, registrations.Object, kycResults.Object, units.Object);
         var command = new SubmitRegistrationCommand(VendorTypes.Itinerant, "Banh mi", null, null, null, WardUnitId: 999);
 
         var error = await FluentActions.Awaiting(() => handler.Handle(command, CancellationToken.None))
@@ -150,6 +154,52 @@ public sealed class VendorRegistrationHandlerTests
 
         result.Errors.Should().ContainSingle(e => e.PropertyName == nameof(UpdateRegistrationCommand.DisplayName))
             .Which.ErrorMessage.Should().Be("Business/display name is required.");
+    }
+
+    [Fact]
+    public void Submit_validator_requires_the_Mau_so_01_owner_and_business_fields()
+    {
+        // TT 68/2025/TT-BTC Mẫu số 01: chủ hộ kinh doanh + ngành nghề + cam kết ATTP are all
+        // required on a real submission, even though the record itself defaults them to null
+        // so older callers (e.g. this file's other tests) keep compiling.
+        var validator = new SubmitRegistrationCommandValidator();
+        var command = new SubmitRegistrationCommand(VendorTypes.Itinerant, "Banh mi", null, null, null, WardId);
+
+        var result = validator.Validate(command);
+
+        Assert.False(result.IsValid);
+        result.Errors.Should().Contain(e => e.PropertyName == nameof(SubmitRegistrationCommand.OwnerDateOfBirth));
+        result.Errors.Should().Contain(e => e.PropertyName == nameof(SubmitRegistrationCommand.OwnerGender));
+        result.Errors.Should().Contain(e => e.PropertyName == nameof(SubmitRegistrationCommand.IdType));
+        result.Errors.Should().Contain(e => e.PropertyName == nameof(SubmitRegistrationCommand.PermanentAddress));
+        result.Errors.Should().Contain(e => e.PropertyName == nameof(SubmitRegistrationCommand.BusinessLine));
+        result.Errors.Should().Contain(e => e.PropertyName == nameof(SubmitRegistrationCommand.CapitalAmount));
+        result.Errors.Should().Contain(e => e.PropertyName == nameof(SubmitRegistrationCommand.FoodSafetyCommitment));
+    }
+
+    [Fact]
+    public void Submit_validator_passes_once_every_Mau_so_01_field_is_filled()
+    {
+        var validator = new SubmitRegistrationCommandValidator();
+        var command = new SubmitRegistrationCommand(
+            VendorTypes.Itinerant, "Banh mi", null, null, null, WardId,
+            OwnerDateOfBirth: new DateOnly(1985, 1, 1),
+            OwnerGender: OwnerGenders.Female,
+            OwnerEthnicity: "Kinh",
+            OwnerNationality: "Việt Nam",
+            IdType: OwnerIdTypes.CitizenId,
+            IdIssuedDate: new DateOnly(2021, 1, 1),
+            IdIssuedPlace: "Cục Cảnh sát QLHC về TTXH",
+            PermanentAddress: "12 Le Duan, Da Nang",
+            ContactAddress: null,
+            BusinessLine: "Bán đồ ăn lưu động",
+            BusinessLineCode: null,
+            CapitalAmount: 20_000_000m,
+            LaborCount: 1,
+            PlannedStartDate: new DateOnly(2026, 10, 1),
+            FoodSafetyCommitment: true);
+
+        validator.Validate(command).IsValid.Should().BeTrue();
     }
 
     [Fact]

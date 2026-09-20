@@ -5,7 +5,9 @@ using Microsoft.Extensions.Options;
 using StreetBiz.Application.Common.Exceptions;
 using StreetBiz.Application.Features.WardCompliance;
 using StreetBiz.Application.Features.WardSlots;
+using StreetBiz.Infrastructure.Common;
 using StreetBiz.Infrastructure.Persistence;
+using StreetBiz.Infrastructure.Persistence.Repositories;
 using StreetBiz.Infrastructure.Persistence.ScaffoldedModels;
 using StreetBiz.Infrastructure.Security;
 using StreetBiz.Infrastructure.Services;
@@ -103,6 +105,39 @@ public sealed class WardComplianceServiceTests
     }
 
     [Fact]
+    public async Task Approving_an_enrollment_without_manual_identity_verification_is_blocked()
+    {
+        // BR-41: AI-OCR (id_number/AiComplianceService) only reads and self-compares an
+        // uploaded photo -- it never queries the national population database -- so it can
+        // never by itself satisfy the KYC gate. Only ConfirmIdentityAsync can.
+        using var f = await Fixture.Create();
+        var service = f.NewService();
+
+        var ex = await Assert.ThrowsAsync<DomainRuleException>(() =>
+            service.DecideEnrollmentAsync(f.Actor, 2,
+                new WardEnrollmentDecision("APPROVE", "Đạt yêu cầu", "SUBMITTED"), default));
+
+        Assert.Contains("đối chiếu CCCD", ex.Message);
+    }
+
+    [Fact]
+    public async Task Confirming_identity_then_approving_succeeds_and_is_reflected_on_the_detail()
+    {
+        using var f = await Fixture.Create();
+        var service = f.NewService();
+
+        var confirmed = await service.ConfirmIdentityAsync(f.Actor, 2,
+            new ConfirmEnrollmentIdentity("Đối chiếu trực tiếp tại UBND phường ngày 20/09/2026"), default);
+        Assert.True(confirmed.IdentityVerified);
+
+        var result = await service.DecideEnrollmentAsync(f.Actor, 2,
+            new WardEnrollmentDecision("APPROVE", "Đạt yêu cầu", "SUBMITTED"), default);
+
+        Assert.Equal("APPROVED", result.Status);
+        Assert.True(result.IdentityVerified);
+    }
+
+    [Fact]
     public async Task Document_check_refuses_honestly_without_separate_biometric_consent()
     {
         // Luat Bao ve du lieu ca nhan 2025 / Nghi dinh 356/2025/ND-CP requires biometric-data
@@ -115,6 +150,89 @@ public sealed class WardComplianceServiceTests
         Assert.False(result.IsAiGenerated);
         Assert.True(result.NeedsManualVerification);
         Assert.Contains(result.Discrepancies, d => d.Contains("sinh trắc học"));
+    }
+
+    [Theory]
+    [InlineData("VALID", true)]
+    [InlineData("NOT_YET_VALID", false)]
+    [InlineData("SUSPENDED", false)]
+    [InlineData("EXPIRED", false)]
+    [InlineData("REVOKED", false)]
+    [InlineData("ACTIVE", false)] // the old (wrong) comparison target -- must NOT be treated as valid
+    [InlineData(null, false)]
+    public void Permit_validity_matches_the_real_effective_status_enum_not_ACTIVE(string? effectiveStatus, bool expectedValid)
+    {
+        // Regression for a bug where InspectPermitAsync compared effective_status against
+        // "ACTIVE" -- a value that column can never actually hold -- so every scanned permit,
+        // including genuinely valid ones, always reported as invalid.
+        Assert.Equal(expectedValid, WardComplianceService.IsPermitEffectivelyValid(effectiveStatus));
+    }
+
+    [Fact]
+    public async Task Approving_an_application_is_blocked_when_the_slots_existing_contract_is_only_suspended()
+    {
+        // Regression: a SUSPENDED contract is still legally in force (not
+        // cancelled/expired/revoked); a prior version only checked for ACTIVE, letting a
+        // second application be approved for a slot whose occupant was merely suspended.
+        using var f = await Fixture.Create();
+
+        using (var seed = f.NewDb())
+        {
+            seed.RentalContracts.Add(new RentalContract
+            {
+                contract_id = 900, application_id = 1, slot_id = 100, vendor_id = 10,
+                start_date = DateOnly.FromDateTime(DateTime.UtcNow),
+                end_date = DateOnly.FromDateTime(DateTime.UtcNow).AddDays(30),
+                contract_status = "SUSPENDED", created_at = DateTime.UtcNow
+            });
+            await seed.SaveChangesAsync();
+        }
+
+        var service = f.NewService();
+        await Assert.ThrowsAsync<ConflictException>(() =>
+            service.DecideRentalApplicationAsync(f.Actor, 1,
+                new WardRentalApplicationDecision("APPROVE", "Đạt yêu cầu", "PENDING"), default));
+    }
+
+    [Fact]
+    public async Task Revoking_a_permit_frees_the_slot_and_marks_the_contract_revoked()
+    {
+        // Regression: ExecutePermitActionAsync used to only write DigitalPermit.permit_status,
+        // leaving RentalContract stuck at ACTIVE and the slot permanently occupied even after
+        // the permit backing it was revoked.
+        using var f = await Fixture.Create();
+
+        long permitId;
+        using (var seed = f.NewDb())
+        {
+            seed.RentalContracts.Add(new RentalContract
+            {
+                contract_id = 901, application_id = 1, slot_id = 100, vendor_id = 10,
+                start_date = DateOnly.FromDateTime(DateTime.UtcNow),
+                end_date = DateOnly.FromDateTime(DateTime.UtcNow).AddDays(30),
+                contract_status = "ACTIVE", created_at = DateTime.UtcNow
+            });
+            seed.SidewalkSlots.First(s => s.slot_id == 100).slot_status = "ACTIVE";
+            await seed.SaveChangesAsync();
+
+            seed.DigitalPermits.Add(new DigitalPermit
+            {
+                permit_id = 950, contract_id = 901, qr_payload = "test-payload",
+                permit_status = "ACTIVE", issued_at = DateTime.UtcNow
+            });
+            await seed.SaveChangesAsync();
+            permitId = 950;
+        }
+
+        var service = f.NewService();
+        await service.ExecutePermitActionAsync(f.Actor, permitId,
+            new WardPermitActionRequest("REVOKE", "Vi phạm nghiêm trọng"), default);
+
+        using var verify = f.NewDb();
+        var contract = await verify.RentalContracts.SingleAsync(c => c.contract_id == 901);
+        var slot = await verify.SidewalkSlots.SingleAsync(s => s.slot_id == 100);
+        Assert.Equal("REVOKED", contract.contract_status);
+        Assert.Equal("AVAILABLE", slot.slot_status);
     }
 
     [Fact]
@@ -176,11 +294,18 @@ public sealed class WardComplianceServiceTests
         public TestContext NewDb() =>
             new(new DbContextOptionsBuilder<StreetBizDbContext>().UseSqlite(Connection).Options);
 
-        public WardComplianceService NewService() =>
-            new(NewDb(),
+        public WardComplianceService NewService()
+        {
+            // One context per service, shared with its KYC repository, so both see the same
+            // change tracker -- mirrors the scoped lifetimes in DependencyInjection.
+            var db = NewDb();
+            return new WardComplianceService(
+                db,
                 new PermitTokenService(Options.Create(new PermitSettings { SigningKey = "test-only-signing-key-0123456789" })),
                 new NoOpAiComplianceService(),
+                new KycResultRepository(db, new DateTimeProvider()),
                 TimeProvider.System);
+        }
 
         public void Dispose() => Connection.Dispose();
     }

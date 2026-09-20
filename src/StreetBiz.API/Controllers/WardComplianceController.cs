@@ -37,6 +37,15 @@ public sealed class WardComplianceController(ISender sender) : ControllerBase
         WardEnrollmentDecision decision,
         CancellationToken ct) =>
         Ok(await sender.Send(new DecideWardEnrollmentCommand(id, decision), ct));
+
+    /// <summary>BR-41 KYC gate: officer confirms they compared the vendor against their
+    /// physical/chip CCCD. Required before a decision/decision with APPROVE succeeds.</summary>
+    [HttpPost("enrollments/{id:long}/confirm-identity")]
+    public async Task<ActionResult<WardEnrollmentDetailDto>> ConfirmIdentity(
+        long id,
+        ConfirmEnrollmentIdentity request,
+        CancellationToken ct) =>
+        Ok(await sender.Send(new ConfirmEnrollmentIdentityCommand(id, request), ct));
     #endregion
 
     #region Rental Applications / Temporary Usage Permits
