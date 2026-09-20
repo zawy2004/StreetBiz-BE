@@ -945,11 +945,11 @@ public sealed partial class CommerceRepository(
             orders);
     }
 
+    // Discovery reads start from PublicStorefronts() (see CommerceRepository.Discovery.cs) so the
+    // storefront list, its counts and this search can never disagree about what is visible. The
+    // in-term and vendor/registration consistency checks that EligibleStores() adds belong to the
+    // write paths (cart, checkout, menu edits), which call it directly.
     private IQueryable<MenuItem> MarketplaceMenuQuery() =>
-        db.MenuItems.AsNoTracking()
-            .Where(item => EligibleStores().Select(store => store.storefront_id).Contains(item.storefront_id)
-                && (item.availability_status == MenuAvailable
-                    || item.availability_status == MenuSoldOut));
         PublicStorefronts()
             .SelectMany(storefront => storefront.MenuItems)
             .Where(item => item.availability_status == MenuAvailable
