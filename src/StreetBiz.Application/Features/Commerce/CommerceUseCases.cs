@@ -8,8 +8,15 @@ using StreetBiz.Application.DTOs.Commerce;
 
 namespace StreetBiz.Application.Features.Commerce;
 
-public sealed record SearchMarketplaceMenuQuery(string? Query, int Take = 50)
-    : IRequest<IReadOnlyList<MarketplaceMenuItemDto>>;
+public sealed record SearchMarketplaceMenuQuery(
+    string? Query,
+    int Take = 50,
+    int? WardId = null,
+    int? CategoryId = null,
+    decimal? MinPrice = null,
+    decimal? MaxPrice = null,
+    bool? OpenNow = null,
+    string? Sort = null) : IRequest<IReadOnlyList<MarketplaceMenuItemDto>>;
 
 public sealed class SearchMarketplaceMenuQueryValidator : AbstractValidator<SearchMarketplaceMenuQuery>
 {
@@ -17,17 +24,34 @@ public sealed class SearchMarketplaceMenuQueryValidator : AbstractValidator<Sear
     {
         RuleFor(x => x.Query).MaximumLength(100);
         RuleFor(x => x.Take).InclusiveBetween(1, 100);
+        RuleFor(x => x.WardId).GreaterThan(0).When(x => x.WardId.HasValue);
+        RuleFor(x => x.CategoryId).GreaterThan(0).When(x => x.CategoryId.HasValue);
+        RuleFor(x => x.MinPrice).GreaterThanOrEqualTo(0).When(x => x.MinPrice.HasValue);
+        RuleFor(x => x.MaxPrice).GreaterThanOrEqualTo(0).When(x => x.MaxPrice.HasValue);
+        RuleFor(x => x).Must(x => !x.MinPrice.HasValue || !x.MaxPrice.HasValue || x.MinPrice <= x.MaxPrice)
+            .WithMessage("minPrice must not be greater than maxPrice.");
+        RuleFor(x => x.Sort).Must(sort => sort is null || MarketplaceMenuSorts.IsValid(sort))
+            .WithMessage("sort must be name, price_asc or price_desc.");
     }
 }
 
-public sealed class SearchMarketplaceMenuQueryHandler(ICommerceRepository repository)
+public sealed class SearchMarketplaceMenuQueryHandler(
+    ICommerceRepository repository,
+    IDateTimeProvider clock)
     : IRequestHandler<SearchMarketplaceMenuQuery, IReadOnlyList<MarketplaceMenuItemDto>>
 {
     public async Task<IReadOnlyList<MarketplaceMenuItemDto>> Handle(
         SearchMarketplaceMenuQuery request,
         CancellationToken cancellationToken) =>
         (await repository.SearchMenuItemsAsync(
-            string.IsNullOrWhiteSpace(request.Query) ? null : request.Query.Trim(),
+            new MarketplaceMenuFilter(
+                string.IsNullOrWhiteSpace(request.Query) ? null : request.Query.Trim(),
+                request.WardId,
+                request.CategoryId,
+                request.MinPrice,
+                request.MaxPrice,
+                request.OpenNow == true ? StorefrontHours.LocalNow(clock.UtcNow) : null,
+                request.Sort ?? MarketplaceMenuSorts.Name),
             request.Take,
             cancellationToken))
         .Select(row => row.ToDto())
