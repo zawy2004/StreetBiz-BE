@@ -10,15 +10,13 @@ namespace StreetBiz.Infrastructure.Persistence.Repositories;
 public sealed partial class CommerceRepository
 {
     /// <summary>
-    /// A storefront is publicly listed only while it is switched on, its rental contract is live,
-    /// its registration is approved and its account is active.
+    /// A storefront is publicly listed only while an order could be placed with it: EligibleStores() (switched on,
+    /// approved registration, contract active and inside its dates) and, on top of that, an active vendor account.
+    /// Listing and ordering share that one rule, so a customer is never shown a storefront that then refuses the order.
     /// </summary>
     private IQueryable<Storefront> PublicStorefronts() =>
-        db.Storefronts.AsNoTracking().Where(storefront =>
-            storefront.availability_status == StorefrontOpen
-            && storefront.contract.contract_status == ContractStatuses.Active
-            && storefront.registration.registration_status == RegistrationStatuses.Approved
-            && storefront.contract.vendor.user.account_status == AccountStatuses.Active);
+        EligibleStores().AsNoTracking().Where(storefront =>
+            storefront.contract.vendor.user.account_status == AccountStatuses.Active);
 
     /// <summary>
     /// Vietnamese is often typed without diacritics ("bun cha" for "Bún chả"), so text search compares
