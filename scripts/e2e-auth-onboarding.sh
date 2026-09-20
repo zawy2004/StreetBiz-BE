@@ -8,12 +8,11 @@
 #
 # LOG (default api.log) must be the API console output: the dev SMS sender prints
 # OTP codes there. Use Git Bash's tee — PowerShell 5.1's Tee-Object writes UTF-16.
-# One step flips a registration to MORE_INFORMATION_REQUIRED directly in SQL (there
-# is no ward-review endpoint yet); override the connection with STREETBIZ_TEST_DB.
-API=${API:-http://localhost:5000/api}
+# The ward-review leg signs in as a seeded WARD_AUTHORITY account for ward 10
+# (docs/dev-seed-demo.sql); override with WARD_PHONE / WARD_PW.
+API=${API:-http://localhost:5023/api}
 LOG=${LOG:-api.log}
 [ -f "$LOG" ] || { echo "Không thấy $LOG. Chạy API trong Git Bash: dotnet run --project src/StreetBiz.API 2>&1 | tee api.log"; exit 2; }
-DB=${STREETBIZ_TEST_DB:-Server=(localdb)\MSSQLLocalDB;Database=StreetBizDB;Trusted_Connection=True;TrustServerCertificate=True}
 J="Content-Type: application/json"
 PASS=0; FAIL=0
 TMP=$(mktemp -d)
@@ -29,12 +28,11 @@ req() { # method path [token] [body] -> sets CODE, BODY
   CODE=$(curl "${args[@]}"); BODY=$(cat "$TMP/body"); }
 otp_for() { sleep 1; grep -o "To $1: Your StreetBiz verification code is [0-9]\{6\}" "$LOG" | tail -1 | grep -o '[0-9]\{6\}$'; }
 up() { CODE=$(curl -s -o "$TMP/body" -w "%{http_code}" -H "Authorization: Bearer $1" -F "file=@$2" "$API/uploads/evidence"); BODY=$(cat "$TMP/body"); }
-sql() {
-  powershell.exe -NoProfile -Command "\$c=New-Object System.Data.SqlClient.SqlConnection '$DB'; \$c.Open(); \$k=\$c.CreateCommand(); \$k.CommandText=\"$1\"; [void]\$k.ExecuteNonQuery(); \$c.Close()"
-}
 
 STAMP=$(date +%s | tail -c 9)
 PHONE="09$STAMP"; P2="08$STAMP"; PW='Str0ng!Pass'
+# Ward review needs a real WARD_AUTHORITY account; docs/dev-seed-demo.sql seeds these.
+WARD_PHONE=${WARD_PHONE:-0983000001}; WARD_PW=${WARD_PW:-Password123!}
 ORIGIN=${API%/api}
 
 echo "== Reference data"
@@ -60,6 +58,21 @@ req POST /auth/forgot-password "" "{\"phoneNumber\":\"$PHONE\"}"; check "forgot 
 req POST /auth/forgot-password "" "{\"phoneNumber\":\"$PHONE\"}"; check "forgot again: no cooldown leak" 200 "$CODE"
 req POST /auth/send-otp "" "{\"phoneNumber\":\"$PHONE\",\"purpose\":\"PASSWORD_RESET\"}"; check "send-otp reset: no cooldown leak" 200 "$CODE"
 req POST /auth/forgot-password "" "{\"phoneNumber\":\"0999999999\"}"; check "forgot (unknown phone) same answer" 200 "$CODE"
+
+echo "== AUTH-03 sign in with OTP instead of a password (FE-01, BR-03)"
+req POST /auth/send-otp "" "{\"phoneNumber\":\"0999999999\",\"purpose\":\"LOGIN\"}"
+check "login code for unknown phone: same answer" 200 "$CODE"
+req POST /auth/send-otp "" "{\"phoneNumber\":\"$PHONE\",\"purpose\":\"LOGIN\"}"; check "request login code" 200 "$CODE"
+LOTP=$(otp_for "$PHONE")
+req POST /auth/login-otp "" "{\"phoneNumber\":\"$PHONE\",\"otp\":\"000000\"}"; check "wrong login code -> 401" 401 "$CODE"
+req POST /auth/login-otp "" "{\"phoneNumber\":\"$PHONE\",\"otp\":\"$LOTP\"}"; check "sign in with the code" 200 "$CODE"
+check "OTP sign-in returns a session" true "$(echo "$BODY" | json 'o.accessToken.length>20')"
+req POST /auth/login-otp "" "{\"phoneNumber\":\"$PHONE\",\"otp\":\"$LOTP\"}"; check "the code is single use -> 401" 401 "$CODE"
+
+echo "== CR-06 the +84 form is the same account"
+req POST /auth/login "" "{\"phoneNumber\":\"+84${PHONE#0}\",\"password\":\"$PW\"}"
+check "+84 form signs in to the same account" 200 "$CODE"
+check "stored as the local form" "$PHONE" "$(echo "$BODY" | json o.user.phoneNumber)"
 
 echo "== AUTH-07 change password"
 req POST /auth/change-password "$T1" "{\"currentPassword\":\"nope\",\"newPassword\":\"N3w!Passw0rd\"}"
@@ -100,8 +113,21 @@ req POST "/vendor/registrations/$RO/evidence" "$TO" "{\"evidenceType\":\"IDENTIT
 check "attach someone else's file -> 400" 400 "$CODE"
 req GET "/vendor/registrations/$RID" "$TO"; check "read someone else's registration -> 403" 403 "$CODE"
 
+echo "== WARD review of the registration (REG-06 / SRS 3.3.1)"
+req POST /auth/login "" "{\"phoneNumber\":\"$WARD_PHONE\",\"password\":\"$WARD_PW\"}"
+check "ward officer signs in" 200 "$CODE"; WT=$(echo "$BODY" | json o.accessToken)
+req GET "/ward/cases/registrations/$RID" "$WT"; check "officer opens the case" 200 "$CODE"
+check "case is waiting for review" SUBMITTED "$(echo "$BODY" | json o.status)"
+req GET "/ward/cases/registrations/$RID" "$T1"; check "vendor cannot use the ward queue -> 403" 403 "$CODE"
+req POST "/ward/cases/registrations/$RID/decision" "$WT" \
+  '{"decision":"REQUEST_INFO","reason":"Bo sung giay phep kinh doanh","expectedStatus":"SUBMITTED"}'
+check "officer asks for more evidence" 200 "$CODE"
+check "status is MORE_INFORMATION_REQUIRED" MORE_INFORMATION_REQUIRED "$(echo "$BODY" | json o.status)"
+req POST "/ward/cases/registrations/$RID/decision" "$WT" \
+  '{"decision":"REQUEST_INFO","reason":"Lap lai","expectedStatus":"SUBMITTED"}'
+check "stale expectedStatus is rejected -> 409" 409 "$CODE"
+
 echo "== BR-09 on re-submit (REG-04)"
-sql "UPDATE BusinessRegistrations SET registration_status='MORE_INFORMATION_REQUIRED', review_decision_reason=N'Bo sung giay phep' WHERE registration_id=$RID"
 req POST /vendor/registrations "$T1" '{"vendorType":"ITINERANT","displayName":"Second","declaredAddress":null,"wardUnitId":10}'
 check "new application allowed while first needs info" 200 "$CODE"; RID2=$(echo "$BODY" | json o.data.registrationId)
 req PUT "/vendor/registrations/$RID" "$T1" '{"vendorType":"FIXED_STOREFRONT","displayName":"E2E Shop","declaredAddress":"1 Le Duan","addressLatitude":16.0678,"addressLongitude":108.2208,"wardUnitId":10}'

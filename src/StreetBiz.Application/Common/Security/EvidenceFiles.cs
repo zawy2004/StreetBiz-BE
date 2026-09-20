@@ -12,8 +12,14 @@ public static partial class EvidenceFiles
     public const long MaxBytes = 5 * 1024 * 1024;
     public const string UrlPrefix = "/api/uploads/evidence/";
 
-    public const string InvalidType = "Please upload a JPG, PNG, WEBP or PDF file.";
-    public const string TooLarge = "The file must be 5 MB or smaller.";
+    /// <summary>
+    /// BR-47 / PRI-06: how long an identity or licence document stays on file after
+    /// upload. Stored on each row as retention_expires_at so disposal can be audited.
+    /// </summary>
+    public static readonly TimeSpan RetentionPeriod = TimeSpan.FromDays(365 * 2);
+
+    public const string InvalidType = "Chỉ chấp nhận ảnh JPG, PNG, WEBP hoặc file PDF.";
+    public const string TooLarge = "Dung lượng file tối đa 5 MB.";
 
     public static readonly IReadOnlyDictionary<string, string> ContentTypes = new Dictionary<string, string>
     {

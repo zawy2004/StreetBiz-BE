@@ -16,7 +16,7 @@ public sealed class PlatformAdminContext(
     public async Task<PlatformAdminActor> RequireAsync(CancellationToken cancellationToken)
     {
         var userId = currentUser.UserId
-            ?? throw new AuthenticationException("No active session.");
+            ?? throw new AuthenticationException(AppMessages.SessionExpired);
         var user = await users.GetByIdAsync(userId, cancellationToken);
 
         if (currentUser.RoleCode != RoleCodes.PlatformAdmin

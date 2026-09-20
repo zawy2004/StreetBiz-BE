@@ -149,7 +149,7 @@ public sealed class VendorRegistrationHandlerTests
         var result = validator.Validate(command);
 
         result.Errors.Should().ContainSingle(e => e.PropertyName == nameof(UpdateRegistrationCommand.DisplayName))
-            .Which.ErrorMessage.Should().Be("Business/display name is required.");
+            .Which.ErrorMessage.Should().Be(RegMessages.DisplayNameRequired);
     }
 
     [Fact]

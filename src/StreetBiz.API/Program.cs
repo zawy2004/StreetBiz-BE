@@ -48,6 +48,7 @@ builder.Services.AddSwaggerGen(options =>
 builder.Services.AddProblemDetails();
 builder.Services.AddWardApi();
 builder.Services.AddCommunityApi();
+builder.Services.AddAuthRateLimits(builder.Environment);
 builder.Services.AddSingleton<IOrderRealtimePublisher, OrderRealtimePublisher>();
 builder.Services
     .AddHealthChecks()

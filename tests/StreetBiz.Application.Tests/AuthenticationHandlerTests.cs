@@ -105,7 +105,7 @@ public sealed class AuthenticationHandlerTests
 
         result.IsValid.Should().BeFalse();
         result.Errors.Should().ContainSingle(e => e.PropertyName == nameof(RegisterCommand.FullName))
-            .Which.ErrorMessage.Should().Be("Full name must be 150 characters or fewer.");
+            .Which.ErrorMessage.Should().Be(AppMessages.FullNameTooLong);
     }
 
     [Fact]
