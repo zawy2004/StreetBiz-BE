@@ -64,6 +64,20 @@ builder.Services.AddRateLimiter(options =>
                 Window = TimeSpan.FromMinutes(1),
                 QueueLimit = 0,
             }));
+
+    // REG-02 eKYC: each call spends FPT.AI credits on a paid quota, and a legitimate
+    // applicant only ever needs a handful of scans (front, back, portrait, plus retries).
+    options.AddPolicy("VendorKycAi", context =>
+        System.Threading.RateLimiting.RateLimitPartition.GetFixedWindowLimiter(
+            context.User.FindFirstValue("sub")
+            ?? context.Connection.RemoteIpAddress?.ToString()
+            ?? "anonymous",
+            _ => new System.Threading.RateLimiting.FixedWindowRateLimiterOptions
+            {
+                PermitLimit = 10,
+                Window = TimeSpan.FromMinutes(1),
+                QueueLimit = 0,
+            }));
 });
 builder.Services.AddSingleton<IOrderRealtimePublisher, OrderRealtimePublisher>();
 builder.Services

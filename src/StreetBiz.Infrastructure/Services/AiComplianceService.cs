@@ -23,7 +23,7 @@ public sealed class AiComplianceService : IAiComplianceService
     private readonly IConfiguration _configuration;
     private readonly ILogger<AiComplianceService> _logger;
     private readonly IFileStorage? _fileStorage;
-    private readonly ApiKeyPool _geminiKeyPool;
+    private readonly GeminiVisionClient _geminiVision;
     private readonly ApiKeyPool _groqKeyPool;
 
     public AiComplianceService(
@@ -31,16 +31,17 @@ public sealed class AiComplianceService : IAiComplianceService
         IConfiguration configuration,
         ILogger<AiComplianceService> logger,
         AiKeyPools keyPools,
+        GeminiVisionClient geminiVision,
         IFileStorage? fileStorage = null)
     {
         _httpClient = httpClient;
         _configuration = configuration;
         _logger = logger;
         _fileStorage = fileStorage;
+        _geminiVision = geminiVision;
 
         // keyPools is a Singleton (see AiKeyPools' remarks) so the round-robin counter
         // survives across requests -- this service itself is Transient (AddHttpClient).
-        _geminiKeyPool = keyPools.Gemini;
         _groqKeyPool = keyPools.Groq;
     }
 
@@ -605,94 +606,12 @@ public sealed class AiComplianceService : IAiComplianceService
         _ => "image/jpeg"
     };
 
-    private async Task<(bool Success, string? Content)> CallGeminiVisionAsync(
-        string prompt, byte[] imageBytes, string mimeType, CancellationToken ct)
-    {
-        if (!_geminiKeyPool.HasKeys)
-        {
-            _logger.LogWarning("No Gemini API keys configured in AiCompliance:Gemini:ApiKeys or ApiKey.");
-            return (false, null);
-        }
-
-        var model = _configuration["AiCompliance:Gemini:Model"]?.Trim();
-        if (string.IsNullOrWhiteSpace(model)) model = "gemini-2.0-flash";
-
-        var maxTokensStr = _configuration["AiCompliance:Gemini:MaxOutputTokens"]?.Trim();
-        var maxOutputTokens = int.TryParse(maxTokensStr, out var m) && m > 0 ? m : 4096;
-
-        var payload = new
-        {
-            contents = new[]
-            {
-                new
-                {
-                    parts = new object[]
-                    {
-                        new { text = prompt },
-                        new { inline_data = new { mime_type = mimeType, data = Convert.ToBase64String(imageBytes) } }
-                    }
-                }
-            },
-            generationConfig = new
-            {
-                temperature = 0.1,
-                maxOutputTokens = maxOutputTokens,
-                responseMimeType = "application/json"
-            }
-        };
-
-        var payloadJson = JsonSerializer.Serialize(payload);
-        var keysToTry = _geminiKeyPool.GetAllKeysInOrder();
-
-        for (int attempt = 0; attempt < keysToTry.Length; attempt++)
-        {
-            var apiKey = keysToTry[attempt];
-            try
-            {
-                var url = $"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={apiKey}";
-                using var content = new StringContent(payloadJson, Encoding.UTF8, "application/json");
-                var response = await _httpClient.PostAsync(url, content, ct);
-
-                if (response.IsSuccessStatusCode)
-                {
-                    var responseBody = await response.Content.ReadAsStringAsync(ct);
-                    var doc = JsonNode.Parse(responseBody);
-                    var text = doc?["candidates"]?[0]?["content"]?["parts"]?[0]?["text"]?.GetValue<string>();
-                    return (!string.IsNullOrWhiteSpace(text), text);
-                }
-
-                var error = await response.Content.ReadAsStringAsync(ct);
-                _logger.LogWarning(
-                    "Gemini Vision API call with key [..{KeySuffix}] failed with code {StatusCode}: {Error}",
-                    apiKey.Length > 8 ? apiKey[^8..] : apiKey,
-                    response.StatusCode,
-                    error);
-
-                // If 429 (Too Many Requests), 403 (Quota Limit), or 503 (Overloaded), try next key in pool
-                if ((int)response.StatusCode == 429 || (int)response.StatusCode == 403 || (int)response.StatusCode == 503)
-                {
-                    if (attempt < keysToTry.Length - 1)
-                    {
-                        _logger.LogInformation("Failing over to next Gemini API key in pool (attempt {Attempt}/{Total})...", attempt + 2, keysToTry.Length);
-                        continue;
-                    }
-                }
-
-                return (false, null);
-            }
-            catch (Exception ex) when (attempt < keysToTry.Length - 1)
-            {
-                _logger.LogWarning(ex, "Exception calling Gemini Vision API with key [..{KeySuffix}], failing over to next key...", apiKey.Length > 8 ? apiKey[^8..] : apiKey);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "Exception calling Gemini Vision API after trying {Total} keys.", keysToTry.Length);
-                return (false, null);
-            }
-        }
-
-        return (false, null);
-    }
+    /// <summary>Thin wrapper kept so every existing call site below reads unchanged; the actual
+    /// key-pool rotation / retry logic now lives in GeminiVisionClient, shared with
+    /// FptAiKycService's own Gemini fallback.</summary>
+    private Task<(bool Success, string? Content)> CallGeminiVisionAsync(
+        string prompt, byte[] imageBytes, string mimeType, CancellationToken ct) =>
+        _geminiVision.CallAsync(prompt, [(imageBytes, mimeType)], ct);
 
     private async Task<(bool Success, string? Content)> CallGroqChatAsync(
         string systemPrompt, string userPrompt, CancellationToken ct, bool jsonMode = true)

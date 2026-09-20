@@ -39,7 +39,9 @@ public sealed class AiComplianceServiceTests
                 ? []
                 : new Dictionary<string, string?> { ["AiCompliance:Gemini:ApiKey"] = geminiKey })
             .Build();
-        return new AiComplianceService(client, config, NullLogger<AiComplianceService>.Instance, new AiKeyPools(config));
+        var keyPools = new AiKeyPools(config);
+        var geminiVision = new GeminiVisionClient(client, config, NullLogger<GeminiVisionClient>.Instance, keyPools);
+        return new AiComplianceService(client, config, NullLogger<AiComplianceService>.Instance, keyPools, geminiVision);
     }
 
     [Fact]
@@ -148,7 +150,10 @@ public sealed class AiComplianceServiceTests
         var config = new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?> { ["AiCompliance:Groq:ApiKey"] = "test-groq-key" })
             .Build();
-        var service = new AiComplianceService(new HttpClient(handler), config, NullLogger<AiComplianceService>.Instance, new AiKeyPools(config));
+        var groqKeyPools = new AiKeyPools(config);
+        var service = new AiComplianceService(
+            new HttpClient(handler), config, NullLogger<AiComplianceService>.Instance, groqKeyPools,
+            new GeminiVisionClient(new HttpClient(handler), config, NullLogger<GeminiVisionClient>.Instance, groqKeyPools));
 
         var schedules = new[]
         {
@@ -196,9 +201,11 @@ public sealed class AiComplianceServiceTests
         // shared by three separate "request-scoped" AiComplianceService instances.
         var sharedPools = new AiKeyPools(config);
         var handler = new StubHandler(_ => throw new InvalidOperationException("not called"));
-        _ = new AiComplianceService(new HttpClient(handler), config, NullLogger<AiComplianceService>.Instance, sharedPools);
-        _ = new AiComplianceService(new HttpClient(handler), config, NullLogger<AiComplianceService>.Instance, sharedPools);
-        _ = new AiComplianceService(new HttpClient(handler), config, NullLogger<AiComplianceService>.Instance, sharedPools);
+        GeminiVisionClient GeminiFor(HttpMessageHandler h) =>
+            new(new HttpClient(h), config, NullLogger<GeminiVisionClient>.Instance, sharedPools);
+        _ = new AiComplianceService(new HttpClient(handler), config, NullLogger<AiComplianceService>.Instance, sharedPools, GeminiFor(handler));
+        _ = new AiComplianceService(new HttpClient(handler), config, NullLogger<AiComplianceService>.Instance, sharedPools, GeminiFor(handler));
+        _ = new AiComplianceService(new HttpClient(handler), config, NullLogger<AiComplianceService>.Instance, sharedPools, GeminiFor(handler));
 
         var firstTriesAcrossThreeRequests = new[]
         {
@@ -254,7 +261,10 @@ public sealed class AiComplianceServiceTests
             })
             .Build();
 
-        var service = new AiComplianceService(new HttpClient(handler), config, NullLogger<AiComplianceService>.Instance, new AiKeyPools(config));
+        var fptOkKeyPools = new AiKeyPools(config);
+        var service = new AiComplianceService(
+            new HttpClient(handler), config, NullLogger<AiComplianceService>.Instance, fptOkKeyPools,
+            new GeminiVisionClient(new HttpClient(handler), config, NullLogger<GeminiVisionClient>.Instance, fptOkKeyPools));
         var evidence = new[] { new WardEvidenceDto(1, "ID_CARD", "CCCD", "https://files.test/id.jpg") };
 
         var result = await service.ExtractIdDocumentAsync(evidence, default);
@@ -311,7 +321,10 @@ public sealed class AiComplianceServiceTests
             })
             .Build();
 
-        var service = new AiComplianceService(new HttpClient(handler), config, NullLogger<AiComplianceService>.Instance, new AiKeyPools(config));
+        var fptFallbackKeyPools = new AiKeyPools(config);
+        var service = new AiComplianceService(
+            new HttpClient(handler), config, NullLogger<AiComplianceService>.Instance, fptFallbackKeyPools,
+            new GeminiVisionClient(new HttpClient(handler), config, NullLogger<GeminiVisionClient>.Instance, fptFallbackKeyPools));
         var evidence = new[] { new WardEvidenceDto(1, "ID_CARD", "CCCD", "https://files.test/id.jpg") };
 
         var result = await service.ExtractIdDocumentAsync(evidence, default);

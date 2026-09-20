@@ -3,6 +3,7 @@ using System.Globalization;
 using Microsoft.EntityFrameworkCore;
 using StreetBiz.Application.Common.Exceptions;
 using StreetBiz.Application.Common.Security;
+using StreetBiz.Application.Features.VendorKyc;
 using StreetBiz.Application.Features.WardCompliance;
 using StreetBiz.Application.Features.WardSlots;
 using StreetBiz.Infrastructure.Persistence;
@@ -14,6 +15,7 @@ public sealed class WardComplianceService(
     StreetBizDbContext db,
     IPermitTokenService permitTokens,
     IAiComplianceService aiService,
+    IKycResultRepository kycResults,
     TimeProvider clock)
     : IWardComplianceService
 {
@@ -84,6 +86,7 @@ public sealed class WardComplianceService(
         var reg = await db.BusinessRegistrations
             .Include(x => x.vendor).ThenInclude(v => v.user)
             .Include(x => x.RegistrationEvidences)
+            .Include(x => x.HouseholdMembers)
             .SingleOrDefaultAsync(x => x.registration_id == registrationId, ct);
 
         if (reg is null || reg.ward_unit_id != actor.WardId)
@@ -116,7 +119,54 @@ public sealed class WardComplianceService(
             reg.reviewed_by?.ToString(CultureInfo.InvariantCulture),
             reg.reviewed_at,
             evidence,
-            aiCheck);
+            aiCheck,
+            new WardOwnerProfileDto(
+                reg.owner_date_of_birth, reg.owner_gender, reg.owner_ethnicity, reg.owner_nationality,
+                reg.id_type, reg.id_issued_date, reg.id_issued_place, reg.permanent_address, reg.contact_address),
+            new WardBusinessProfileDto(
+                reg.business_line, reg.business_line_code, reg.capital_amount, reg.labor_count, reg.planned_start_date),
+            reg.food_safety_commitment_at,
+            reg.HouseholdMembers.Select(m => new WardHouseholdMemberDto(
+                m.full_name, m.date_of_birth, m.id_number, m.relationship_to_owner, m.capital_contribution)).ToList(),
+            reg.identity_verified_at.HasValue,
+            reg.identity_verified_at,
+            reg.identity_verified_by?.ToString(CultureInfo.InvariantCulture),
+            reg.identity_verification_note,
+            await kycResults.ListForRegistrationAsync(reg.registration_id, ct));
+    }
+
+    public async Task<WardEnrollmentDetailDto> ConfirmIdentityAsync(
+        WardActor actor,
+        long registrationId,
+        ConfirmEnrollmentIdentity request,
+        CancellationToken ct)
+    {
+        var reg = await db.BusinessRegistrations
+            .SingleOrDefaultAsync(x => x.registration_id == registrationId, ct);
+
+        if (reg is null || reg.ward_unit_id != actor.WardId)
+        {
+            throw new NotFoundException("Không tìm thấy hồ sơ đăng ký điểm bán tại địa bàn phường của bạn.");
+        }
+
+        reg.identity_verified_by = actor.UserId;
+        reg.identity_verified_at = Now;
+        reg.identity_verification_note = request.Note.Trim();
+
+        // Audit Log [BR-46]: this confirmation is what actually satisfies BR-41's human-in-
+        // the-loop requirement for the APPROVE decision, so it must be independently auditable.
+        db.AuditLogs.Add(new AuditLog
+        {
+            actor_user_id = actor.UserId,
+            action = "ENROLLMENT_IDENTITY_VERIFIED",
+            entity_type = "BusinessRegistration",
+            entity_id = reg.registration_id,
+            details = $"Cán bộ {actor.Name} xác nhận đã đối chiếu CCCD thủ công. Ghi chú: {request.Note.Trim()}",
+            created_at = Now
+        });
+
+        await db.SaveChangesAsync(ct);
+        return await GetEnrollmentDetailAsync(actor, registrationId, ct);
     }
 
     public async Task<AiDocumentCheckResult> ReRunDocumentCheckAsync(
@@ -215,6 +265,15 @@ public sealed class WardComplianceService(
             "MORE_INFO" => "MORE_INFORMATION_REQUIRED",
             _ => throw new DomainRuleException("Quyết định không hợp lệ.")
         };
+
+        // BR-41 KYC gate: AI-OCR (id_number/AiComplianceService) only reads and self-compares
+        // an uploaded photo -- it never queries the Bo Cong an/CSDL quoc gia ve dan cu -- so it
+        // cannot by itself prove the applicant is who they claim. An officer must have called
+        // ConfirmIdentityAsync first; only then may APPROVE proceed.
+        if (newStatus == "APPROVED" && reg.identity_verified_at is null)
+        {
+            throw new DomainRuleException(RegMessages.IdentityVerificationRequiredForApproval);
+        }
 
         reg.registration_status = newStatus;
         reg.reviewed_by = actor.UserId;
@@ -326,8 +385,13 @@ public sealed class WardComplianceService(
             blockers.Add($"Vị trí vỉa hè hiện không khả dụng (Trạng thái: {app.slot.slot_status}).");
         }
 
+        // A SUSPENDED contract is still legally in force (not cancelled/expired/revoked) --
+        // counting only ACTIVE here let a second application be approved for a slot whose
+        // existing occupant was merely under suspension, not actually vacated.
         var hasOccupant = await db.RentalContracts.AsNoTracking()
-            .AnyAsync(c => c.slot_id == app.slot_id && c.contract_status == "ACTIVE" && c.end_date >= DateOnly.FromDateTime(Now), ct);
+            .AnyAsync(c => c.slot_id == app.slot_id
+                && (c.contract_status == ContractStatuses.Active || c.contract_status == ContractStatuses.Suspended)
+                && c.end_date >= DateOnly.FromDateTime(Now), ct);
 
         if (hasOccupant)
         {
@@ -394,8 +458,11 @@ public sealed class WardComplianceService(
                     throw new DomainRuleException("Không thể cấp phép khi hồ sơ điểm bán liên kết chưa được phê duyệt (BR-16).");
                 }
 
+                // See the same fix in GetRentalApplicationDetailAsync above.
                 var occupied = await db.RentalContracts
-                    .AnyAsync(c => c.slot_id == app.slot_id && c.contract_status == "ACTIVE" && c.end_date >= DateOnly.FromDateTime(Now), ct);
+                    .AnyAsync(c => c.slot_id == app.slot_id
+                        && (c.contract_status == ContractStatuses.Active || c.contract_status == ContractStatuses.Suspended)
+                        && c.end_date >= DateOnly.FromDateTime(Now), ct);
 
                 if (occupied)
                 {
@@ -560,7 +627,11 @@ public sealed class WardComplianceService(
         var vendorName = contract?.vendor.BusinessRegistrations.FirstOrDefault()?.display_name
             ?? $"Hộ kinh doanh #{validity.vendor_id}";
 
-        var isPermitValid = string.Equals(validity.effective_status, "ACTIVE", StringComparison.OrdinalIgnoreCase);
+        // effective_status (vw_PermitValidity) can only ever be VALID/NOT_YET_VALID/SUSPENDED/
+        // EXPIRED/REVOKED -- it is never "ACTIVE" (that's the raw DigitalPermits.permit_status
+        // column instead). Comparing against "ACTIVE" here made every scanned permit, including
+        // genuinely valid ones, always report as invalid.
+        var isPermitValid = IsPermitEffectivelyValid(validity.effective_status);
 
         double? distanceMeters = null;
         var isLocationMatched = true;
@@ -645,18 +716,36 @@ public sealed class WardComplianceService(
         }
 
         var isSuspend = string.Equals(request.Action, "SUSPEND", StringComparison.OrdinalIgnoreCase);
-        var newStatus = isSuspend ? "SUSPENDED" : "REVOKED";
+        var newStatus = isSuspend ? PermitStatuses.Suspended : PermitStatuses.Revoked;
 
         permit.permit_status = newStatus;
         if (isSuspend)
         {
             permit.suspended_at = Now;
             permit.suspension_reason = request.Reason.Trim();
+            // Contract stays legally in force but under suspension -- the slot remains
+            // occupied (not returned to AVAILABLE), since this isn't a termination.
+            permit.contract.contract_status = ContractStatuses.Suspended;
         }
         else
         {
             permit.revoked_at = Now;
             permit.revocation_reason = request.Reason.Trim();
+            // A prior version only ever wrote DigitalPermit.permit_status here, leaving
+            // RentalContract and SidewalkSlot permanently out of sync with a revoked permit --
+            // the slot would never be freed and the contract would stay ACTIVE forever.
+            permit.contract.contract_status = ContractStatuses.Revoked;
+
+            var stillOccupied = await db.RentalContracts.AsNoTracking()
+                .AnyAsync(c => c.slot_id == permit.contract.slot_id
+                    && c.contract_id != permit.contract.contract_id
+                    && (c.contract_status == ContractStatuses.Active || c.contract_status == ContractStatuses.Suspended)
+                    && c.end_date >= DateOnly.FromDateTime(Now), ct);
+
+            if (!stillOccupied)
+            {
+                permit.contract.slot.slot_status = SlotStatuses.Available;
+            }
         }
 
         db.AuditLogs.Add(new AuditLog
@@ -1024,6 +1113,15 @@ public sealed class WardComplianceService(
     #endregion
 
     #region Helpers
+    /// <summary>
+    /// effective_status (vw_PermitValidity) can only ever be VALID/NOT_YET_VALID/SUSPENDED/
+    /// EXPIRED/REVOKED -- it is never "ACTIVE" (that's the raw DigitalPermits.permit_status
+    /// column instead). Public/static so it's directly unit-testable without a database
+    /// (vw_PermitValidity is a real SQL Server view with no SQLite equivalent in tests).
+    /// </summary>
+    public static bool IsPermitEffectivelyValid(string? effectiveStatus) =>
+        string.Equals(effectiveStatus, PermitEffectiveStatuses.Valid, StringComparison.OrdinalIgnoreCase);
+
     private static double CalculateDistanceMeters(double lat1, double lon1, double lat2, double lon2)
     {
         const double R = 6371000.0;
