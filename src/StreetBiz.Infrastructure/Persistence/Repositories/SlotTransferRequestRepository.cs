@@ -83,5 +83,7 @@ public sealed class SlotTransferRequestRepository(StreetBizDbContext dbContext) 
     private static readonly Expression<Func<SlotTransferRequest, SlotTransferRequestRow>> ToRowExpression =
         t => new SlotTransferRequestRow(
             t.transfer_id, t.contract_id, t.from_vendor_id, t.to_vendor_id, t.transfer_status,
-            t.initiated_at, t.accepted_at, t.review_decision_reason, t.reviewed_at);
+            t.initiated_at, t.accepted_at, t.review_decision_reason, t.reviewed_at,
+            t.contract.slot.slot_code, t.contract.slot.zone.zone_name,
+            t.contract.start_date, t.contract.end_date);
 }

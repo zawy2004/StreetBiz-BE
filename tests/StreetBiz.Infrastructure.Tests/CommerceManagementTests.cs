@@ -58,7 +58,8 @@ public sealed class CommerceManagementTests
         (await f.Db.RentalContracts.FindAsync(1L))!.contract_status = "CANCELLED";
         await f.Db.SaveChangesAsync();
         await Assert.ThrowsAsync<DomainRuleException>(() => f.Service.SaveStore(1, new(1, 1, "Store", null, "OPEN"), default));
-        Assert.Empty(await f.Repository.SearchMenuItemsAsync(null, 50, default));
+        Assert.Empty(await f.Repository.SearchMenuItemsAsync(
+            new MarketplaceMenuFilter(null, null, null, null, null, null, MarketplaceMenuSorts.Name), 50, default));
         Assert.Equal(CartMutationOutcome.StorefrontUnavailable, (await f.Repository.AddCartItemAsync(2, 1, 1, null, default)).Outcome);
     }
 
