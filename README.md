@@ -9,7 +9,8 @@ permit verification, public profiles, customer ratings and suspicious-vendor rep
 [Platform administration workflows](docs/platform-administration-workflows.md) documents
 food-category management, content moderation and order-complaint resolution. See
 [Commerce order workflows](docs/commerce-order-workflows.md) for cart, prepaid order,
-pickup, seller processing, refund-request and sales-summary contracts.
+pickup, seller processing, refund-request, address snapshots, authenticated
+SignalR updates and sales-summary contracts.
 
 StreetBiz backend foundation built with .NET 8, ASP.NET Core, Entity Framework
 Core 8, SQL Server, and Clean Architecture. The current codebase includes
@@ -57,6 +58,20 @@ dotnet user-secrets --project src/StreetBiz.API set "ConnectionStrings:StreetBiz
 
 Never commit a real password, connection string, .env file, or secrets.json.
 appsettings files intentionally contain no credentials.
+
+Payment credentials and URLs follow the same rule. Configure them with
+environment variables or user-secrets:
+
+~~~powershell
+dotnet user-secrets --project src/StreetBiz.API set "Payments:Momo:CheckoutUrlTemplate" "<provider-checkout-url-template>"
+dotnet user-secrets --project src/StreetBiz.API set "Payments:Momo:CallbackSecret" "<merchant-callback-secret>"
+dotnet user-secrets --project src/StreetBiz.API set "Payments:ZaloPay:CheckoutUrlTemplate" "<provider-checkout-url-template>"
+dotnet user-secrets --project src/StreetBiz.API set "Payments:ZaloPay:CallbackSecret" "<merchant-callback-secret>"
+~~~
+
+Equivalent environment keys use double underscores, for example
+`Payments__Momo__CallbackSecret`. Callback requests send the hexadecimal
+HMAC-SHA256 in `X-Payment-Signature`.
 
 ## Reverse-engineer the existing database
 
@@ -123,6 +138,10 @@ dotnet ef migrations script --idempotent --project src/StreetBiz.Infrastructure 
 
 Review generated SQL for destructive or unintended operations before requesting
 approval to apply it. See docs/migration-guide.md.
+Orders need no schema change: the supplied SQL and live database contain every
+required table/column. Run `docs/orders-schema-verification.sql` for a read-only
+schema check. Do not create an EF migration merely to adopt this script-created
+database.
 
 ## Solution layout
 

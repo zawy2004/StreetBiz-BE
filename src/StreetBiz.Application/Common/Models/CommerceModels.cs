@@ -28,7 +28,8 @@ public sealed record CommerceCartRow(
     string StorefrontName,
     string StorefrontStatus,
     IReadOnlyList<CommerceCartItemRow> Items,
-    decimal Subtotal);
+    decimal Subtotal,
+    string? StorefrontAddress = null);
 
 public sealed record CommerceOrderItemRow(
     long OrderItemId,
@@ -67,7 +68,37 @@ public sealed record CommerceOrderRow(
     DateTime? CompletedAt,
     DateTime CreatedAt,
     IReadOnlyList<CommerceOrderItemRow> Items,
-    IReadOnlyList<CommerceOrderHistoryRow> History);
+    IReadOnlyList<CommerceOrderHistoryRow> History,
+    long? PaymentTransactionId = null,
+    string? PaymentIdempotencyKey = null,
+    decimal? PaymentAmount = null,
+    string? PaymentProviderReference = null,
+    string? StorefrontImageUrl = null,
+    string? StorefrontAddress = null);
+
+public sealed record PaymentCallbackData(
+    string Provider,
+    string? ProviderReference,
+    string? IdempotencyKey,
+    decimal? Amount,
+    string? Status,
+    string RawPayload,
+    bool SignatureValid);
+
+public enum PaymentCallbackOutcome
+{
+    Applied,
+    Duplicate,
+    Unmatched,
+    Rejected,
+}
+
+public sealed record PaymentCallbackMutationResult(
+    PaymentCallbackOutcome Outcome,
+    long CallbackEventId,
+    long? TransactionId,
+    long? OrderId,
+    string? OrderStatus);
 
 public sealed record CommerceSalesSummaryRow(
     string Period,

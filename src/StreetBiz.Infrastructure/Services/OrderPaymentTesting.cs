@@ -39,6 +39,20 @@ public sealed class OrderPaymentTesting(StreetBizDbContext db, ICustomerContext 
                     row.provider_refund_reference = $"SANDBOX-REFUND-{row.refund_id}";
                     row.completed_at = now;
                 }
+                if (refunds.Count > 0)
+                {
+                    db.Notifications.Add(new Notification
+                    {
+                        user_id = customer,
+                        notification_type = "ORDER",
+                        title = "Hoàn tiền thành công",
+                        body = $"Khoản hoàn tiền cho đơn {order.order_code} đã hoàn tất.",
+                        related_entity_type = "ORDER",
+                        related_entity_id = orderId,
+                        is_read = false,
+                        sent_at = now,
+                    });
+                }
                 if (refunds.Count == 0 && !await db.RefundTransactions.AnyAsync(x => x.order_id == orderId && x.refund_status == "SUCCESS", ct))
                     throw new ConflictException("Chưa có yêu cầu hoàn tiền được duyệt.");
             }
@@ -50,6 +64,29 @@ public sealed class OrderPaymentTesting(StreetBizDbContext db, ICustomerContext 
                 payment.transaction_status = "FAILED";
                 payment.provider_reference = $"SANDBOX-FAILED-{payment.transaction_id}";
                 payment.callback_received_at = now;
+                var previous = order.order_status;
+                order.order_status = "CANCELLED";
+                order.completed_at = now;
+                db.OrderStatusHistories.Add(new OrderStatusHistory
+                {
+                    order_id = orderId,
+                    from_status = previous,
+                    to_status = "CANCELLED",
+                    changed_by = null,
+                    note = "Sandbox payment callback failed.",
+                    changed_at = now,
+                });
+                db.Notifications.Add(new Notification
+                {
+                    user_id = customer,
+                    notification_type = "ORDER",
+                    title = "Thanh toán thất bại",
+                    body = $"Đơn {order.order_code} đã bị huỷ; giỏ hàng vẫn còn hiệu lực.",
+                    related_entity_type = "ORDER",
+                    related_entity_id = orderId,
+                    is_read = false,
+                    sent_at = now,
+                });
             }
             db.AuditLogs.Add(new AuditLog { actor_user_id = customer, entity_type = "Order", entity_id = orderId,
                 action = refund ? "ORD_SANDBOX_REFUND" : "ORD_SANDBOX_FAILED", created_at = now });

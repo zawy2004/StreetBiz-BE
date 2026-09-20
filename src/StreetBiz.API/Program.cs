@@ -6,6 +6,7 @@ using StreetBiz.API.Extensions;
 using StreetBiz.Application;
 using StreetBiz.Infrastructure;
 using StreetBiz.Infrastructure.Storage;
+using StreetBiz.API.Hubs;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -47,6 +48,7 @@ builder.Services.AddSwaggerGen(options =>
 builder.Services.AddProblemDetails();
 builder.Services.AddWardApi();
 builder.Services.AddCommunityApi();
+builder.Services.AddSingleton<IOrderRealtimePublisher, OrderRealtimePublisher>();
 builder.Services
     .AddHealthChecks()
     .AddSqlServer(
@@ -80,6 +82,7 @@ app.UseRateLimiter();
 
 app.MapControllers();
 app.MapWardApi();
+app.MapHub<OrderHub>("/hubs/orders");
 
 app.MapHealthChecks(
     "/health",

@@ -46,11 +46,18 @@ public sealed class CommerceRepositoryDatabaseTests
         Assert.NotNull(customerOrder);
         Assert.Equal(existingOrder.order_status, customerOrder.OrderStatus);
 
-        if (existingOrder.order_status != OrderStatuses.PendingPayment)
+        var sellerVisibleOrder = await db.Orders.AsNoTracking()
+            .Where(order => order.storefront.registration.vendor_id == existingOrder.VendorId
+                && order.order_status != OrderStatuses.PendingPayment
+                && order.OrderStatusHistories.Any(history =>
+                    history.to_status == OrderStatuses.Placed))
+            .Select(order => new { order.order_id })
+            .FirstOrDefaultAsync();
+        if (sellerVisibleOrder is not null)
         {
             var sellerOrder = await repository.GetSellerOrderAsync(
                 existingOrder.VendorId,
-                existingOrder.order_id,
+                sellerVisibleOrder.order_id,
                 CancellationToken.None);
             Assert.NotNull(sellerOrder);
         }

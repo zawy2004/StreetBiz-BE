@@ -5,6 +5,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Hosting;
 using Moq;
 using StreetBiz.API.Controllers;
+using StreetBiz.API.Hubs;
 using StreetBiz.Application.Features.Commerce;
 
 namespace StreetBiz.API.Tests;
@@ -23,10 +24,13 @@ public sealed class OrderPaymentBoundaryTests
             new Dictionary<string, string?> { ["Payments:SandboxEnabled"] = enabled.ToString() }).Build();
         var sender = new Mock<ISender>(MockBehavior.Strict);
         var testing = new Mock<IOrderPaymentTesting>(MockBehavior.Strict);
-        var payments = new OrderPaymentsController(environment.Object, configuration, sender.Object, testing.Object);
+        var realtime = Mock.Of<IOrderRealtimePublisher>();
+        var payments = new OrderPaymentsController(
+            environment.Object, configuration, sender.Object, testing.Object, realtime);
         Assert.IsType<NotFoundResult>(await payments.Fail(1, default));
         Assert.IsType<NotFoundResult>(await payments.Refund(1, default));
-        var orders = new OrdersController(sender.Object, environment.Object, configuration);
+        var orders = new OrdersController(
+            sender.Object, environment.Object, configuration, Mock.Of<IOrderRealtimePublisher>());
         Assert.IsType<NotFoundResult>((await orders.ConfirmSandboxPayment(1, default)).Result);
         var options = JsonSerializer.Serialize(Assert.IsType<OkObjectResult>(payments.Options()).Value);
         Assert.Contains("UNAVAILABLE", options);
@@ -42,7 +46,7 @@ public sealed class OrderPaymentBoundaryTests
         var configuration = new ConfigurationBuilder().AddInMemoryCollection(
             new Dictionary<string, string?> { ["Payments:SandboxEnabled"] = "true" }).Build();
         var controller = new OrderPaymentsController(environment.Object, configuration,
-            Mock.Of<ISender>(), Mock.Of<IOrderPaymentTesting>());
+            Mock.Of<ISender>(), Mock.Of<IOrderPaymentTesting>(), Mock.Of<IOrderRealtimePublisher>());
         var options = JsonSerializer.SerializeToElement(Assert.IsType<OkObjectResult>(controller.Options()).Value);
         Assert.Equal("SANDBOX", options.GetProperty("mode").GetString());
         Assert.Equal(2, options.GetProperty("providers").GetArrayLength());

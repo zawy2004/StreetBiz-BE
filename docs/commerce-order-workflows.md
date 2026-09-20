@@ -3,14 +3,15 @@
 This document covers CART-01, ORD-01–04 and SORD-01–04. The implementation uses
 the existing `ShoppingCarts`, `ShoppingCartItems`, `Orders`, `OrderItems`,
 `OrderStatusHistories`, `PaymentTransactions` and `RefundTransactions` tables.
-It does not create or migrate the database schema.
+Migration `AddOrderStorefrontAddressSnapshot` adds and backfills the immutable
+storefront address stored with each order.
 
 ## Use-case coverage
 
 | Use case | Backend behavior |
 | --- | --- |
 | CART-01 | View the active cart; add, update, remove or clear items. One active cart belongs to one storefront. |
-| ORD-01 | Snapshot cart items and prices, create a `PENDING_PAYMENT` order and pending MOMO/ZALOPAY transaction with an idempotency key. |
+| ORD-01 | Snapshot cart items, prices and storefront address; create a `PENDING_PAYMENT` order and pending MOMO/ZALOPAY transaction with an idempotency key. |
 | ORD-02 | List and view customer-owned orders with payment and status history. |
 | ORD-03 | Cancel only `PENDING_PAYMENT` or `PLACED`; a paid order creates a pending full-refund request. |
 | ORD-04 | Customer confirms pickup only from `READY_FOR_PICKUP`. |
@@ -28,6 +29,7 @@ returned. Cart addition, checkout and sandbox payment recheck this eligibility.
 
 ```text
 PENDING_PAYMENT --payment success--> PLACED
+PENDING_PAYMENT --payment failure--> CANCELLED
 PENDING_PAYMENT --customer cancel--> CANCELLED
 PLACED --customer cancel-----------> CANCELLED + pending refund
 PLACED --seller reject-------------> REJECTED  + pending refund
@@ -37,7 +39,8 @@ PREPARING -------------------------> READY_FOR_PICKUP
 READY_FOR_PICKUP --customer/seller-> COMPLETED
 ```
 
-The API requires `expectedStatus` on mutable order commands. Each transaction
+Legacy API actions accept `expectedStatus`; the canonical customer/vendor
+actions infer the only valid source state server-side. Each transaction
 rechecks the persisted status under serializable isolation; stale requests return
 `409 Conflict` instead of overwriting a concurrent transition. Transitions write
 an order-history row, an audit log and the corresponding in-app notification.
@@ -63,6 +66,8 @@ Authenticated customer (`CUSTOMER`, active account):
 | PUT | `/api/cart/items/{menuItemId}` | Replace quantity/note. |
 | DELETE | `/api/cart/items/{menuItemId}` | Remove one item. |
 | DELETE | `/api/cart` | Abandon the active cart. |
+| POST | `/api/orders/checkout` | Checkout `{ cartId, provider }` with required `Idempotency-Key` header. |
+| GET | `/api/orders/me?status=&page=&pageSize=&fromDate=&toDate=&sort=` | Paged current-customer orders. |
 | POST | `/api/orders` | Place `{ provider, idempotencyKey }`. |
 | GET | `/api/orders` | List the current customer's orders. |
 | GET | `/api/orders/{orderId}` | Read a customer-owned order. |
@@ -80,19 +85,70 @@ Authenticated seller (`VENDOR`, active account and owned storefront):
 | POST | `/api/seller/orders/{orderId}/handover` | Complete a ready order. |
 | GET | `/api/seller/orders/sales-summary?period=DAY` | `DAY`, `WEEK` or `MONTH` summary. |
 
+Canonical vendor routes are `/api/vendor/orders`: list/detail plus
+`/{id}/accept`, `/{id}/reject`, `/{id}/preparing`,
+`/{id}/ready-for-pickup`, `/{id}/confirm-handover`, and
+`/sales-summary?fromDate=&toDate=&groupBy=day|week|month`. The old
+`/api/seller/orders` routes remain for existing clients.
+
+Cart responses include `storefrontAddress`, resolved from the approved business
+registration. Order responses expose the persisted value as both
+`storefrontAddress` and `storefront.address`, so later registration address
+changes do not rewrite historical orders.
+
+## Realtime order updates
+
+Authenticated customers and vendors connect to:
+
+```text
+/hubs/orders
+```
+
+The JavaScript SignalR client supplies the normal JWT through its
+`accessTokenFactory`. Query-string bearer tokens are accepted only on this hub
+path. Call `SubscribeOrder(orderId)` after connecting. The hub verifies customer
+ownership or vendor storefront ownership before adding the connection to the
+private `order:{id}` group; unauthorized callers receive a generic hub error.
+
+After payment callbacks, cancel/pickup, accept/reject, preparation, ready and
+handover transitions commit, the server emits `OrderUpdated` containing
+`orderId`, `orderStatus` and `changedAtUtc`. Clients refetch the authoritative
+order detail. SignalR automatic reconnect is supported and polling remains a
+frontend fallback while the hub is disconnected.
+
 ## Payment boundary
 
-The repository creates provider-neutral pending transactions, but real MOMO and
-ZaloPay redirect/callback adapters are external integrations and are not faked in
-production. Development enables `Payments:SandboxEnabled`; only then the hidden
-endpoint below is mapped:
+Checkout creates the order, immutable item/price snapshots and a provider-neutral
+`PENDING` transaction under serializable isolation. The cart remains `ACTIVE`
+and locked from edits until the provider callback succeeds. `IPaymentGateway`
+returns the configured payment URL; no controller accepts a client-supplied
+success status.
+
+Providers call this unauthenticated but signed endpoint:
+
+```text
+POST /api/payments/{MOMO|ZALOPAY}/callback
+X-Payment-Signature: <hex HMAC-SHA256 of the exact raw request body>
+```
+
+Normalized callback JSON contains `providerReference`, `idempotencyKey`,
+`amount` and `status` (`SUCCESS` or `FAILED`). Every callback is stored in
+`PaymentCallbackEvents`. Invalid signatures/amounts are `REJECTED`; unknown
+transactions are `UNMATCHED`; terminal repeats are `DUPLICATE`. Only an
+`APPLIED` success changes the order to `PLACED`, sets `placed_at`, checks out
+the cart and notifies customer/vendor. Failure changes the order to `CANCELLED`,
+keeps the cart active and notifies only the customer. Callback history uses
+`changed_by = NULL`.
+
+Development enables `Payments:SandboxEnabled`; only then the legacy hidden
+simulation endpoint below is available:
 
 ```text
 POST /api/orders/{orderId}/payment/sandbox-confirm
 ```
 
 It is excluded from Swagger and still requires the owning customer. It changes a
-pending/failed sandbox payment to `SUCCESS` and the order to `PLACED`.
+pending sandbox payment to `SUCCESS` and the order to `PLACED`.
 Repeated confirmation never resets an already processed order. The frontend now
 reads `GET /api/orders/payment-options`; a client environment flag cannot enable
 server payment simulation. Checkout creates a pending order, then opens a
@@ -120,7 +176,7 @@ against the database, not caller-provided user/vendor IDs.
 | GET / PUT | `/api/orders/{orderId}/review` | Customer: read own review (JSON null if absent) / upsert rating 1–5 and text for a COMPLETED order. |
 | GET / POST | `/api/orders/{orderId}/complaints` | Customer: list / create complaintType COMPLAINT or REFUND_REQUEST, description, requestedRefundAmount. |
 | GET | `/api/orders/payment-options` | Authenticated: SANDBOX or UNAVAILABLE, provider list and explanatory message. |
-| POST | `/api/orders/{orderId}/payment/sandbox-fail` | Owning customer, Development only: simulate failure, leaving the order retryable. |
+| POST | `/api/orders/{orderId}/payment/sandbox-fail` | Owning customer, Development only: simulate a failed callback, cancelling the order while keeping its cart active. |
 | POST | `/api/orders/{orderId}/refund/sandbox-confirm` | Owning customer, Development only: complete approved PENDING refunds for a successful sandbox payment. |
 
 Prices/refund requests are integer VND. Menu prices are 1–50,000,000.
@@ -130,16 +186,23 @@ and cannot request more than the payment minus pending/successful refunds.
 ADM-05 resolves/rejects these same complaint rows; customers see the resolution.
 Order/refund/history/complaint timestamps are returned as UTC instants.
 
-No schema migration is needed. Store writes respect the existing SQL
-`TR_Storefronts_Phase2Gate`; an invalid contract returns a domain error.
+Store writes respect the existing SQL `TR_Storefronts_Phase2Gate`; an invalid
+contract returns a domain error.
+
+For EF-managed databases, apply the new migration normally. Databases imported
+from the provided SQL script may report `InitialBaseline` as pending even though
+the schema already exists; do not run that baseline against an existing schema.
+Apply only the idempotent address migration SQL or first baseline the migration
+history according to the deployment process.
 
 ## Remaining production payment work
 
-This is a complete **development simulation flow**, not a real gateway integration.
-MoMo/ZaloPay create-payment/redirect, signed callback verification, server-side
-payment reconciliation and real refund execution are still not implemented.
-Do not enable production checkout until those adapters and merchant credentials,
-HTTPS callback URL, timeout/late-callback handling and gateway sandbox tests exist.
+The provider-neutral boundary, checkout URL configuration, signed callback
+verification, callback audit/idempotency and refund interface are implemented.
+Provider-specific MoMo/ZaloPay request signing, token acquisition, create-payment
+HTTP calls, reconciliation jobs and real refund execution still require merchant
+accounts and provider credentials. Do not enable production checkout until those
+adapters, an HTTPS callback URL and provider sandbox certification are supplied.
 No secrets belong in frontend VITE variables or version-controlled files.
 
 See `commerce-live.postman_collection.json` for manual API requests.
