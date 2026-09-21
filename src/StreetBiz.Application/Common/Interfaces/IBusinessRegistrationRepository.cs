@@ -27,6 +27,13 @@ public interface IBusinessRegistrationRepository
     Task<bool> HasApprovedRegistrationAsync(long vendorId, CancellationToken cancellationToken);
 
     /// <summary>
+    /// Separate, explicit consent to run AI-OCR on the registration's uploaded ID photo
+    /// (biometric data). Luat Bao ve du lieu ca nhan 2025 / Nghi dinh 356/2025/ND-CP requires
+    /// this to be its own affirmative action, not folded into a general terms checkbox.
+    /// </summary>
+    Task RecordBiometricConsentAsync(long registrationId, CancellationToken cancellationToken);
+
+    /// <summary>
     /// PRI-02/PRI-07: true when an evidence file uploaded by <paramref name="ownerUserId"/> is
     /// attached to a registration in <paramref name="wardUnitId"/>, i.e. the ward officer
     /// reviewing that ward is entitled to open it.

@@ -41,6 +41,7 @@ public sealed partial class CommerceRepository(
         int take,
         CancellationToken cancellationToken)
     {
+        filter ??= new(null, null, null, null, null, null, MarketplaceMenuSorts.Name);
         var items = MarketplaceMenuQuery();
         if (filter.Query is { } query)
         {

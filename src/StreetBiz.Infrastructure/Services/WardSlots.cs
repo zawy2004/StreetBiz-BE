@@ -62,14 +62,6 @@ public sealed class WardSlots(
         .Include(x => x.to_vendor).ThenInclude(x => x.user)
         .Where(x => x.contract.slot.zone.ward_unit_id == actor.WardId);
 
-    // Every registration read goes through this, so a case can never be listed,
-    // opened or decided outside the officer's own ward (BR-45, SEC-03).
-    private IQueryable<BusinessRegistration> Registrations(WardActor actor) => db.BusinessRegistrations
-        .Include(x => x.vendor).ThenInclude(x => x.user)
-        .Include(x => x.RegistrationEvidences)
-        .Where(x => x.ward_unit_id == actor.WardId
-            && x.registration_status != RegistrationStatuses.Draft);
-
     public async Task<CasePage> ListAsync(WardActor actor, string kind, int page, CancellationToken ct)
     {
         await CheckActor(actor, ct);
@@ -84,11 +76,6 @@ public sealed class WardSlots(
                 .Skip(offset).Take(21).Select(x => x.address_change_id).ToListAsync(ct),
             "transfers" => await Transfers(actor).OrderByDescending(x => x.initiated_at).ThenByDescending(x => x.transfer_id)
                 .Skip(offset).Take(21).Select(x => x.transfer_id).ToListAsync(ct),
-            // REG-06: fast-tracked applications surface first, then oldest-waiting first
-            // so a queue is worked front to back rather than newest-first.
-            "registrations" => await Registrations(actor)
-                .OrderByDescending(x => x.fast_track_flag).ThenBy(x => x.created_at).ThenBy(x => x.registration_id)
-                .Skip(offset).Take(21).Select(x => x.registration_id).ToListAsync(ct),
             _ => throw new WardException(400, "invalid_kind", "Loại hồ sơ không hợp lệ.")
         };
         var items = new List<WardCase>();
@@ -170,54 +157,6 @@ public sealed class WardSlots(
                 null, row.initiated_at, row.review_decision_reason, Open(row.transfer_status) ? blockers : [],
                 Open(row.transfer_status) ? blockers.Length == 0 ? ["APPROVE", "REJECT"] : ["REJECT"] : [],
                 ContractTerm: $"{row.contract.start_date:dd/MM/yyyy} – {row.contract.end_date:dd/MM/yyyy}", Outstanding: debt);
-        }
-        if (kind == WardCaseKinds.Registrations)
-        {
-            var row = await Registrations(actor).SingleOrDefaultAsync(x => x.registration_id == id, ct);
-            if (row is null) { WardRules.NotFound(); return null!; }
-
-            var documents = row.RegistrationEvidences
-                .OrderBy(x => x.uploaded_at).ThenBy(x => x.evidence_id)
-                .Select(x => new WardDocument(x.evidence_type, x.file_url, x.uploaded_at))
-                .ToArray();
-
-            var blockers = new List<string>();
-            var missing = EvidenceTypes.RequiredFor(row.vendor_type)
-                .Where(required => !row.RegistrationEvidences.Any(e => e.evidence_type == required))
-                .Select(EvidenceTypes.Label)
-                .ToArray();
-            if (missing.Length > 0)
-                blockers.Add($"Thiếu giấy tờ bắt buộc: {string.Join(", ", missing)}.");
-            if (row.vendor.user.account_status != AccountStatuses.Active)
-                blockers.Add("Tài khoản hộ kinh doanh đang bị khoá hoặc ngừng hoạt động.");
-
-            var typeLabel = row.vendor_type == VendorTypes.FixedStorefront
-                ? "Hộ kinh doanh cố định"
-                : "Bán hàng lưu động";
-            var owner = row.vendor.user.full_name ?? row.vendor.user.phone_number;
-
-            // Missing evidence must not block asking for it or refusing the file,
-            // only the approval itself (SRS 3.3.1 abnormal case).
-            string[] actions = row.registration_status switch
-            {
-                RegistrationStatuses.Submitted => blockers.Count == 0
-                    ? ["REVIEW", "APPROVE", "REJECT", "REQUEST_INFO"]
-                    : ["REVIEW", "REJECT", "REQUEST_INFO"],
-                RegistrationStatuses.UnderReview => blockers.Count == 0
-                    ? ["APPROVE", "REJECT", "REQUEST_INFO"]
-                    : ["REJECT", "REQUEST_INFO"],
-                _ => [],
-            };
-
-            return new(Id(id), kind, "Đăng ký kinh doanh", row.registration_status,
-                $"HS-{id:D6}", row.display_name,
-                $"{typeLabel} · Chủ hộ: {owner} · {row.declared_address ?? "Chưa khai báo địa chỉ"}",
-                row.address_latitude.HasValue && row.address_longitude.HasValue
-                    ? new((double)row.address_latitude, (double)row.address_longitude)
-                    : null,
-                documents.FirstOrDefault()?.FileUrl, row.created_at, row.review_decision_reason,
-                actions.Length > 0 ? blockers.ToArray() : [], actions,
-                Documents: documents, FastTrack: row.fast_track_flag);
         }
         throw new WardException(400, "invalid_kind", "Loại hồ sơ không hợp lệ.");
     }
@@ -315,25 +254,6 @@ public sealed class WardSlots(
                 row.reviewed_at = Now;
                 // Queuing does not displace the current tenant or release the old contract.
                 await NotifyVendor(row.registration.vendor_id, kind, id, reason, ct);
-            }
-            else if (kind == WardCaseKinds.Registrations)
-            {
-                var row = await Registrations(actor).SingleAsync(x => x.registration_id == id, ct);
-                row.registration_status = decision.Decision switch
-                {
-                    "APPROVE" => RegistrationStatuses.Approved,
-                    "REJECT" => RegistrationStatuses.Rejected,
-                    "REQUEST_INFO" => RegistrationStatuses.MoreInformationRequired,
-                    _ => RegistrationStatuses.UnderReview,
-                };
-                // BR-46: the decision carries its reviewer and timestamp.
-                row.reviewed_by = actor.UserId;
-                row.reviewed_at = Now;
-                row.review_decision_reason = reason;
-                row.updated_at = Now;
-                // BR-08: registration and rental application are independent workflows,
-                // so no rental application or contract is touched here.
-                await NotifyVendor(row.vendor_id, kind, id, reason, ct, "Kết quả xét duyệt hồ sơ đăng ký");
             }
             else
             {

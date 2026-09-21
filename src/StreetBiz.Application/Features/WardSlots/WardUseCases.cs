@@ -239,11 +239,15 @@ public static class WardCaseKinds
     public const string Conflicts = "conflicts";
     public const string Transfers = "transfers";
 
-    /// <summary>REG-06 / WARD registration review queue (SRS 3.3.1).</summary>
-    public const string Registrations = "registrations";
+    // Business-registration review deliberately does NOT live here: it goes through
+    // WardComplianceController/WardComplianceService's dedicated /ward/enrollments
+    // endpoints instead, which enforce the BR-41 identity-verification gate
+    // (ConfirmIdentityAsync must run before APPROVE). A registrations case-kind was
+    // briefly added here in parallel and has been removed to avoid a second,
+    // gate-less path to approve a BusinessRegistration.
 
     public static bool IsValid(string kind) =>
-        kind is Proposals or Conflicts or Transfers or Registrations;
+        kind is Proposals or Conflicts or Transfers;
 
     public static bool SupportsDecision(string kind, string decision)
     {
@@ -252,8 +256,6 @@ public static class WardCaseKinds
         {
             Proposals or Transfers => normalized is "APPROVE" or "REJECT",
             Conflicts => normalized is "QUEUE" or "REJECT",
-            // SRS 3.3.1 decision enum, plus REVIEW to claim a submitted case.
-            Registrations => normalized is "APPROVE" or "REJECT" or "REQUEST_INFO" or "REVIEW",
             _ => false,
         };
     }

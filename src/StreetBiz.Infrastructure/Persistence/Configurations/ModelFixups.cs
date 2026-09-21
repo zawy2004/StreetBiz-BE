@@ -46,6 +46,10 @@ public partial class StreetBizDbContext
         modelBuilder.Entity<RentalContract>().Ignore(e => e.FeeSchedule);
         modelBuilder.Entity<BusinessRegistration>().Ignore(e => e.AddressChangeRequest);
 
+        // Pending schema: see docs/business-registration-real-requirements-schema.sql.
+        modelBuilder.Entity<BusinessRegistration>()
+            .Property(e => e.capital_amount).HasColumnType("decimal(18,0)");
+
         // UQ_DigitalPermits_LivePerContract filters WHERE permit_status <> 'REVOKED': a
         // contract may accumulate a REVOKED permit plus a replacement (SIDE-08, BR-19/20).
         modelBuilder.Entity<DigitalPermit>()
@@ -82,5 +86,28 @@ public partial class StreetBizDbContext
             .HasForeignKey(d => d.contract_id)
             .OnDelete(DeleteBehavior.ClientSetNull)
             .HasConstraintName("FK_FeeSchedules_Contract");
+
+        // Pending schema: see docs/kyc-ekyc-schema.sql. No navigation properties: the rows are
+        // written before the registration exists and are read back by id, never traversed.
+        modelBuilder.Entity<KycVerificationResult>(entity =>
+        {
+            entity.ToTable("KycVerificationResults");
+            entity.HasKey(e => e.kyc_result_id);
+            entity.Property(e => e.similarity_percent).HasColumnType("decimal(5,2)");
+        });
+
+        // Pending schema: see docs/business-registration-real-requirements-schema.sql.
+        // Not yet scaffolded from the live database, so the mapping is explicit here.
+        modelBuilder.Entity<BusinessRegistrationHouseholdMember>(entity =>
+        {
+            entity.ToTable("BusinessRegistrationHouseholdMembers");
+            entity.HasKey(e => e.member_id);
+            entity.Property(e => e.capital_contribution).HasColumnType("decimal(18,0)");
+            entity.HasOne(d => d.registration)
+                .WithMany(r => r.HouseholdMembers)
+                .HasForeignKey(d => d.registration_id)
+                .OnDelete(DeleteBehavior.Cascade)
+                .HasConstraintName("FK_HouseholdMembers_Registration");
+        });
     }
 }

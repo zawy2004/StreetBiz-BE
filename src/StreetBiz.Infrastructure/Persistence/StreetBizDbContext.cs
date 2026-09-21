@@ -22,6 +22,12 @@ public partial class StreetBizDbContext : DbContext
 
     public virtual DbSet<BusinessRegistration> BusinessRegistrations { get; set; }
 
+    // Pending schema: see docs/business-registration-real-requirements-schema.sql.
+    public virtual DbSet<BusinessRegistrationHouseholdMember> BusinessRegistrationHouseholdMembers { get; set; }
+
+    // Pending schema: see docs/kyc-ekyc-schema.sql.
+    public virtual DbSet<KycVerificationResult> KycVerificationResults { get; set; }
+
     public virtual DbSet<Complaint> Complaints { get; set; }
 
     public virtual DbSet<DigitalPermit> DigitalPermits { get; set; }
@@ -215,6 +221,7 @@ public partial class StreetBizDbContext : DbContext
             entity.Property(e => e.created_at).HasDefaultValueSql("(sysutcdatetime())");
             entity.Property(e => e.declared_address).HasMaxLength(500);
             entity.Property(e => e.display_name).HasMaxLength(180);
+            entity.Property(e => e.id_number).HasMaxLength(12);
             entity.Property(e => e.registration_status)
                 .HasMaxLength(30)
                 .HasDefaultValue("SUBMITTED");
@@ -562,6 +569,9 @@ public partial class StreetBizDbContext : DbContext
 
             entity.Property(e => e.amount).HasColumnType("decimal(18, 0)");
             entity.Property(e => e.created_at).HasDefaultValueSql("(sysutcdatetime())");
+            entity.Property(e => e.decision_number).HasMaxLength(50);
+            entity.Property(e => e.signer_name).HasMaxLength(150);
+            entity.Property(e => e.signer_title).HasMaxLength(100);
             entity.Property(e => e.penalty_status)
                 .HasMaxLength(20)
                 .HasDefaultValue("UNPAID");
@@ -599,6 +609,7 @@ public partial class StreetBizDbContext : DbContext
                 .HasMaxLength(30)
                 .HasComputedColumnSql("(CONVERT([nvarchar](30),N'WARD_AUTHORITY'))", true);
             entity.Property(e => e.effective_from).HasDefaultValueSql("(CONVERT([date],sysutcdatetime()))");
+            entity.Property(e => e.legal_basis).HasMaxLength(500);
             entity.Property(e => e.penalty_amount).HasColumnType("decimal(18, 0)");
             entity.Property(e => e.violation_type).HasMaxLength(50);
             entity.Property(e => e.ward_unit_type)

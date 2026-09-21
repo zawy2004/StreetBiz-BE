@@ -1,4 +1,4 @@
--- Customer discovery (DISC-01..06) fixture for local development.
+﻿-- Customer discovery (DISC-01..06) fixture for local development.
 --
 -- Discovery lists storefronts, and a storefront exists only after STORE-01, which
 -- the backend does not implement yet. This script creates the storefronts, their

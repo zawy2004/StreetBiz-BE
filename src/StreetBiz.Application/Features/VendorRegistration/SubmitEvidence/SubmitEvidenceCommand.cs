@@ -13,7 +13,13 @@ public sealed record SubmitEvidenceCommand(
     long RegistrationId,
     string EvidenceType,
     string FileUrl,
-    string? OcrExtractedData) : IRequest<RegistrationEvidenceDto>;
+    string? OcrExtractedData,
+    /// <summary>
+    /// Separate, explicit consent to run AI-OCR on this ID photo later (WARD-04/05/06's
+    /// document check). Only meaningful when true; a false/omitted value never clears an
+    /// already-recorded consent. See docs_system/features/ward-review-permit-compliance.md 6.1.
+    /// </summary>
+    bool BiometricConsent = false) : IRequest<RegistrationEvidenceDto>;
 
 public sealed class SubmitEvidenceCommandValidator : AbstractValidator<SubmitEvidenceCommand>
 {
@@ -62,6 +68,11 @@ public sealed class SubmitEvidenceCommandHandler(
 
         var evidence = new NewRegistrationEvidence(request.EvidenceType, request.FileUrl, request.OcrExtractedData);
         var id = await repository.AddEvidenceAsync(request.RegistrationId, evidence, cancellationToken);
+
+        if (request.BiometricConsent)
+        {
+            await repository.RecordBiometricConsentAsync(request.RegistrationId, cancellationToken);
+        }
 
         return new RegistrationEvidenceDto(
             id, request.RegistrationId, request.EvidenceType, request.FileUrl, DateTime.UtcNow);
