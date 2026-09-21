@@ -4,8 +4,8 @@ namespace StreetBiz.Infrastructure.Persistence.ScaffoldedModels;
 
 /// <summary>
 /// One recorded eKYC check (CCCD OCR or face match), written where it is computed so the
-/// reviewing officer reads a server-side score rather than one the client claimed. Pending
-/// schema: see docs/kyc-ekyc-schema.sql.
+/// reviewing officer reads a server-side score rather than one the client claimed.
+/// Schema: see db/StreetBiz_SQL_Server.sql.
 /// </summary>
 public partial class KycVerificationResult
 {

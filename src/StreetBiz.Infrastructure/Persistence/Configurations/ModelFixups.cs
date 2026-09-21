@@ -46,7 +46,7 @@ public partial class StreetBizDbContext
         modelBuilder.Entity<RentalContract>().Ignore(e => e.FeeSchedule);
         modelBuilder.Entity<BusinessRegistration>().Ignore(e => e.AddressChangeRequest);
 
-        // Pending schema: see docs/business-registration-real-requirements-schema.sql.
+        // Schema: see db/StreetBiz_SQL_Server.sql.
         modelBuilder.Entity<BusinessRegistration>()
             .Property(e => e.capital_amount).HasColumnType("decimal(18,0)");
 
@@ -87,7 +87,7 @@ public partial class StreetBizDbContext
             .OnDelete(DeleteBehavior.ClientSetNull)
             .HasConstraintName("FK_FeeSchedules_Contract");
 
-        // Pending schema: see docs/kyc-ekyc-schema.sql. No navigation properties: the rows are
+        // Schema: see db/StreetBiz_SQL_Server.sql. No navigation properties: the rows are
         // written before the registration exists and are read back by id, never traversed.
         modelBuilder.Entity<KycVerificationResult>(entity =>
         {
@@ -96,7 +96,7 @@ public partial class StreetBizDbContext
             entity.Property(e => e.similarity_percent).HasColumnType("decimal(5,2)");
         });
 
-        // Pending schema: see docs/business-registration-real-requirements-schema.sql.
+        // Schema: see db/StreetBiz_SQL_Server.sql.
         // Not yet scaffolded from the live database, so the mapping is explicit here.
         modelBuilder.Entity<BusinessRegistrationHouseholdMember>(entity =>
         {

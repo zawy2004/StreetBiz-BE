@@ -8,10 +8,12 @@ address, requests an address change, and transfers a slot to another vendor.
 Built on the Authentication & Vendor Onboarding module
 ([auth-vendor-onboarding.md](auth-vendor-onboarding.md)).
 
-Ward-side review (WARD-07/08/09/16/17/18) is not implemented yet — a contract
-only exists today via [dev-seed-side.sql](dev-seed-side.sql) or a manual SQL
-update, documented in
-[testing-sidewalk-slot-rental.md](testing-sidewalk-slot-rental.md).
+Ward-side review is implemented in the ward modules: WARD-07/08 approve a rental
+application and issue the contract, permit and fee schedule, and WARD-16/17/18 are in
+[ward-slot-workflows.md](ward-slot-workflows.md). WARD-09 (renewal approval) has no
+endpoint yet. The demo seed (`db/StreetBiz_Demo_Seed.sql`) already contains active
+contracts and permits; how to test is in
+[testing/sidewalk-slot-rental.md](testing/sidewalk-slot-rental.md).
 
 ## Endpoints
 
@@ -44,7 +46,7 @@ update, documented in
 | SIDE-13 Decline transfer | `POST /api/vendor/slot-transfers/{transferId}/decline` (auth) |
 
 How to run and test all of this end to end:
-[testing-sidewalk-slot-rental.md](testing-sidewalk-slot-rental.md).
+[testing/sidewalk-slot-rental.md](testing/sidewalk-slot-rental.md).
 
 A transfer request carries `slotCode`, `zoneName`, `contractStartDate` and `contractEndDate` of the contract being handed over,
 in both directions. Only the contract's holder can read the contract itself (`GET /api/vendor/rental-contracts/{id}`), so without
@@ -53,9 +55,8 @@ these fields the receiver could not tell which slot they are being asked to acce
 ## Slot workspace (vendor "Ô thuê" screen)
 
 The redesigned `/vendor/slots` screen needs data the original schema did not
-have. Apply [slot-workspace-schema.sql](slot-workspace-schema.sql) by hand (the
-API never changes the schema, see [migration-guide.md](migration-guide.md)); it
-is idempotent and is mirrored in `db/StreetBiz_SQL_Server.sql`.
+have. It is part of `db/StreetBiz_SQL_Server.sql` (see [database.md](database.md));
+rebuild the local database to get it.
 
 - **Slot detail**: `SidewalkSlotDto` now also carries `imageUrl`, `hasPower`,
   `hasWater`, `hasTrashBin`, `businessCategory` (`FOOD_BEVERAGE`, `RETAIL`,
@@ -66,7 +67,7 @@ is idempotent and is mirrored in `db/StreetBiz_SQL_Server.sql`.
   `AdministrativeUnits`, the fee table in `ZoneFeeComponents` and technical
   corridors / street furniture in `StreetFeatures` (`blocks_business = 1` means
   no slot can operate there). There is no ward-side UI to edit any of it yet;
-  it enters through SQL or [dev-seed-side.sql](dev-seed-side.sql).
+  it enters through SQL or the demo seed.
 - **Quote** = `price_per_day x days` plus each fee component (`PER_DAY` lines
   times the days, `PER_TERM` lines once). It is informational only -- the real
   fee schedule is generated at WARD-08 -- and is never stored.
@@ -116,7 +117,7 @@ is idempotent and is mirrored in `db/StreetBiz_SQL_Server.sql`.
   no PII or embedded expiry (permit validity always comes from the
   `vw_PermitValidity` view, never from the token). SIDE-08 only reads; nothing
   calls `Create` yet since permits are only ever issued by WARD-08, which does
-  not exist yet — that's why [dev-seed-side.sql](dev-seed-side.sql) inserts a
+  not exist yet — that's why the demo seed inserts a
   placeholder `qr_payload` directly.
 - **`effectiveStatus` always comes from `vw_PermitValidity`**, never derived
   from `DigitalPermits.permit_status` alone: a cancelled contract still shows

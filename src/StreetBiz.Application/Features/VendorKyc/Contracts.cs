@@ -60,7 +60,7 @@ public interface IKycVerificationService
     Task<KycFaceMatchResult> MatchFaceAsync(string selfieFileUrl, string idCardFrontFileUrl, CancellationToken ct);
 }
 
-/// <summary>Persists and reads back the AI check outcomes (see docs/kyc-ekyc-schema.sql).</summary>
+/// <summary>Persists and reads back the AI check outcomes (see db/StreetBiz_SQL_Server.sql).</summary>
 public interface IKycResultRepository
 {
     Task RecordIdCardCheckAsync(long userId, KycIdCardExtraction extraction, CancellationToken ct);

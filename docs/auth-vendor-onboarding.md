@@ -45,7 +45,7 @@ before an account exists):
 |---|---|
 | List wards | `GET /api/administrative-units/wards` |
 
-How to run and test all of this end to end: [testing-auth-vendor-onboarding.md](testing-auth-vendor-onboarding.md).
+How to run and test all of this end to end: [testing/auth-vendor-onboarding.md](testing/auth-vendor-onboarding.md).
 
 ## Design decisions (reconciled with the database)
 

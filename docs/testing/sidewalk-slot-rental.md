@@ -5,7 +5,7 @@ Tài liệu này hướng dẫn chạy và kiểm thử module **Sidewalk Slot &
 FE/app vẫn chạy bằng mock, nên kiểm thử ở đây là qua file `.http` / Swagger,
 không có kịch bản trên giao diện như tài liệu Auth/Onboarding.
 
-Đọc trước [testing-auth-vendor-onboarding.md](testing-auth-vendor-onboarding.md)
+Đọc trước [auth-vendor-onboarding.md](auth-vendor-onboarding.md)
 mục 1–2 để có database và biết cách chạy API — tài liệu này không lặp lại phần
 đó, chỉ nói thêm phần riêng của SIDE.
 
@@ -14,28 +14,19 @@ mục 1–2 để có database và biết cách chạy API — tài liệu này 
 ## 1. Chuẩn bị riêng cho SIDE
 
 Ngoài phần chuẩn bị chung (mục 1 của tài liệu Auth), module SIDE cần **một hồ
-sơ APPROVED và một hợp đồng ACTIVE** — thứ mà bình thường chỉ Phường duyệt mới
-tạo ra được (WARD-07/08), nhưng module đó **chưa có** trong đợt này.
+sơ APPROVED và một hợp đồng ACTIVE**.
 
-### 1.1 Dựng nhanh fixture bằng script
+### 1.1 Dùng dữ liệu demo (khuyến nghị)
 
-```bash
-cd StreetBiz-BE
-# Đăng ký sẵn ít nhất 1 tài khoản Hộ kinh doanh + 1 hồ sơ (REG-01), rồi:
-sqlcmd -S "(localdb)\MSSQLLocalDB" -d StreetBizDB -i docs/dev-seed-side.sql
-```
+Seed demo (`db/StreetBiz_Demo_Seed.sql`, nạp bởi `scripts/setup-local-db.ps1 -Recreate`)
+đã dựng sẵn mọi thứ, không cần chạy thêm script nào:
 
-(Nếu dùng SQL Server trong Docker: `docker exec -i <container> /opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -P '<mật khẩu>' -d StreetBizDB -i - < docs/dev-seed-side.sql`.)
+- Hồ sơ APPROVED: 1 (Bánh mì & Xôi Cô Lan) và 9 (Bún chả Hải Châu), cùng thuộc hộ `0905000101`.
+- Hợp đồng ACTIVE: 1 (ô NVL-01) và 2 (ô NVL-08), mỗi hợp đồng có giấy phép số và lịch phí.
+- Một đơn thuê PENDING (đơn 3, ô 3) để Phường duyệt thử qua WARD-07/08.
 
-Script **tự động duyệt (APPROVED)** hồ sơ đầu tiên tìm thấy nếu chưa có hồ sơ
-nào APPROVED, rồi tạo một đơn thuê đã duyệt + hợp đồng ACTIVE + giấy phép trên
-một ô có sẵn (hoặc tự tạo ô nếu bảng `SidewalkSlots` đang trống). Chạy lại
-nhiều lần không lỗi và không tạo trùng — dòng kết quả cuối cho biết số ô, số
-hồ sơ APPROVED, số hợp đồng ACTIVE hiện có.
-
-> Script không tạo tài khoản đăng nhập — mật khẩu phải đi qua BCrypt của ứng
-> dụng, không được chèn thẳng vào SQL. Đăng ký tài khoản trước qua
-> `POST /api/auth/register` như hướng dẫn ở tài liệu Auth.
+Đăng nhập bằng `0905000101` / `Password123!`; danh sách tài khoản đầy đủ ở
+[database.md](../database.md#demo-data).
 
 ### 1.2 Hoặc duyệt thủ công bằng SQL (giống mục 5 tài liệu Auth)
 
@@ -47,7 +38,7 @@ WHERE registration_id = 1;   -- đổi id
 ```
 
 Sau đó nộp đơn thuê ô qua `POST /api/vendor/rental-applications/open-slot`
-(SIDE-03B), rồi tự duyệt đơn + tạo hợp đồng bằng SQL vì WARD-08 chưa có API:
+(SIDE-03B), rồi để Phường duyệt (`POST /api/ward/rental-applications/{id}/decision`), hoặc tự duyệt đơn + tạo hợp đồng bằng SQL:
 
 ```sql
 UPDATE RentalApplications SET application_status = 'APPROVED' WHERE application_id = 1;
@@ -204,8 +195,8 @@ Cần 2 tài khoản vendor đã đăng nhập (bên gửi và bên nhận — x
 
 ### 4.9 Màn "Ô thuê": thông tin tuyến, báo giá, giữ chỗ
 
-Cần áp `docs/slot-workspace-schema.sql` và chạy lại `docs/dev-seed-side.sql`
-(tuyến Nguyễn Văn Linh, `zoneId` xem trong bảng `PricingZones`).
+Cần database dựng từ schema + seed mới nhất (`scripts/setup-local-db.ps1 -Recreate`).
+Tuyến Nguyễn Văn Linh là `zoneId = 1` (xem bảng `PricingZones`).
 
 | # | Thao tác | Kết quả mong đợi |
 |---|---|---|
@@ -238,19 +229,19 @@ Giống tài liệu Auth (`400 validation_error`, `403 forbidden`, `404 not_foun
 
 | Hiện tượng | Nguyên nhân / cách xử lý |
 |---|---|
-| `dev-seed-side.sql` in ra "No BusinessRegistrations row found" | Chưa có hồ sơ nào trong DB — đăng ký tài khoản + nộp hồ sơ (REG-01) trước |
 | Mọi request SIDE trả 401 dù đã đăng nhập | Token hết hạn (mặc định 60 phút) — đăng nhập lại |
 | `POST rental-applications/adjacent` luôn 422 dù ô rất gần | Hồ sơ thiếu `addressLatitude/addressLongitude` — BR-11 không tính được khoảng cách nếu địa chỉ chưa có toạ độ |
-| `GET permit` trả 404 dù hợp đồng ACTIVE | Hợp đồng seed bằng SQL thủ công (mục 1.2) chưa có dòng `DigitalPermits` — thêm thủ công hoặc dùng `dev-seed-side.sql` |
+| `GET permit` trả 404 dù hợp đồng ACTIVE | Hợp đồng seed bằng SQL thủ công (mục 1.2) chưa có dòng `DigitalPermits` — thêm thủ công (seed demo đã có sẵn) |
 | `SqlErrorTranslator` không bắt được lỗi trigger, vẫn thấy 500 | Kiểm tra thông điệp trigger trong `db/StreetBiz_SQL_Server.sql` có đổi chữ không — translator so khớp theo chuỗi literal |
 
 ---
 
 ## 7. Giới hạn hiện tại (không phải lỗi)
 
-- **Phường xét duyệt (WARD-07/08/09/16/17/18):** chưa có API. Mọi trạng thái
-  "đã duyệt" trong SIDE phải giả lập bằng SQL hoặc `dev-seed-side.sql`, như
-  mục 1.
+- **Phường xét duyệt:** WARD-07/08/16/17/18 đã có API (xem
+  [ward-slot-workflows.md](../ward-slot-workflows.md)); WARD-09 (duyệt gia hạn)
+  chưa có. Trạng thái "đã duyệt" trong SIDE có sẵn từ seed demo, hoặc giả lập
+  bằng SQL như mục 1.
 - **FE/app:** chưa nối API thật cho nhóm SIDE, vẫn chạy bằng mock.
 - **AIC-04/06/07** (đề xuất giá, phát hiện lệch geofence, đánh giá đề xuất ô):
   phụ thuộc dữ liệu từ WARD-11/WARD-02/WARD-16 nên chưa làm được ở đợt này.

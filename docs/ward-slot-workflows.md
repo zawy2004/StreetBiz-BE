@@ -128,7 +128,7 @@ npm run dev
 ```
 
 Sign in through the ordinary login screen as a seeded WARD_AUTHORITY account
-(`0983000001` / `Password123!`, see docs/dev-test-accounts.md) and open
+(`0983000001` / `Password123!`, see docs/database.md) and open
 http://localhost:5173/ward/inbox. `/ward/inbox/reviews` and the legacy
 /ward-reviews URL both still resolve here.
 

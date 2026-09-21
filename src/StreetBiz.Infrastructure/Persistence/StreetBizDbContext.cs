@@ -22,10 +22,10 @@ public partial class StreetBizDbContext : DbContext
 
     public virtual DbSet<BusinessRegistration> BusinessRegistrations { get; set; }
 
-    // Pending schema: see docs/business-registration-real-requirements-schema.sql.
+    // Schema: see db/StreetBiz_SQL_Server.sql.
     public virtual DbSet<BusinessRegistrationHouseholdMember> BusinessRegistrationHouseholdMembers { get; set; }
 
-    // Pending schema: see docs/kyc-ekyc-schema.sql.
+    // Schema: see db/StreetBiz_SQL_Server.sql.
     public virtual DbSet<KycVerificationResult> KycVerificationResults { get; set; }
 
     public virtual DbSet<Complaint> Complaints { get; set; }
