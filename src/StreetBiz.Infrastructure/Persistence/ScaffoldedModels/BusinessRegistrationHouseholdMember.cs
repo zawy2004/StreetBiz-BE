@@ -5,8 +5,8 @@ namespace StreetBiz.Infrastructure.Persistence.ScaffoldedModels;
 /// <summary>
 /// A household member co-registering the hộ kinh doanh and their capital
 /// contribution (Mẫu số 01 Phụ lục II, Thông tư 68/2025/TT-BTC, "Thành viên
-/// hộ gia đình cùng góp vốn"). Pending schema: see
-/// docs/business-registration-real-requirements-schema.sql.
+/// hộ gia đình cùng góp vốn"). Schema: see
+/// db/StreetBiz_SQL_Server.sql.
 /// </summary>
 public partial class BusinessRegistrationHouseholdMember
 {

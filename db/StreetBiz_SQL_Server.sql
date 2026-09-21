@@ -64,6 +64,44 @@
      layer.
    ============================================================ */
 
+/* ============================================================
+   HOW THIS FILE IS MAINTAINED  -- read before changing the database
+
+   The database is built from exactly TWO scripts, and nothing else:
+     db/StreetBiz_SQL_Server.sql   this file: schema + reference data
+                                   (roles, wards, violation catalogue) + EF history stamp
+     db/StreetBiz_Demo_Seed.sql    demo accounts and a full demo scenario (dev only)
+   scripts/setup-local-db.ps1 runs both on an empty database.
+
+   To change the schema:
+     1. Edit the CREATE TABLE / constraint / index IN THIS FILE. Do not write an
+        ALTER script, a patch script or a "fix" script -- and do not add .sql files
+        under docs/ or anywhere else. A change that lives in a side file is invisible
+        to the next person who builds a database.
+     2. Add one line to the change log below (newest first).
+     3. If the demo data is affected, update db/StreetBiz_Demo_Seed.sql in the same
+        change. New reference data (a role, a ward, a violation type) goes in
+        section 10 of this file instead.
+     4. Verify by rebuilding an empty database: scripts/setup-local-db.ps1 -Recreate.
+     5. Say in the PR that teammates must rebuild, and mention any manual step.
+
+   The API never runs schema changes (docs/database.md).
+
+   CHANGE LOG (newest first)
+     2026-09-21  BusinessRegistrations: Mau so 01 owner/business fields, food-safety
+                 commitment, manual identity check (identity_verified_*), cached AI check
+                 (ai_check_*). New tables BusinessRegistrationHouseholdMembers and
+                 KycVerificationResults. RegistrationEvidence accepts
+                 IDENTITY_DOCUMENT_BACK and PORTRAIT_SELFIE. UserAccounts.sanction_authority_title.
+     2026-09-21  Orders.storefront_address_snapshot folded in (was post-schema-migrations.sql).
+     2026-09-20  BusinessRegistrations.id_number and biometric_consent_at,
+                 PenaltyFeeSchedules.legal_basis, Penalties.decision_number/signer_name/
+                 signer_title. Violation catalogue extended with the five legal codes.
+     2026-09-19  Slot workspace: SidewalkSlots detail columns, PricingZones/
+                 AdministrativeUnits info, ZoneFeeComponents, StreetFeatures, SlotHolds,
+                 RentalApplications.commitments_accepted_at.
+   ============================================================ */
+
 -- CREATE DATABASE StreetBizDB;
 -- GO
 -- USE StreetBizDB;
@@ -128,6 +166,10 @@ CREATE TABLE UserAccounts (
     phone_verified_at   DATETIME2             NULL,
     created_at          DATETIME2             NOT NULL DEFAULT SYSUTCDATETIME(),
     updated_at          DATETIME2             NULL,
+    -- WARD-13: fixed title printed under a sanction decision (e.g. N'Chủ tịch UBND Phường ...').
+    -- Set out of band by a platform admin, never typed by the officer; NULL = this account
+    -- cannot sign sanction decisions.
+    sanction_authority_title NVARCHAR(100)   NULL,
     CONSTRAINT CK_UserAccounts_Status
         CHECK (account_status IN ('ACTIVE','SUSPENDED','DEACTIVATED')),
     -- redundant as a key (user_id is already unique), but required as the
@@ -251,6 +293,39 @@ CREATE TABLE BusinessRegistrations (
     reviewed_at               DATETIME2             NULL,
     created_at                DATETIME2             NOT NULL DEFAULT SYSUTCDATETIME(),
     updated_at                DATETIME2             NULL,
+    -- Owner identity (Mau so 01, Phu luc II, Thong tu 68/2025/TT-BTC). id_number is the
+    -- real CCCD number read by AI-OCR (AIC-01) -- never the phone number.
+    id_number                 NVARCHAR(12)          NULL,
+    id_type                   NVARCHAR(20)          NULL,
+    id_issued_date            DATE                  NULL,
+    id_issued_place           NVARCHAR(150)         NULL,
+    owner_date_of_birth       DATE                  NULL,
+    owner_gender              NVARCHAR(10)          NULL,
+    owner_ethnicity           NVARCHAR(50)          NULL,
+    owner_nationality         NVARCHAR(50)          NULL
+        CONSTRAINT DF_BusinessRegistrations_owner_nationality DEFAULT (N'Việt Nam'),
+    permanent_address         NVARCHAR(300)         NULL,
+    contact_address           NVARCHAR(300)         NULL,
+    -- Business line and scale.
+    business_line             NVARCHAR(300)         NULL,
+    business_line_code        NVARCHAR(20)          NULL,
+    capital_amount            DECIMAL(18,0)         NULL,
+    labor_count               INT                   NULL,
+    planned_start_date        DATE                  NULL,
+    -- Separate, explicit consents / declarations (Nghi dinh 356/2025/ND-CP: biometric
+    -- consent must be its own unbundled action; food-safety is a self-declared commitment,
+    -- not a certificate upload).
+    biometric_consent_at      DATETIME2             NULL,
+    food_safety_commitment_at DATETIME2             NULL,
+    -- KYC gate: a ward officer's manual confirmation against the physical/chip CCCD.
+    -- AI-OCR is decision support only (BR-41) and never substitutes for this; an APPROVE
+    -- decision requires identity_verified_at (enforced in the application layer).
+    identity_verified_by      BIGINT                NULL,
+    identity_verified_at      DATETIME2             NULL,
+    identity_verification_note NVARCHAR(500)        NULL,
+    -- Last AI document-check result, cached so a detail page does not call the provider again.
+    ai_check_result           NVARCHAR(MAX)         NULL,
+    ai_checked_at             DATETIME2             NULL,
     CONSTRAINT CK_BusinessRegistrations_VendorType
         CHECK (vendor_type IN ('FIXED_STOREFRONT','ITINERANT')),
     CONSTRAINT CK_BusinessRegistrations_Status
@@ -266,7 +341,9 @@ CREATE TABLE BusinessRegistrations (
         REFERENCES AdministrativeUnits(unit_id, unit_type),
     CONSTRAINT FK_BusinessRegistrations_Reviewer
         FOREIGN KEY (reviewed_by, reviewer_role)
-        REFERENCES UserAccounts(user_id, role_code)
+        REFERENCES UserAccounts(user_id, role_code),
+    CONSTRAINT FK_BusinessRegistrations_IdentityVerifiedBy
+        FOREIGN KEY (identity_verified_by) REFERENCES UserAccounts(user_id)
 );
 CREATE INDEX IX_BusinessRegistrations_Vendor ON BusinessRegistrations(vendor_id);
 CREATE INDEX IX_BusinessRegistrations_Status ON BusinessRegistrations(registration_status);
@@ -283,11 +360,57 @@ CREATE TABLE RegistrationEvidence (
     uploaded_at              DATETIME2             NOT NULL DEFAULT SYSUTCDATETIME(),
     retention_expires_at    DATETIME2             NULL,  -- PRI-06 retention policy
     CONSTRAINT CK_RegistrationEvidence_Type
-        CHECK (evidence_type IN ('IDENTITY_DOCUMENT','BUSINESS_LICENSE','ADDRESS_PROOF','OTHER')),
+        -- IDENTITY_DOCUMENT is the CCCD front (kept so older rows stay valid); the back
+        -- and a portrait selfie are captured for two-sided OCR and face match.
+        CHECK (evidence_type IN ('IDENTITY_DOCUMENT','IDENTITY_DOCUMENT_BACK','PORTRAIT_SELFIE',
+                                 'BUSINESS_LICENSE','ADDRESS_PROOF','OTHER')),
     CONSTRAINT FK_RegistrationEvidence_Registration
         FOREIGN KEY (registration_id) REFERENCES BusinessRegistrations(registration_id)
 );
 CREATE INDEX IX_RegistrationEvidence_Registration ON RegistrationEvidence(registration_id);
+
+-- Mau so 01, "Thanh vien ho gia dinh cung gop von": 0..N members per registration.
+CREATE TABLE BusinessRegistrationHouseholdMembers (
+    member_id              BIGINT IDENTITY(1,1) PRIMARY KEY,
+    registration_id        BIGINT        NOT NULL
+        CONSTRAINT FK_HouseholdMembers_Registration
+        REFERENCES BusinessRegistrations(registration_id) ON DELETE CASCADE,
+    full_name              NVARCHAR(150) NOT NULL,
+    date_of_birth          DATE          NULL,
+    id_number              NVARCHAR(12)  NULL,
+    relationship_to_owner  NVARCHAR(50)  NULL,
+    capital_contribution   DECIMAL(18,0) NULL,
+    created_at             DATETIME2     NOT NULL
+        CONSTRAINT DF_HouseholdMembers_CreatedAt DEFAULT (SYSUTCDATETIME())
+);
+
+-- REG-02 eKYC: server-recorded outcome of each AI check (CCCD OCR, face match). The score
+-- is written where it is computed and read back by the ward officer's screen -- never
+-- round-tripped through the client. Decision support only (BR-41): these rows never
+-- approve, reject or change any state. registration_id is NULL until the wizard creates
+-- the registration (the checks run earlier), then backfilled.
+CREATE TABLE KycVerificationResults (
+    kyc_result_id        BIGINT IDENTITY(1,1) PRIMARY KEY,
+    user_id              BIGINT         NOT NULL
+        CONSTRAINT FK_KycVerificationResults_User REFERENCES UserAccounts(user_id),
+    registration_id      BIGINT         NULL
+        CONSTRAINT FK_KycVerificationResults_Registration REFERENCES BusinessRegistrations(registration_id),
+    check_type           NVARCHAR(30)   NOT NULL,   -- 'ID_CARD_OCR' | 'FACE_MATCH'
+    provider             NVARCHAR(30)   NOT NULL,   -- 'FPT.AI'
+    is_match             BIT            NULL,       -- FACE_MATCH only
+    similarity_percent   DECIMAL(5,2)   NULL,       -- FACE_MATCH only
+    confidence_percent   INT            NULL,       -- ID_CARD_OCR only
+    extracted_id_number  NVARCHAR(12)   NULL,
+    warnings             NVARCHAR(1000) NULL,
+    created_at           DATETIME2      NOT NULL
+        CONSTRAINT DF_KycVerificationResults_CreatedAt DEFAULT (SYSUTCDATETIME()),
+    CONSTRAINT CK_KycVerificationResults_CheckType
+        CHECK (check_type IN ('ID_CARD_OCR', 'FACE_MATCH'))
+);
+CREATE INDEX IX_KycVerificationResults_User_Created
+    ON KycVerificationResults (user_id, created_at DESC);
+CREATE INDEX IX_KycVerificationResults_Registration
+    ON KycVerificationResults (registration_id) WHERE registration_id IS NOT NULL;
 
 
 /* ============================================================
@@ -865,6 +988,9 @@ CREATE TABLE PenaltyFeeSchedules (
     created_by            BIGINT             NOT NULL,
     creator_role          AS CAST(N'WARD_AUTHORITY' AS NVARCHAR(30)) PERSISTED,
     created_at            DATETIME2          NOT NULL DEFAULT SYSUTCDATETIME(),
+    -- The Nghi dinh / Dieu / Khoan behind penalty_amount. AI only drafts wording from this
+    -- column; it never invents a legal citation. One source of truth per (ward, type).
+    legal_basis           NVARCHAR(500)      NULL,
     CONSTRAINT CK_PenaltyFeeSchedules_Amount
         CHECK (penalty_amount >= 0),
     CONSTRAINT CK_PenaltyFeeSchedules_DateOrder
@@ -937,6 +1063,11 @@ CREATE TABLE Penalties (
     waiver_role           AS CAST(N'WARD_AUTHORITY' AS NVARCHAR(30)) PERSISTED,
     waiver_reason         NVARCHAR(500)         NULL,
     waived_at             DATETIME2             NULL,
+    -- WARD-13 sanction decision: number and signer. Signer name/title come from the
+    -- authenticated officer and UserAccounts.sanction_authority_title, never from the client.
+    decision_number       NVARCHAR(50)          NULL,
+    signer_name           NVARCHAR(150)         NULL,
+    signer_title          NVARCHAR(100)         NULL,
     CONSTRAINT CK_Penalties_Status
         CHECK (penalty_status IN ('UNPAID','PAID','WAIVED','CANCELLED')),
     -- a penalty recorded in error, or forgiven on appeal, has to leave a reason
@@ -1357,6 +1488,9 @@ CREATE TABLE Orders (
     placed_at                   DATETIME2             NULL,
     completed_at                 DATETIME2             NULL,
     created_at                   DATETIME2             NOT NULL DEFAULT SYSUTCDATETIME(),
+    -- The pickup address as it read when the order was placed; a later address change on
+    -- the registration must not rewrite it.
+    storefront_address_snapshot  NVARCHAR(500)         NULL,
     CONSTRAINT CK_Orders_Status
         CHECK (order_status IN
             ('PENDING_PAYMENT','PLACED','ACCEPTED','REJECTED','PREPARING','READY_FOR_PICKUP','COMPLETED','CANCELLED')),
@@ -1639,14 +1773,105 @@ GO
 
 
 /* ============================================================
+   10. REFERENCE DATA
+   The rows the application cannot function without, independent of any demo
+   scenario: the role vocabulary, the administrative hierarchy every ward-scoped
+   table hangs off, and the violation catalogue WARD-03 prices.
+
+   Everything else -- pricing zones, slots, fee schedules, food categories --
+   carries a created_by pointing at a real officer or administrator, so it cannot
+   exist before accounts do and lives in db/StreetBiz_Demo_Seed.sql instead.
+
+   Add a role, a ward or a violation type HERE, not in a side script.
+   ============================================================ */
+GO
+SET NOCOUNT ON;
+GO
+
+-- Roles (AUTH). GUEST is deliberately absent -- see the schema comment: an
+-- unauthenticated visitor is an actor, never a row.
+INSERT INTO Roles (role_code, role_name) VALUES
+    ('CUSTOMER',       N'Khách hàng'),
+    ('VENDOR',         N'Hộ kinh doanh'),
+    ('WARD_AUTHORITY', N'Cán bộ phường'),
+    ('PLATFORM_ADMIN', N'Quản trị hệ thống');
+GO
+
+-- AdministrativeUnits. Ids are pinned with IDENTITY_INSERT because docs, seeds and
+-- scripts/e2e-auth-onboarding.sh refer to wards 10/11/12 by number.
+SET IDENTITY_INSERT AdministrativeUnits ON;
+INSERT INTO AdministrativeUnits (unit_id, unit_type, unit_name, parent_unit_id, contact_name, contact_phone) VALUES
+    ( 1, 'PROVINCE', N'Thành phố Đà Nẵng',      NULL, NULL,                      NULL),
+
+    ( 2, 'DISTRICT', N'Quận Hải Châu',             1, NULL,                      NULL),
+    ( 3, 'DISTRICT', N'Quận Thanh Khê',            1, NULL,                      NULL),
+    ( 4, 'DISTRICT', N'Quận Sơn Trà',              1, NULL,                      NULL),
+    ( 5, 'DISTRICT', N'Quận Ngũ Hành Sơn',         1, NULL,                      NULL),
+
+    (10, 'WARD',     N'Phường Hải Châu 1',         2, N'Nguyễn Thị Hồng Vân',    N'02363821021'),
+    (11, 'WARD',     N'Phường Thanh Khê Đông',     3, N'Trần Quốc Bảo',          N'02363759112'),
+    (12, 'WARD',     N'Phường An Hải Bắc',         4, N'Lê Thị Minh Thu',        N'02363944330'),
+    (13, 'WARD',     N'Phường Nam Dương',          2, N'Phạm Văn Hải',           N'02363827445'),
+    (14, 'WARD',     N'Phường Hòa Quý',            5, N'Võ Thị Kim Chi',         N'02363967208');
+SET IDENTITY_INSERT AdministrativeUnits OFF;
+GO
+
+-- ViolationTypes (WARD-12 catalogue). Natural key: the code is what an officer picks on
+-- the spot and what PenaltyFeeSchedules prices. The first ten are the operational
+-- catalogue; the last five are the legal-citation set the ward compliance module and its
+-- AI classifier (AiComplianceService) map onto.
+INSERT INTO ViolationTypes (violation_type_code, description, is_active) VALUES
+    ('NO_PERMIT',                 N'Kinh doanh trên vỉa hè không có giấy phép',                 1),
+    ('OUTSIDE_SLOT',              N'Bày bán vượt ra ngoài phạm vi ô được thuê',                 1),
+    ('OUTSIDE_HOURS',             N'Kinh doanh ngoài khung giờ cho phép của khu vực',           1),
+    ('BLOCK_PEDESTRIAN',          N'Cản trở lối đi bộ dành cho người đi đường',                 1),
+    ('BLOCK_EMERGENCY',           N'Cản trở lối thoát hiểm, trụ nước chữa cháy hoặc trạm điện', 1),
+    ('HYGIENE_VIOLATION',         N'Vi phạm quy định vệ sinh an toàn thực phẩm',                1),
+    ('WASTE_DISPOSAL',            N'Xả rác, nước thải không đúng nơi quy định',                 1),
+    ('NOISE_VIOLATION',           N'Gây tiếng ồn vượt mức cho phép',                            1),
+    ('UNAUTHORIZED_TRANSFER',     N'Tự ý sang nhượng ô cho người khác',                         1),
+    ('PERMIT_TAMPERING',          N'Sử dụng giấy phép giả mạo hoặc đã bị thu hồi',              1),
+    ('UNAUTHORIZED_BUSINESS_USE', N'Sử dụng trái phép lòng đường, vỉa hè để kinh doanh (không phép hoặc sai nội dung)', 1),
+    ('EXPIRED_OR_INVALID_PERMIT', N'Giấy phép sử dụng tạm thời vỉa hè hết hiệu lực hoặc sử dụng sai nội dung giấy phép', 1),
+    ('STREET_VENDING_RESTRICTED', N'Bán hàng rong tại tuyến phố cấm',                           1),
+    ('HYGIENE_LITTERING',         N'Vứt, thải, để rác thải sinh hoạt trên vỉa hè, lòng đường',  1),
+    ('OBSTRUCT_PUBLIC_ORDER',     N'Đổ rác, vật cản gây mất an ninh trật tự công cộng',         1);
+GO
+
+
+/* ============================================================
+   11. EF MIGRATION HISTORY
+   StreetBizDB is database-first: this file is the schema, EF never creates or alters it
+   (docs/database.md). The rows are stamped here so EF never believes it has work to do:
+   InitialBaseline has an intentionally empty Up() (the schema predates EF) and
+   AddOrderStorefrontAddressSnapshot is already part of the Orders table above.
+   ProductVersion must match the EF Core version in Directory.Build.props / the csproj.
+   ============================================================ */
+CREATE TABLE [__EFMigrationsHistory] (
+    [MigrationId]    nvarchar(150) NOT NULL,
+    [ProductVersion] nvarchar(32)  NOT NULL,
+    CONSTRAINT [PK___EFMigrationsHistory] PRIMARY KEY ([MigrationId])
+);
+GO
+INSERT INTO [__EFMigrationsHistory] ([MigrationId], [ProductVersion]) VALUES
+    (N'20260909122414_InitialBaseline',                   N'8.0.31'),
+    (N'20260919163132_AddOrderStorefrontAddressSnapshot', N'8.0.31');
+GO
+
+
+/* ============================================================
    Table count summary
    ------------------------------------------------------------
    Identity & Reference ......... 6  (AdministrativeUnits, Roles,
                                       UserAccounts, UserSessions,
                                       OtpChallenges, UserDevices)
-   Vendor Registration ........... 3  (Vendors, BusinessRegistrations,
-                                      RegistrationEvidence)
-   Sidewalk Slot & Rental ........ 9  (PricingZones, SidewalkSlots,
+   Vendor Registration ........... 5  (Vendors, BusinessRegistrations,
+                                      RegistrationEvidence,
+                                      BusinessRegistrationHouseholdMembers,
+                                      KycVerificationResults)
+   Sidewalk Slot & Rental ........ 12 (PricingZones, SidewalkSlots,
+                                      ZoneFeeComponents, StreetFeatures,
+                                      SlotHolds,
                                       RentalApplications, RentalContracts,
                                       DigitalPermits, PermitScanLogs,
                                       SlotTransferRequests, RenewalRequests,
@@ -1668,7 +1893,7 @@ GO
                                       RefundTransactions)
    Phase 2 Moderation ............ 1  (ReportedContent)
    ------------------------------------------------------------
-   TOTAL: 46 tables, 5 triggers, 2 views
+   TOTAL: 51 tables (plus __EFMigrationsHistory), 5 triggers, 2 views
 
    Use-case coverage: the 70 Core and 31 Phase 2 use cases of the actor
    specification. AIAssistanceLogs, RegistrationEvidence.ocr_extracted_data

@@ -30,7 +30,7 @@ public partial class BusinessRegistration
     public DateTime? biometric_consent_at { get; set; }
 
     // ---- Chủ hộ kinh doanh (Mẫu số 01 Phụ lục II, Thông tư 68/2025/TT-BTC) ----
-    // Pending schema: see docs/business-registration-real-requirements-schema.sql.
+    // Schema: see db/StreetBiz_SQL_Server.sql.
     public DateOnly? owner_date_of_birth { get; set; }
 
     public string? owner_gender { get; set; }
@@ -88,7 +88,7 @@ public partial class BusinessRegistration
 
     public virtual AdministrativeUnit? AdministrativeUnit { get; set; }
 
-    // Pending schema: see docs/business-registration-real-requirements-schema.sql.
+    // Schema: see db/StreetBiz_SQL_Server.sql.
     public virtual ICollection<BusinessRegistrationHouseholdMember> HouseholdMembers { get; set; } = new List<BusinessRegistrationHouseholdMember>();
 
     public virtual ICollection<RegistrationEvidence> RegistrationEvidences { get; set; } = new List<RegistrationEvidence>();
