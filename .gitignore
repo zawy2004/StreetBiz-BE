@@ -17,6 +17,11 @@ artifacts/
 appsettings.Local.json
 secrets.json
 
+# Contains real AiCompliance (FPT.AI/Gemini/Groq) keys directly -- moved out of
+# dotnet user-secrets by request. Never remove this line without moving the
+# real keys back out of the file first.
+src/StreetBiz.API/appsettings.Development.json
+
 # Uploaded evidence files (personal data) in local development
 App_Data/
 
