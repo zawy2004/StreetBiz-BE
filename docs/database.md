@@ -75,19 +75,38 @@ BR-59). Stored as BCrypt work-factor-12 hashes.
 | 9 | `0905000201` | CUSTOMER | 10 | Has a completed order and a rejected one |
 | 10 | `0905000202` | CUSTOMER | 12 | Has an order ready for pickup and one awaiting payment |
 
-Registrations 1..9 cover every status in `CK_BusinessRegistrations_Status`, so the ward
+Registrations 1..10 cover every status in `CK_BusinessRegistrations_Status`, so the ward
 queue, the vendor tracking list and every status chip have a live example (1 and 9 are
 APPROVED with contracts 1 and 2; 2 and 3 are SUBMITTED; 4 UNDER_REVIEW; 5
-MORE_INFORMATION_REQUIRED; 6 REJECTED; 7 WITHDRAWN; 8 DRAFT). BR-09 holds: vendor 4
-carries several registrations but only one open one.
+MORE_INFORMATION_REQUIRED; 6 REJECTED; 7 WITHDRAWN; 8 DRAFT; 10 is a second APPROVED
+registration for vendor `0905000102` with no contract, the natural receiver of a slot
+transfer). BR-09 holds: vendor 4 carries several registrations but only one open one.
 
-Also seeded: 5 wards in 4 districts of Đà Nẵng, 4 pricing zones and 27 slots (the 20
-`NVL-01..20` sit on the real Nguyễn Văn Linh centreline, 10 per side), 2 active
-contracts with digital permits, 6 fee periods (PAID / OVERDUE / PENDING) and 2 invoices,
-2 storefronts with 12 menu items, 5 orders across COMPLETED / READY_FOR_PICKUP /
-PREPARING / PENDING_PAYMENT / REJECTED, 15 violation types and penalty rates for the
-three wards that have an officer (the five legal-citation types carry `legal_basis`).
-Officers get a `sanction_authority_title` for their own ward.
+Also seeded: 5 wards in 4 districts of Đà Nẵng, 4 pricing zones and 30 slots (the 20
+`NVL-01..20` sit on the real Nguyễn Văn Linh centreline, 10 per side; three more are
+vendor proposals: PENDING, APPROVED and REJECTED), 2 active contracts with digital
+permits, 6 fee periods (PAID / OVERDUE / PENDING) and 3 invoices, 2 storefronts with 12
+menu items, 5 orders across COMPLETED / READY_FOR_PICKUP / PREPARING / PENDING_PAYMENT /
+REJECTED, 15 violation types and penalty rates for the three wards that have an officer
+(the five legal-citation types carry `legal_basis`). Officers get a
+`sanction_authority_title` for their own ward.
+
+Every queue and list has something in it:
+
+- **Sidewalk workflows:** 3 slot transfers (PENDING, ACCEPTED_BY_RECEIVER, REJECTED), 2
+  renewals (PENDING, REJECTED), 2 address changes that compete for the same slot (a ward
+  conflict), 2 slot holds (valid for a day so the demo stays visible; real holds last 15
+  minutes).
+- **Ward compliance:** 6 permit scans (one about 95 m from its slot, one forged code), 5
+  violations (awaiting sanction, unpaid penalty, paid penalty, unidentified occupier, raised
+  from a customer report) and 3 vendor reports.
+- **Mẫu số 01 and eKYC:** registrations 1, 2, 4, 9 and 10 carry the owner-identity fields
+  with fictional ID numbers. Approved ones were confirmed by an officer; 2 and 4 were not,
+  so the ward must confirm identity before approving them. Registration 1 has household
+  members; 2 and 4 have recorded OCR and face-match results (4 does not match).
+- **Moderation and money:** 2 community comments, 1 order review, 3 reported contents, 2
+  complaints, 8 payment transactions with callback events, 1 automatic refund, plus
+  notifications and 2 AI log entries.
 
 Things to know:
 
