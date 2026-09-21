@@ -7,7 +7,7 @@
 
    Every account's password is  Password123!
    (BR-59: >= 8 chars, upper, lower, digit, symbol, no whitespace.)
-   See docs/dev-test-accounts.md for the full list.
+   See docs/database.md for the full account list.
 
    The password_hash values are real BCrypt work-factor-12 hashes produced by the
    project's own hasher (src/StreetBiz.Infrastructure/Identity/PasswordHasher.cs).
@@ -17,11 +17,12 @@
    Idempotent: safe to run more than once. Ids are pinned with IDENTITY_INSERT so
    the scenario is stable and docs can refer to rows by number.
 
-   Prerequisites, in order:
-     1. db/StreetBiz_SQL_Server.sql       (schema)
-     2. db/StreetBiz_SQL_Server_Data.sql  (roles, wards, violation types)
-     3. this file
-   scripts/setup-local-db.ps1 runs all three.
+   Prerequisite: db/StreetBiz_SQL_Server.sql (schema + reference data: roles, wards,
+   violation types). scripts/setup-local-db.ps1 runs both files in order.
+
+   This is the ONLY seed file. Demo data that other seed scripts used to carry (the
+   Nguyen Van Linh corridor, contracts, storefronts, ward compliance rates) lives here.
+   When a schema change needs demo rows, add them to the matching section below.
 
    Do not run against a shared or production database.
    ============================================================ */
@@ -33,7 +34,7 @@ GO
 
 IF NOT EXISTS (SELECT 1 FROM Roles) OR NOT EXISTS (SELECT 1 FROM AdministrativeUnits WHERE unit_type = 'WARD')
 BEGIN
-    RAISERROR(N'Reference data missing. Run db/StreetBiz_SQL_Server_Data.sql first.', 16, 1);
+    RAISERROR(N'Reference data missing. Run db/StreetBiz_SQL_Server.sql first.', 16, 1);
     SET NOEXEC ON;
 END;
 GO
@@ -103,8 +104,8 @@ GO
    ============================================================ */
 
 -- FoodCategories.created_by must be a PLATFORM_ADMIN (FK_FoodCategories_CreatedBy).
--- dev-seed-discovery.sql joins menu items to these by name; without them it
--- silently inserts zero rows.
+-- The menu items in section 7 join to these by name; without them they would
+-- silently insert zero rows.
 IF NOT EXISTS (SELECT 1 FROM FoodCategories)
 BEGIN
     SET IDENTITY_INSERT FoodCategories ON;
@@ -145,10 +146,44 @@ BEGIN
 END;
 GO
 
+-- WARD-03 / WARD-12: the five legal-citation violation types, priced per ward with the
+-- Nghi dinh they come from (PenaltyFeeSchedules.legal_basis). AI only classifies a
+-- violation onto one of these codes and drafts wording from legal_basis; it never
+-- invents a citation. Amounts sit inside the statutory range quoted in each row.
+IF NOT EXISTS (SELECT 1 FROM PenaltyFeeSchedules WHERE violation_type = 'UNAUTHORIZED_BUSINESS_USE')
+BEGIN
+    INSERT INTO PenaltyFeeSchedules (ward_unit_id, violation_type, penalty_amount, legal_basis, created_by)
+    SELECT w.ward_unit_id, v.violation_type_code, v.amount, v.legal_basis, w.officer_id
+    FROM (VALUES (10, CAST(2 AS BIGINT)), (11, CAST(3 AS BIGINT)), (12, CAST(4 AS BIGINT))) AS w(ward_unit_id, officer_id)
+    CROSS JOIN (VALUES
+        ('UNAUTHORIZED_BUSINESS_USE', CAST(2500000 AS DECIMAL(18,0)),
+            N'Nghị định 168/2024/NĐ-CP: sử dụng trái phép lòng đường, vỉa hè để kinh doanh dịch vụ ăn uống, bày bán hàng hóa (khung 2.000.000 - 3.000.000đ)'),
+        ('EXPIRED_OR_INVALID_PERMIT', CAST(12500000 AS DECIMAL(18,0)),
+            N'Nghị định 168/2024/NĐ-CP: sử dụng tạm thời lòng đường, vỉa hè không phép hoặc giấy phép hết giá trị/sai nội dung (khung 10.000.000 - 15.000.000đ)'),
+        ('STREET_VENDING_RESTRICTED', CAST(225000 AS DECIMAL(18,0)),
+            N'Nghị định 168/2024/NĐ-CP: bán hàng rong tại tuyến phố cấm (khung 200.000 - 250.000đ)'),
+        ('HYGIENE_LITTERING',         CAST(1500000 AS DECIMAL(18,0)),
+            N'Nghị định 45/2022/NĐ-CP: vứt, thải, để rác thải sinh hoạt trên vỉa hè, lòng đường (khung 1.000.000 - 2.000.000đ)'),
+        ('OBSTRUCT_PUBLIC_ORDER',     CAST(4000000 AS DECIMAL(18,0)),
+            N'Nghị định 144/2021/NĐ-CP: đổ rác, vật cản gây mất an ninh trật tự công cộng (khung 3.000.000 - 5.000.000đ)')
+    ) AS v(violation_type_code, amount, legal_basis);
+END;
+GO
+
+-- WARD-13: a sanction decision is signed by the ward chairman, so the officer's title is a
+-- fixed, admin-configured column (UserAccounts.sanction_authority_title), never typed on
+-- the form. The demo officers are given the title of their own ward.
+UPDATE a
+SET a.sanction_authority_title = CONCAT(N'Chủ tịch UBND ', u.unit_name)
+FROM UserAccounts a
+JOIN AdministrativeUnits u ON u.unit_id = a.ward_unit_id
+WHERE a.role_code = 'WARD_AUTHORITY' AND a.sanction_authority_title IS NULL;
+GO
+
 
 /* ============================================================
    3. PRICING ZONES, SLOTS AND STREET CONTEXT
-   The Nguyễn Văn Linh pilot corridor, carried over from docs/dev-seed-side.sql:
+   The Nguyễn Văn Linh pilot corridor:
    NVL-01..10 walk the real road centreline at a 15 m pitch, NVL-11..20 mirror
    them 38 m across to the far carriageway. Keeping the geometry means the
    street-strip diagram and its straightness check still work.

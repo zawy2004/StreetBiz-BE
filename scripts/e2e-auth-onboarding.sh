@@ -9,7 +9,7 @@
 # LOG (default api.log) must be the API console output: the dev SMS sender prints
 # OTP codes there. Use Git Bash's tee — PowerShell 5.1's Tee-Object writes UTF-16.
 # The ward-review leg signs in as a seeded WARD_AUTHORITY account for ward 10
-# (docs/dev-seed-demo.sql); override with WARD_PHONE / WARD_PW.
+# (db/StreetBiz_Demo_Seed.sql); override with WARD_PHONE / WARD_PW.
 API=${API:-http://localhost:5023/api}
 LOG=${LOG:-api.log}
 [ -f "$LOG" ] || { echo "Không thấy $LOG. Chạy API trong Git Bash: dotnet run --project src/StreetBiz.API 2>&1 | tee api.log"; exit 2; }
@@ -31,7 +31,7 @@ up() { CODE=$(curl -s -o "$TMP/body" -w "%{http_code}" -H "Authorization: Bearer
 
 STAMP=$(date +%s | tail -c 9)
 PHONE="09$STAMP"; P2="08$STAMP"; PW='Str0ng!Pass'
-# Ward review needs a real WARD_AUTHORITY account; docs/dev-seed-demo.sql seeds these.
+# Ward review needs a real WARD_AUTHORITY account; db/StreetBiz_Demo_Seed.sql seeds these.
 WARD_PHONE=${WARD_PHONE:-0983000001}; WARD_PW=${WARD_PW:-Password123!}
 ORIGIN=${API%/api}
 

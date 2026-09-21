@@ -4,14 +4,16 @@
 
 .DESCRIPTION
   StreetBizDB is database-first: the API never migrates or creates it
-  (docs/migration-guide.md). This script applies, in order:
+  (docs/database.md). This script applies, in order, the only two database scripts:
 
-    1. db/StreetBiz_SQL_Server.sql       schema: 49 tables, 5 triggers, 2 views,
-                                         and every CHECK constraint
-    2. db/StreetBiz_SQL_Server_Data.sql  reference data (roles, wards, violation types)
-    3. docs/dev-seed-demo.sql            demo accounts and the full scenario
-    4. db/post-schema-migrations.sql     the one column the schema file trails the
-                                         code by, then stamps __EFMigrationsHistory
+    1. db/StreetBiz_SQL_Server.sql  schema (tables, triggers, views, every CHECK
+                                    constraint), reference data (roles, wards,
+                                    violation types) and the __EFMigrationsHistory stamp
+    2. db/StreetBiz_Demo_Seed.sql   demo accounts and the full scenario (skipped
+                                    with -SkipDemoSeed)
+
+  Schema changes are edited into those two files, never added as new scripts --
+  see the maintenance rules at the top of db/StreetBiz_SQL_Server.sql.
 
   It also writes the placeholder evidence files the seeded RegistrationEvidence
   rows point at, so the ward reviewer's document preview works.
@@ -30,15 +32,25 @@
 .EXAMPLE
   powershell -ExecutionPolicy Bypass -File scripts/setup-local-db.ps1 -Recreate
 
+.PARAMETER SqlUser
+  SQL login for a server that has no Windows authentication, e.g. SQL Server in
+  Docker (use 'sa'). Needs -SqlPassword and -AllowNonLocalDb.
+
 .EXAMPLE
   powershell -ExecutionPolicy Bypass -File scripts/setup-local-db.ps1 -Server ".\SQLEXPRESS" -AllowNonLocalDb -Recreate
+
+.EXAMPLE
+  # SQL Server in Docker (docker-compose.yml, port 1433)
+  powershell -ExecutionPolicy Bypass -File scripts/setup-local-db.ps1 -Server "localhost,1433" -SqlUser sa -SqlPassword "<SQLSERVER_SA_PASSWORD>" -AllowNonLocalDb -Recreate
 #>
 param(
     [string]$Server = '(localdb)\MSSQLLocalDB',
     [string]$Database = 'StreetBizDB',
     [switch]$Recreate,
     [switch]$AllowNonLocalDb,
-    [switch]$SkipDemoSeed
+    [switch]$SkipDemoSeed,
+    [string]$SqlUser,
+    [string]$SqlPassword
 )
 
 $ErrorActionPreference = 'Stop'
@@ -92,8 +104,9 @@ if ($Server -like '(localdb)*') {
     sqllocaldb start ($Server -replace '^\(localdb\)\\', '') | Out-Null
 }
 
-$master = "Server=$Server;Database=master;Trusted_Connection=True;TrustServerCertificate=True"
-$target = "Server=$Server;Database=$Database;Trusted_Connection=True;TrustServerCertificate=True"
+$auth = if ($SqlUser) { "User Id=$SqlUser;Password=$SqlPassword" } else { 'Trusted_Connection=True' }
+$master = "Server=$Server;Database=master;$auth;TrustServerCertificate=True"
+$target = "Server=$Server;Database=$Database;$auth;TrustServerCertificate=True"
 
 # DB_ID returns DBNull (which PowerShell treats as true) when the database is missing.
 $databaseId = Get-Scalar $master "SELECT DB_ID(N'$Database')"
@@ -120,11 +133,9 @@ if (-not $exists) {
 
 Write-Host "Applying schema and data..."
 Invoke-SqlFile $target 'db\StreetBiz_SQL_Server.sql'
-Invoke-SqlFile $target 'db\StreetBiz_SQL_Server_Data.sql'
 if (-not $SkipDemoSeed) {
-    Invoke-SqlFile $target 'docs\dev-seed-demo.sql'
+    Invoke-SqlFile $target 'db\StreetBiz_Demo_Seed.sql'
 }
-Invoke-SqlFile $target 'db\post-schema-migrations.sql'
 
 # ---------------------------------------------------------------------------
 # Placeholder evidence files.
@@ -214,7 +225,7 @@ SELECT CONCAT(
     Write-Host "  0983000001  WARD_AUTHORITY (ward 10)   <- used by scripts/e2e-auth-onboarding.sh"
     Write-Host "  0905000101  VENDOR (approved, has contract + storefront)"
     Write-Host "  0905000201  CUSTOMER"
-    Write-Host "  Full list: docs/dev-test-accounts.md"
+    Write-Host "  Full list: docs/database.md"
 }
 
 Write-Host ""
