@@ -27,7 +27,7 @@ Phần mềm cần có:
 ### 1.1 Tạo database local
 
 StreetBizDB theo hướng database-first, và migration `InitialBaseline` cố ý để
-trống (xem `docs/migration-guide.md`). Schema chuẩn nằm ở
+trống (xem [database.md](../database.md)). Schema chuẩn nằm ở
 `db/StreetBiz_SQL_Server.sql`. Script dưới đây tạo lại toàn bộ database trên
 LocalDB từ schema đó, rồi nạp dữ liệu tham chiếu và bộ dữ liệu demo:
 
@@ -39,7 +39,7 @@ powershell -ExecutionPolicy Bypass -File scripts/setup-local-db.ps1 -Recreate
 Kết quả đúng:
 
 ```
-tables=50  triggers=5  views=2  checks=77  migrations=2
+tables=52  triggers=5  views=2  checks=78  migrations=2
 Wards available: 5
 accounts=10  registrations=9  slots=27  contracts=2  storefronts=2  orders=5
 ```
@@ -51,19 +51,17 @@ accounts=10  registrations=9  slots=27  contracts=2  storefronts=2  orders=5
 
 > Hãy **tắt API** trước khi chạy: một kết nối đang mở sẽ chặn `DROP DATABASE`.
 
-Khác với trước đây, schema này có **đầy đủ** 5 trigger, 2 view và 77 CHECK
+Khác với trước đây, schema này có **đầy đủ** 5 trigger, 2 view và 78 CHECK
 constraint của DB thật — nên DB local giờ từ chối đúng những dữ liệu mà DB thật
 từ chối (ví dụ hai hợp đồng trùng ngày trên cùng một ô, hoặc `unit_type` ngoài
-PROVINCE/DISTRICT/WARD). Các script seed chạy theo thứ tự:
+PROVINCE/DISTRICT/WARD). Script chạy hai file theo thứ tự:
 
 | Thứ tự | File | Nội dung |
 |---|---|---|
-| 1 | `db/StreetBiz_SQL_Server.sql` | Schema: 49 bảng, 5 trigger, 2 view, CHECK constraint |
-| 2 | `db/StreetBiz_SQL_Server_Data.sql` | 4 vai trò, 10 đơn vị hành chính (5 phường), 10 loại vi phạm |
-| 3 | `docs/dev-seed-demo.sql` | 10 tài khoản, 9 hồ sơ đăng ký đủ 7 trạng thái, ô vỉa hè, hợp đồng, gian hàng, đơn hàng |
-| 4 | `db/post-schema-migrations.sql` | Cột `Orders.storefront_address_snapshot` + đóng dấu `__EFMigrationsHistory` |
+| 1 | `db/StreetBiz_SQL_Server.sql` | Schema (51 bảng, 5 trigger, 2 view, CHECK constraint), dữ liệu tham chiếu (4 vai trò, 10 đơn vị hành chính gồm 5 phường, 15 loại vi phạm) và đóng dấu `__EFMigrationsHistory` |
+| 2 | `db/StreetBiz_Demo_Seed.sql` | 10 tài khoản, 9 hồ sơ đăng ký đủ 7 trạng thái, ô vỉa hè, hợp đồng, gian hàng, đơn hàng |
 
-Tài khoản đăng nhập: xem [dev-test-accounts.md](dev-test-accounts.md) — tất cả
+Tài khoản đăng nhập: xem [database.md](../database.md#demo-data) — tất cả
 dùng mật khẩu `Password123!`.
 
 ### 1.2 Cấu hình frontend
@@ -159,7 +157,7 @@ hợp lỗi:
 - token bị thu hồi (đăng xuất, đăng xuất thiết bị khác) bị từ chối **ngay lập tức**.
 
 Script cần một tài khoản cán bộ phường 10 đang tồn tại (mặc định `0983000001` do
-`docs/dev-seed-demo.sql` tạo); đổi bằng biến `WARD_PHONE` / `WARD_PW`.
+`db/StreetBiz_Demo_Seed.sql` tạo); đổi bằng biến `WARD_PHONE` / `WARD_PW`.
 
 ---
 
@@ -257,7 +255,7 @@ nhập một tài khoản. Gọi là A và B.
 ## 5. Phường xét duyệt hồ sơ (REG-06)
 
 Đăng nhập bằng tài khoản **cán bộ phường** (xem
-[dev-test-accounts.md](dev-test-accounts.md)) — mỗi cán bộ chỉ thấy hồ sơ thuộc
+[database.md](../database.md#demo-data)) — mỗi cán bộ chỉ thấy hồ sơ thuộc
 phường mình:
 
 | SĐT | Phường |

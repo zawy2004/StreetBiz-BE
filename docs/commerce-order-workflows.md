@@ -3,8 +3,8 @@
 This document covers CART-01, ORD-01–04 and SORD-01–04. The implementation uses
 the existing `ShoppingCarts`, `ShoppingCartItems`, `Orders`, `OrderItems`,
 `OrderStatusHistories`, `PaymentTransactions` and `RefundTransactions` tables.
-Migration `AddOrderStorefrontAddressSnapshot` adds and backfills the immutable
-storefront address stored with each order.
+`Orders.storefront_address_snapshot` stores the immutable storefront address with each
+order.
 
 ## Use-case coverage
 
@@ -189,11 +189,9 @@ Order/refund/history/complaint timestamps are returned as UTC instants.
 Store writes respect the existing SQL `TR_Storefronts_Phase2Gate`; an invalid
 contract returns a domain error.
 
-For EF-managed databases, apply the new migration normally. Databases imported
-from the provided SQL script may report `InitialBaseline` as pending even though
-the schema already exists; do not run that baseline against an existing schema.
-Apply only the idempotent address migration SQL or first baseline the migration
-history according to the deployment process.
+The schema comes from `db/StreetBiz_SQL_Server.sql` (see [database.md](database.md)); it
+already contains the snapshot column and stamps both EF migrations, so do not run
+EF migrations against it.
 
 ## Remaining production payment work
 
@@ -205,7 +203,7 @@ accounts and provider credentials. Do not enable production checkout until those
 adapters, an HTTPS callback URL and provider sandbox certification are supplied.
 No secrets belong in frontend VITE variables or version-controlled files.
 
-See `commerce-live.postman_collection.json` for manual API requests.
+See `testing/commerce-live.postman_collection.json` for manual API requests.
 
 ## Verification
 
@@ -222,3 +220,50 @@ order/refund projection and sales summary against SQL Server when
 `STREETBIZ_DB_CONNECTION` is present. End-to-end authenticated order tests create
 real carts, orders, payments, history, notifications and audit rows, so use a
 disposable test account/database.
+
+## Live verification log (2026-09-19)
+
+### Result
+
+Verified sales/order workflows with live SQL Server and Chromium at 390×844
+(Asia/Ho_Chi_Minh timezone). Payment/refund operations were internal sandbox
+simulations, not MoMo/ZaloPay gateway transactions.
+
+| Check | Result |
+| --- | --- |
+| Backend Release tests with SQL connection | 198 passed: Domain 1, Application 118, Infrastructure 61, API 18 |
+| Frontend Vitest | 107 passed across 21 files |
+| Frontend ESLint | Passed |
+| Frontend TypeScript and production build | Passed; existing bundle-size warning remains |
+| Browser page errors in final end-to-end run | None |
+| Git whitespace checks | Passed |
+
+### Live checks
+
+- Create storefront from an approved registration and current owned contract.
+- Create menu item; pause/reopen storefront; mark sold out/available.
+- Paused stores disappear publicly; sold-out cart addition returns 422.
+- Customer cannot manage seller stores; unrelated sellers receive 404.
+- Add cart item, create a pending order, and keep unpaid orders hidden from sellers.
+- Simulate payment failure, reload, and retry the same order successfully.
+- Seller accepts, prepares and marks ready; customer confirms pickup.
+- Customer saves a review and creates a partial-refund complaint.
+- Admin resolves the complaint; customer completes the sandbox refund.
+- Repeated payment/refund confirmations remain idempotent.
+- Paid cancellation creates and completes a sandbox refund.
+- Menu archival preserves order history and removes public availability.
+- Sales satisfies net = gross - successful refunds.
+- JSON timestamps carry UTC and mobile action buttons retain 48 px height.
+
+The final run used storefront 4, menu item 13, completed order 15, cancelled
+order 16 and resolved complaint 4. SQL confirmed successful payment/refund rows.
+Earlier exploratory runs created orders 11–14, menu items 8–12 and complaint 3.
+Test contract 5 and storefront 4 were retained for inspection. No schema changes
+or broad cleanup were performed.
+
+### Production boundary
+
+Real payment creation/redirect, signed gateway callbacks, reconciliation,
+late-callback handling and actual provider refunds are not implemented. Merchant
+credentials and a public HTTPS callback environment were not provided.
+Production checkout therefore remains unavailable.

@@ -152,9 +152,9 @@ Authorization: Bearer {{token}}
 
 ### =====================================================================
 ### Sidewalk Slot & Rental (SIDE-01..13)
-### Cần: hồ sơ APPROVED + hợp đồng ACTIVE. Xem docs/dev-seed-side.sql để
-### dựng nhanh fixture này (hoặc @registrationId/@contractId ở trên đã được
-### Phường duyệt thủ công bằng SQL, xem docs/testing-sidewalk-slot-rental.md).
+### Cần: hồ sơ APPROVED + hợp đồng ACTIVE. Seed demo
+### (db/StreetBiz_Demo_Seed.sql) đã có sẵn fixture này (hoặc @registrationId/@contractId ở trên đã được
+### Phường duyệt, xem docs/testing/sidewalk-slot-rental.md).
 ### =====================================================================
 
 ### SIDE-01 Tìm ô trống quanh một điểm (bán kính, mét)
@@ -338,7 +338,7 @@ POST {{host}}/api/vendor/slot-transfers/{{transferId}}/decline
 Authorization: Bearer {{receiverToken}}
 
 ### ---------------------------------------------------------------------------
-### Customer discovery (DISC-01..06) -- public, no token. Needs docs/dev-seed-discovery.sql.
+### Customer discovery (DISC-01..06) -- public, no token. Needs the demo seed (db/StreetBiz_Demo_Seed.sql).
 ### latitude/longitude are the customer's detected position (DISC-01); all filters are optional.
 ### ---------------------------------------------------------------------------
 

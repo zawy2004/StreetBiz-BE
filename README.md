@@ -83,7 +83,7 @@ dotnet ef dbcontext scaffold "$env:STREETBIZ_DB_CONNECTION" Microsoft.EntityFram
 
 This command overwrites generated DbContext/model files. Inspect local changes
 first and extend generated types with partial classes instead of editing generated
-files directly. See docs/database-reverse-engineering.md.
+files directly. See docs/database.md.
 
 ## Restore, build, and test
 
@@ -117,31 +117,23 @@ SQL Server outside Docker.
 docker compose up --build
 ~~~
 
-## Existing database and migrations
+## Database
 
-StreetBizDB existed before this codebase and did not contain
-__EFMigrationsHistory when inspected. InitialBaseline therefore has an
-intentionally empty Up() and Down(), while its Designer file and ModelSnapshot
-capture the current model.
+StreetBizDB is database-first: the whole database is built from two scripts in `db/`
+and the API never creates or changes it.
 
-Do not run InitialCreate, EnsureCreated(), Database.Migrate(), database update,
-or any migration SQL against the existing database without explicit review and
-approval. The generated inspection script is docs/InitialBaseline.sql; it has no
-schema operations for existing StreetBiz tables.
+- `db/StreetBiz_SQL_Server.sql`: schema, reference data and the EF history stamp
+- `db/StreetBiz_Demo_Seed.sql`: demo accounts and scenario (development only)
 
-For a future reviewed schema change:
+First-time setup on an empty database (stop the API first):
 
 ~~~powershell
-dotnet ef migrations add <MigrationName> --project src/StreetBiz.Infrastructure --startup-project src/StreetBiz.API --context StreetBizDbContext --output-dir Persistence/Migrations
-dotnet ef migrations script --idempotent --project src/StreetBiz.Infrastructure --startup-project src/StreetBiz.API --context StreetBizDbContext
+powershell -ExecutionPolicy Bypass -File scripts/setup-local-db.ps1 -Recreate
 ~~~
 
-Review generated SQL for destructive or unintended operations before requesting
-approval to apply it. See docs/migration-guide.md.
-Orders need no schema change: the supplied SQL and live database contain every
-required table/column. Run `docs/orders-schema-verification.sql` for a read-only
-schema check. Do not create an EF migration merely to adopt this script-created
-database.
+Schema changes are edited into those two files, never added as separate scripts. See
+[docs/database.md](docs/database.md) for the full workflow, the demo accounts and the
+EF Core rules (no EnsureCreated, Migrate or migrations against this database).
 
 ## Solution layout
 
@@ -182,10 +174,12 @@ notifications. External push delivery and payment providers remain outside this 
 ## More documentation
 
 - docs/architecture.md
-- docs/project-structure.md
-- docs/database-reverse-engineering.md
-- docs/migration-guide.md
+- docs/database.md
+- docs/auth-vendor-onboarding.md
+- docs/sidewalk-slot-rental.md
 - docs/ward-slot-workflows.md
 - docs/community-vendor-workflows.md
 - docs/platform-administration-workflows.md
 - docs/commerce-order-workflows.md
+- docs/customer-discovery.md
+- docs/testing/ (manual test scripts and the Postman collection)
