@@ -248,6 +248,556 @@ public sealed class WardComplianceServiceTests
         Assert.True(flagged.Score > 0);
     }
 
+    [Fact]
+    public async Task Approving_renewal_extends_contract_end_date_and_creates_new_fee_schedule_revision()
+    {
+        using var f = await Fixture.Create();
+        var today = DateOnly.FromDateTime(DateTime.UtcNow);
+        var initialEndDate = today.AddDays(30);
+
+        using (var seed = f.NewDb())
+        {
+            seed.RentalContracts.Add(new RentalContract
+            {
+                contract_id = 501,
+                application_id = 1,
+                slot_id = 100,
+                vendor_id = 10,
+                start_date = today,
+                end_date = initialEndDate,
+                contract_status = "ACTIVE",
+                created_at = DateTime.UtcNow
+            });
+            seed.FeeSchedules.Add(new FeeSchedule
+            {
+                fee_schedule_id = 501,
+                contract_id = 501,
+                revision = 1,
+                total_amount = 1500000,
+                generated_at = DateTime.UtcNow
+            });
+            seed.DigitalPermits.Add(new DigitalPermit
+            {
+                permit_id = 501,
+                contract_id = 501,
+                qr_payload = "qr-renewal-501",
+                permit_status = "ACTIVE",
+                issued_at = DateTime.UtcNow
+            });
+            seed.RenewalRequests.Add(new RenewalRequest
+            {
+                renewal_id = 601,
+                contract_id = 501,
+                requested_term_days = 30,
+                renewal_status = "PENDING",
+                created_at = DateTime.UtcNow
+            });
+            await seed.SaveChangesAsync();
+        }
+
+        var service = f.NewService();
+        var detail = await service.GetRenewalDetailAsync(f.Actor, 601, default);
+        Assert.True(detail.CanApprove);
+        Assert.True(detail.IsFastTrackEligible);
+        Assert.Equal(initialEndDate, detail.CurrentEndDate);
+        Assert.Equal(initialEndDate.AddDays(30), detail.ProposedEndDate);
+
+        var result = await service.DecideRenewalAsync(
+            f.Actor, 601, new WardRenewalDecision("APPROVE", "Đủ điều kiện theo quy định", "PENDING"), default);
+
+        Assert.Equal("APPROVED", result.Status);
+
+        using var verify = f.NewDb();
+        var contract = await verify.RentalContracts.SingleAsync(c => c.contract_id == 501);
+        Assert.Equal(initialEndDate.AddDays(30), contract.end_date);
+
+        var renewal = await verify.RenewalRequests.SingleAsync(r => r.renewal_id == 601);
+        Assert.Equal("APPROVED", renewal.renewal_status);
+        Assert.Equal(initialEndDate.AddDays(30), renewal.new_end_date);
+        Assert.Equal(1, renewal.reviewed_by);
+
+        var oldFee = await verify.FeeSchedules.SingleAsync(fs => fs.fee_schedule_id == 501);
+        Assert.NotNull(oldFee.superseded_at);
+
+        var newFee = await verify.FeeSchedules.SingleAsync(fs => fs.contract_id == 501 && fs.revision == 2);
+        Assert.Equal(1500000, newFee.total_amount);
+        Assert.Null(newFee.superseded_at);
+
+        var audit = await verify.AuditLogs.SingleAsync(a => a.action == "RENEWAL_APPROVED");
+        Assert.Equal(601, audit.entity_id);
+        Assert.Contains("501", audit.details);
+    }
+
+    [Fact]
+    public async Task Renewal_review_uses_registration_linked_to_the_contract_application()
+    {
+        using var f = await Fixture.Create();
+        var today = DateOnly.FromDateTime(DateTime.UtcNow);
+
+        using (var seed = f.NewDb())
+        {
+            seed.BusinessRegistrations.Add(new BusinessRegistration
+            {
+                registration_id = 3,
+                vendor_id = 10,
+                ward_unit_id = 1,
+                vendor_type = "ITINERANT",
+                display_name = "Hồ sơ chưa duyệt của hộ A",
+                registration_status = "SUBMITTED"
+            });
+            seed.RentalApplications.Add(new RentalApplication
+            {
+                application_id = 3,
+                registration_id = 3,
+                slot_id = 100,
+                application_method = "MANUAL_SELECTED",
+                application_status = "APPROVED",
+                requested_term_days = 30
+            });
+            seed.RentalContracts.Add(new RentalContract
+            {
+                contract_id = 505,
+                application_id = 3,
+                slot_id = 100,
+                vendor_id = 10,
+                start_date = today,
+                end_date = today.AddDays(30),
+                contract_status = "ACTIVE",
+                created_at = DateTime.UtcNow
+            });
+            seed.DigitalPermits.Add(new DigitalPermit
+            {
+                permit_id = 505,
+                contract_id = 505,
+                qr_payload = "qr-renewal-505",
+                permit_status = "ACTIVE",
+                issued_at = DateTime.UtcNow
+            });
+            seed.RenewalRequests.Add(new RenewalRequest
+            {
+                renewal_id = 605,
+                contract_id = 505,
+                requested_term_days = 30,
+                renewal_status = "PENDING",
+                created_at = DateTime.UtcNow
+            });
+            await seed.SaveChangesAsync();
+        }
+
+        var service = f.NewService();
+        var detail = await service.GetRenewalDetailAsync(f.Actor, 605, default);
+
+        Assert.Equal(3, detail.RegistrationId);
+        Assert.Equal("SUBMITTED", detail.RegistrationStatus);
+        Assert.False(detail.CanApprove);
+        Assert.Contains(detail.Blockers, b => b.Contains("BR-16", StringComparison.OrdinalIgnoreCase));
+
+        await Assert.ThrowsAsync<DomainRuleException>(() =>
+            service.DecideRenewalAsync(
+                f.Actor,
+                605,
+                new WardRenewalDecision("APPROVE", "Không được duyệt nhầm hồ sơ khác", "PENDING"),
+                default));
+    }
+
+    [Fact]
+    public async Task Approving_renewal_is_blocked_when_penalty_is_unpaid()
+    {
+        using var f = await Fixture.Create();
+        var today = DateOnly.FromDateTime(DateTime.UtcNow);
+
+        using (var seed = f.NewDb())
+        {
+            seed.RentalContracts.Add(new RentalContract
+            {
+                contract_id = 506,
+                application_id = 1,
+                slot_id = 100,
+                vendor_id = 10,
+                start_date = today,
+                end_date = today.AddDays(30),
+                contract_status = "ACTIVE",
+                created_at = DateTime.UtcNow
+            });
+            seed.DigitalPermits.Add(new DigitalPermit
+            {
+                permit_id = 506,
+                contract_id = 506,
+                qr_payload = "qr-renewal-506",
+                permit_status = "ACTIVE",
+                issued_at = DateTime.UtcNow
+            });
+            seed.RenewalRequests.Add(new RenewalRequest
+            {
+                renewal_id = 606,
+                contract_id = 506,
+                requested_term_days = 30,
+                renewal_status = "PENDING",
+                created_at = DateTime.UtcNow
+            });
+            seed.Violations.Add(new Violation
+            {
+                violation_id = 706,
+                contract_id = 506,
+                slot_id = 100,
+                vendor_id = 10,
+                violation_type = "UNAUTHORIZED_BUSINESS_USE",
+                description = "Lấn chiếm lối đi",
+                recorded_by = 1,
+                recorder_role = "WARD_AUTHORITY",
+                source = "WARD_INSPECTION",
+                recorded_at = DateTime.UtcNow
+            });
+            seed.Penalties.Add(new Penalty
+            {
+                penalty_id = 706,
+                violation_id = 706,
+                penalty_schedule_id = 1,
+                amount = 2500000,
+                penalty_status = "UNPAID",
+                decision_number = "QD-706",
+                signer_name = "Chủ tịch UBND Phường",
+                signer_title = "Chủ tịch",
+                created_at = DateTime.UtcNow
+            });
+            await seed.SaveChangesAsync();
+        }
+
+        var service = f.NewService();
+        var detail = await service.GetRenewalDetailAsync(f.Actor, 606, default);
+
+        Assert.False(detail.CanApprove);
+        Assert.Equal(1, detail.Scorecard.UnpaidPenaltyCount);
+
+        var ex = await Assert.ThrowsAsync<DomainRuleException>(() =>
+            service.DecideRenewalAsync(
+                f.Actor,
+                606,
+                new WardRenewalDecision("APPROVE", "Đủ điều kiện", "PENDING"),
+                default));
+        Assert.Contains("chưa hoàn thành nộp phạt", ex.Message);
+    }
+
+    /// <summary>Mirrors HasOutstandingDebtAsync, the same debt definition that already blocks
+    /// SIDE-07 (return slot) and BR-27 (slot transfer): renewal approval must not let a vendor
+    /// who owes overdue rent for the current term get that term extended for free.</summary>
+    [Fact]
+    public async Task Approving_renewal_is_blocked_when_a_regular_fee_item_is_overdue()
+    {
+        using var f = await Fixture.Create();
+        var today = DateOnly.FromDateTime(DateTime.UtcNow);
+
+        using (var seed = f.NewDb())
+        {
+            seed.RentalContracts.Add(new RentalContract
+            {
+                contract_id = 507,
+                application_id = 1,
+                slot_id = 100,
+                vendor_id = 10,
+                start_date = today,
+                end_date = today.AddDays(30),
+                contract_status = "ACTIVE",
+                created_at = DateTime.UtcNow
+            });
+            seed.DigitalPermits.Add(new DigitalPermit
+            {
+                permit_id = 507,
+                contract_id = 507,
+                qr_payload = "qr-renewal-507",
+                permit_status = "ACTIVE",
+                issued_at = DateTime.UtcNow
+            });
+            seed.RenewalRequests.Add(new RenewalRequest
+            {
+                renewal_id = 607,
+                contract_id = 507,
+                requested_term_days = 30,
+                renewal_status = "PENDING",
+                created_at = DateTime.UtcNow
+            });
+            seed.FeeSchedules.Add(new FeeSchedule
+            {
+                fee_schedule_id = 507,
+                contract_id = 507,
+                revision = 1,
+                total_amount = 1500000,
+                generated_at = DateTime.UtcNow
+            });
+            seed.FeeScheduleItems.Add(new FeeScheduleItem
+            {
+                fee_item_id = 707,
+                fee_schedule_id = 507,
+                due_date = today.AddDays(-5),
+                amount = 1500000,
+                item_status = "OVERDUE"
+            });
+            await seed.SaveChangesAsync();
+        }
+
+        var service = f.NewService();
+        var detail = await service.GetRenewalDetailAsync(f.Actor, 607, default);
+
+        Assert.False(detail.CanApprove);
+        Assert.False(detail.IsFastTrackEligible);
+        Assert.Contains(detail.Blockers, b => b.Contains("quá hạn", StringComparison.OrdinalIgnoreCase));
+
+        var ex = await Assert.ThrowsAsync<DomainRuleException>(() =>
+            service.DecideRenewalAsync(
+                f.Actor,
+                607,
+                new WardRenewalDecision("APPROVE", "Đủ điều kiện", "PENDING"),
+                default));
+        Assert.Contains("quá hạn", ex.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task Rejecting_renewal_leaves_contract_end_date_untouched_and_records_reason()
+    {
+        using var f = await Fixture.Create();
+        var today = DateOnly.FromDateTime(DateTime.UtcNow);
+        var initialEndDate = today.AddDays(30);
+
+        using (var seed = f.NewDb())
+        {
+            seed.RentalContracts.Add(new RentalContract
+            {
+                contract_id = 502,
+                application_id = 1,
+                slot_id = 100,
+                vendor_id = 10,
+                start_date = today,
+                end_date = initialEndDate,
+                contract_status = "ACTIVE",
+                created_at = DateTime.UtcNow
+            });
+            seed.RenewalRequests.Add(new RenewalRequest
+            {
+                renewal_id = 602,
+                contract_id = 502,
+                requested_term_days = 30,
+                renewal_status = "PENDING",
+                created_at = DateTime.UtcNow
+            });
+            await seed.SaveChangesAsync();
+        }
+
+        var service = f.NewService();
+        var result = await service.DecideRenewalAsync(
+            f.Actor, 602, new WardRenewalDecision("REJECT", "Tuyến phố chuẩn bị chỉnh trang hạ tầng", "PENDING"), default);
+
+        Assert.Equal("REJECTED", result.Status);
+
+        using var verify = f.NewDb();
+        var contract = await verify.RentalContracts.SingleAsync(c => c.contract_id == 502);
+        Assert.Equal(initialEndDate, contract.end_date); // Untouched
+
+        var renewal = await verify.RenewalRequests.SingleAsync(r => r.renewal_id == 602);
+        Assert.Equal("REJECTED", renewal.renewal_status);
+        Assert.Equal("Tuyến phố chuẩn bị chỉnh trang hạ tầng", renewal.review_decision_reason);
+    }
+
+    [Fact]
+    public async Task Other_ward_cannot_review_or_decide_on_renewal()
+    {
+        using var f = await Fixture.Create();
+        var today = DateOnly.FromDateTime(DateTime.UtcNow);
+
+        using (var seed = f.NewDb())
+        {
+            seed.RentalContracts.Add(new RentalContract
+            {
+                contract_id = 503,
+                application_id = 1,
+                slot_id = 100, // Ward 1
+                vendor_id = 10,
+                start_date = today,
+                end_date = today.AddDays(30),
+                contract_status = "ACTIVE",
+                created_at = DateTime.UtcNow
+            });
+            seed.RenewalRequests.Add(new RenewalRequest
+            {
+                renewal_id = 603,
+                contract_id = 503,
+                requested_term_days = 30,
+                renewal_status = "PENDING",
+                created_at = DateTime.UtcNow
+            });
+            await seed.SaveChangesAsync();
+        }
+
+        var otherWardActor = new WardActor(2, 2, "Cán bộ Phường 2");
+        var service = f.NewService();
+
+        await Assert.ThrowsAsync<NotFoundException>(() =>
+            service.GetRenewalDetailAsync(otherWardActor, 603, default));
+
+        await Assert.ThrowsAsync<NotFoundException>(() =>
+            service.DecideRenewalAsync(otherWardActor, 603, new WardRenewalDecision("APPROVE", "Lý do", "PENDING"), default));
+    }
+
+    [Fact]
+    public async Task Concurrent_renewal_decisions_handled_honestly_via_expected_status()
+    {
+        // Two officers open the same renewal, both see PENDING, both decide "APPROVE" against
+        // that same expected status. Only one may win -- the loser must get an honest 409
+        // Conflict (ConflictException) rather than a silently overwritten decision.
+        using var f = await Fixture.Create();
+        var today = DateOnly.FromDateTime(DateTime.UtcNow);
+
+        using (var seed = f.NewDb())
+        {
+            seed.RentalContracts.Add(new RentalContract
+            {
+                contract_id = 504,
+                application_id = 1,
+                slot_id = 100,
+                vendor_id = 10,
+                start_date = today,
+                end_date = today.AddDays(30),
+                contract_status = "ACTIVE",
+                created_at = DateTime.UtcNow
+            });
+            seed.DigitalPermits.Add(new DigitalPermit
+            {
+                permit_id = 504,
+                contract_id = 504,
+                qr_payload = "qr-renewal-504",
+                permit_status = "ACTIVE",
+                issued_at = DateTime.UtcNow
+            });
+            seed.RenewalRequests.Add(new RenewalRequest
+            {
+                renewal_id = 604,
+                contract_id = 504,
+                requested_term_days = 30,
+                renewal_status = "PENDING",
+                created_at = DateTime.UtcNow
+            });
+            await seed.SaveChangesAsync();
+        }
+
+        var t1 = f.NewService().DecideRenewalAsync(
+            f.Actor, 604, new WardRenewalDecision("APPROVE", "Đạt yêu cầu", "PENDING"), default);
+        var t2 = f.NewService().DecideRenewalAsync(
+            f.Actor, 604, new WardRenewalDecision("APPROVE", "Đạt yêu cầu", "PENDING"), default);
+
+        var results = await Task.WhenAll(t1.ContinueWith(TryUnwrap), t2.ContinueWith(TryUnwrap));
+
+        Assert.Single(results, r => r.Ok);
+        Assert.Single(results, r => !r.Ok && r.Error is ConflictException);
+
+        using var verify = f.NewDb();
+        var renewal = await verify.RenewalRequests.SingleAsync(r => r.renewal_id == 604);
+        Assert.Equal("APPROVED", renewal.renewal_status);
+
+        static (bool Ok, Exception? Error) TryUnwrap(Task<WardRenewalDetailDto> t) =>
+            t.IsFaulted ? (false, t.Exception!.InnerException) : (true, null);
+    }
+
+    [Fact]
+    public async Task Batch_approve_processes_each_renewal_independently_and_reports_per_item_failures()
+    {
+        // Idea 4 (WARD-09): a batch call is "click Approve N times" with one shared reason, not
+        // a shortcut around per-item checks -- one stale item must not abort the rest, and each
+        // outcome is reported back individually rather than the whole call failing 409/404.
+        using var f = await Fixture.Create();
+        var today = DateOnly.FromDateTime(DateTime.UtcNow);
+
+        using (var seed = f.NewDb())
+        {
+            seed.RentalContracts.Add(new RentalContract
+            {
+                contract_id = 505,
+                application_id = 1,
+                slot_id = 100,
+                vendor_id = 10,
+                start_date = today,
+                end_date = today.AddDays(30),
+                contract_status = "ACTIVE",
+                created_at = DateTime.UtcNow
+            });
+            seed.DigitalPermits.Add(new DigitalPermit
+            {
+                permit_id = 605,
+                contract_id = 505,
+                qr_payload = "qr-renewal-605",
+                permit_status = "ACTIVE",
+                issued_at = DateTime.UtcNow
+            });
+            seed.RenewalRequests.Add(new RenewalRequest
+            {
+                renewal_id = 605,
+                contract_id = 505,
+                requested_term_days = 15,
+                renewal_status = "PENDING",
+                created_at = DateTime.UtcNow
+            });
+            seed.RentalContracts.Add(new RentalContract
+            {
+                contract_id = 506,
+                application_id = 2,
+                slot_id = 100,
+                vendor_id = 10,
+                start_date = today,
+                end_date = today.AddDays(30),
+                contract_status = "ACTIVE",
+                created_at = DateTime.UtcNow
+            });
+            seed.DigitalPermits.Add(new DigitalPermit
+            {
+                permit_id = 606,
+                contract_id = 506,
+                qr_payload = "qr-renewal-606",
+                permit_status = "ACTIVE",
+                issued_at = DateTime.UtcNow
+            });
+            // Actually PENDING, but the batch request below claims it as UNDER_REVIEW -- the
+            // stand-in for "another officer already touched this one".
+            seed.RenewalRequests.Add(new RenewalRequest
+            {
+                renewal_id = 606,
+                contract_id = 506,
+                requested_term_days = 15,
+                renewal_status = "PENDING",
+                created_at = DateTime.UtcNow
+            });
+            await seed.SaveChangesAsync();
+        }
+
+        var service = f.NewService();
+        var batchResult = await service.BatchDecideRenewalsAsync(
+            f.Actor,
+            new WardRenewalBatchDecisionRequest(
+                Items:
+                [
+                    new WardRenewalBatchDecisionItemRequest(605, "PENDING"),
+                    new WardRenewalBatchDecisionItemRequest(606, "UNDER_REVIEW"),
+                ],
+                Decision: "APPROVE",
+                Reason: "Đủ điều kiện gia hạn theo quy định, điểm bán chấp hành tốt quy chế hè phố"),
+            default);
+
+        Assert.Equal(2, batchResult.TotalRequested);
+        Assert.Equal(1, batchResult.SuccessCount);
+        Assert.Equal(1, batchResult.FailureCount);
+
+        var succeeded = Assert.Single(batchResult.Results, r => r.RenewalId == 605);
+        Assert.True(succeeded.Success);
+        Assert.Equal(today.AddDays(30).AddDays(15), succeeded.NewEndDate);
+
+        var failed = Assert.Single(batchResult.Results, r => r.RenewalId == 606);
+        Assert.False(failed.Success);
+        Assert.NotNull(failed.ErrorMessage);
+        Assert.Null(failed.NewEndDate);
+
+        using var verify = f.NewDb();
+        Assert.Equal("APPROVED", (await verify.RenewalRequests.SingleAsync(r => r.renewal_id == 605)).renewal_status);
+        // The failed item must be untouched, not half-applied.
+        Assert.Equal("PENDING", (await verify.RenewalRequests.SingleAsync(r => r.renewal_id == 606)).renewal_status);
+    }
+
     private sealed class Fixture : IDisposable
     {
         public SqliteConnection Connection { get; } = new("Data Source=:memory:");

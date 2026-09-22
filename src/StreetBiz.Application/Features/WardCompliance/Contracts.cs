@@ -286,6 +286,100 @@ public sealed record AiIdExtractionResult(
     string? TamperingAlert = null);
 #endregion
 
+#region DTOs - Renewal Requests (WARD-09)
+public sealed record WardRenewalListItemDto(
+    string Id,
+    long ContractId,
+    string SlotCode,
+    string SlotStreet,
+    string VendorName,
+    string Status,
+    int RequestedTermDays,
+    DateOnly CurrentEndDate,
+    DateOnly ProposedEndDate,
+    decimal PricePerDay,
+    decimal TotalFee,
+    bool IsFastTrackEligible,
+    int ViolationCount,
+    DateTime CreatedAt,
+    /// <summary>NĐ 241/2026 Điều 21 (sửa NĐ 165/2024): hạn xử lý hồ sơ 3 ngày làm việc. Tính
+    /// gần đúng bằng 3 ngày lịch kể từ khi nộp (hệ thống chưa có lịch ngày nghỉ/lễ để tính
+    /// đúng ngày làm việc) -- dùng để cảnh báo, không phải căn cứ pháp lý chính xác tuyệt đối.</summary>
+    DateTime SlaDueAt,
+    bool IsOverdue);
+
+public sealed record WardVendorComplianceScorecardDto(
+    int TotalInspections,
+    int ViolationCount,
+    int UnpaidPenaltyCount,
+    decimal TotalPenaltyAmount,
+    int ReportCount,
+    string CurrentPermitStatus,
+    bool IsCleanRecord);
+
+public sealed record WardRenewalDetailDto(
+    string Id,
+    long ContractId,
+    string Status,
+    int RequestedTermDays,
+    DateOnly CurrentEndDate,
+    DateOnly ProposedEndDate,
+    int RemainingDaysOnCurrentContract,
+    // Slot info
+    long SlotId,
+    string SlotCode,
+    string SlotStreet,
+    decimal SlotWidth,
+    decimal SlotLength,
+    decimal PricePerDay,
+    decimal TotalEstimatedFee,
+    // Vendor info
+    long VendorId,
+    string VendorName,
+    string VendorPhone,
+    string VendorType,
+    long RegistrationId,
+    string RegistrationStatus,
+    // Review info
+    string? ReviewReason,
+    string? ReviewedBy,
+    DateTime? ReviewedAt,
+    bool CanApprove,
+    bool IsFastTrackEligible,
+    IReadOnlyList<string> Blockers,
+    // Compliance Scorecard
+    WardVendorComplianceScorecardDto Scorecard,
+    DateTime CreatedAt,
+    DateTime SlaDueAt,
+    bool IsOverdue);
+
+public sealed record WardRenewalDecision(
+    string Decision,
+    string Reason,
+    string ExpectedStatus);
+
+public sealed record WardRenewalBatchDecisionItemRequest(
+    long RenewalId,
+    string ExpectedStatus);
+
+public sealed record WardRenewalBatchDecisionRequest(
+    IReadOnlyList<WardRenewalBatchDecisionItemRequest> Items,
+    string Decision,
+    string Reason);
+
+public sealed record WardRenewalBatchDecisionItemResult(
+    long RenewalId,
+    bool Success,
+    string? ErrorMessage = null,
+    DateOnly? NewEndDate = null);
+
+public sealed record WardRenewalBatchDecisionResult(
+    int TotalRequested,
+    int SuccessCount,
+    int FailureCount,
+    IReadOnlyList<WardRenewalBatchDecisionItemResult> Results);
+#endregion
+
 #region Service Interfaces
 public interface IWardComplianceService
 {
@@ -311,6 +405,12 @@ public interface IWardComplianceService
     Task<IReadOnlyList<WardRentalApplicationListItemDto>> ListRentalApplicationsAsync(WardActor actor, string? status, int page, CancellationToken ct);
     Task<WardRentalApplicationDetailDto> GetRentalApplicationDetailAsync(WardActor actor, long applicationId, CancellationToken ct);
     Task<WardRentalApplicationDetailDto> DecideRentalApplicationAsync(WardActor actor, long applicationId, WardRentalApplicationDecision decision, CancellationToken ct);
+
+    // Renewal Requests (WARD-09)
+    Task<IReadOnlyList<WardRenewalListItemDto>> ListRenewalsAsync(WardActor actor, string? status, int page, CancellationToken ct);
+    Task<WardRenewalDetailDto> GetRenewalDetailAsync(WardActor actor, long renewalId, CancellationToken ct);
+    Task<WardRenewalDetailDto> DecideRenewalAsync(WardActor actor, long renewalId, WardRenewalDecision decision, CancellationToken ct);
+    Task<WardRenewalBatchDecisionResult> BatchDecideRenewalsAsync(WardActor actor, WardRenewalBatchDecisionRequest request, CancellationToken ct);
 
     // On-site Inspection & Permit
     Task<InspectWardPermitResult> InspectPermitAsync(WardActor actor, InspectWardPermitRequest request, CancellationToken ct);
