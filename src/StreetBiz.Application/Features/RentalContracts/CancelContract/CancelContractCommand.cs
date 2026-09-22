@@ -20,7 +20,8 @@ public sealed class CancelContractCommandValidator : AbstractValidator<CancelCon
 public sealed class CancelContractCommandHandler(
     IVendorContext vendorContext,
     ICurrentUser currentUser,
-    IRentalContractRepository contracts)
+    IRentalContractRepository contracts,
+    IRenewalRequestRepository renewals)
     : IRequestHandler<CancelContractCommand, Unit>
 {
     public async Task<Unit> Handle(CancelContractCommand request, CancellationToken cancellationToken)
@@ -51,6 +52,14 @@ public sealed class CancelContractCommandHandler(
         var userId = currentUser.UserId!.Value;
 
         await contracts.CancelAsync(request.ContractId, userId, request.Reason, cancellationToken);
+
+        // A renewal request only makes sense against a contract that still exists to extend --
+        // withdraw any of the vendor's own still-open renewal requests so it doesn't sit stuck
+        // in the ward's queue (it would be safely blocked at decision time anyway, since
+        // DecideRenewalAsync requires the contract to still be ACTIVE, but nobody would ever
+        // clean it up otherwise).
+        await renewals.CloseOpenForContractAsync(request.ContractId, cancellationToken);
+
         return Unit.Value;
     }
 }

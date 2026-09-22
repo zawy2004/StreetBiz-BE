@@ -200,6 +200,124 @@ public sealed class DecideWardRentalApplicationCommandHandler(
 }
 #endregion
 
+#region Renewal Requests (WARD-09) Use Cases
+public sealed record ListWardRenewalsQuery(string? Status, int Page = 1) : IRequest<IReadOnlyList<WardRenewalListItemDto>>;
+
+public sealed class ListWardRenewalsQueryValidator : AbstractValidator<ListWardRenewalsQuery>
+{
+    public ListWardRenewalsQueryValidator()
+    {
+        RuleFor(x => x.Page).GreaterThan(0);
+    }
+}
+
+public sealed class ListWardRenewalsQueryHandler(
+    IWardActorContext actorContext,
+    IWardComplianceService complianceService)
+    : IRequestHandler<ListWardRenewalsQuery, IReadOnlyList<WardRenewalListItemDto>>
+{
+    public async Task<IReadOnlyList<WardRenewalListItemDto>> Handle(
+        ListWardRenewalsQuery request,
+        CancellationToken cancellationToken)
+    {
+        var actor = await actorContext.RequireAsync(cancellationToken);
+        return await complianceService.ListRenewalsAsync(actor, request.Status, request.Page, cancellationToken);
+    }
+}
+
+public sealed record GetWardRenewalDetailQuery(long Id) : IRequest<WardRenewalDetailDto>;
+
+public sealed class GetWardRenewalDetailQueryValidator : AbstractValidator<GetWardRenewalDetailQuery>
+{
+    public GetWardRenewalDetailQueryValidator()
+    {
+        RuleFor(x => x.Id).GreaterThan(0);
+    }
+}
+
+public sealed class GetWardRenewalDetailQueryHandler(
+    IWardActorContext actorContext,
+    IWardComplianceService complianceService)
+    : IRequestHandler<GetWardRenewalDetailQuery, WardRenewalDetailDto>
+{
+    public async Task<WardRenewalDetailDto> Handle(
+        GetWardRenewalDetailQuery request,
+        CancellationToken cancellationToken)
+    {
+        var actor = await actorContext.RequireAsync(cancellationToken);
+        return await complianceService.GetRenewalDetailAsync(actor, request.Id, cancellationToken);
+    }
+}
+
+public sealed record DecideWardRenewalCommand(
+    long Id,
+    WardRenewalDecision Decision) : IRequest<WardRenewalDetailDto>;
+
+public sealed class DecideWardRenewalCommandValidator : AbstractValidator<DecideWardRenewalCommand>
+{
+    public DecideWardRenewalCommandValidator()
+    {
+        RuleFor(x => x.Id).GreaterThan(0);
+        RuleFor(x => x.Decision.Decision).Must(d => d is "APPROVE" or "REJECT")
+            .WithMessage("Quyết định phải là APPROVE hoặc REJECT.");
+        RuleFor(x => x.Decision.Reason)
+            .NotEmpty().WithMessage("Lý do quyết định không được để trống.")
+            .MaximumLength(500).WithMessage("Lý do quyết định không quá 500 ký tự.");
+        RuleFor(x => x.Decision.ExpectedStatus).NotEmpty().WithMessage("Thiếu trạng thái hồ sơ kỳ vọng.");
+    }
+}
+
+public sealed class DecideWardRenewalCommandHandler(
+    IWardActorContext actorContext,
+    IWardComplianceService complianceService)
+    : IRequestHandler<DecideWardRenewalCommand, WardRenewalDetailDto>
+{
+    public async Task<WardRenewalDetailDto> Handle(
+        DecideWardRenewalCommand request,
+        CancellationToken cancellationToken)
+    {
+        var actor = await actorContext.RequireAsync(cancellationToken);
+        return await complianceService.DecideRenewalAsync(actor, request.Id, request.Decision, cancellationToken);
+    }
+}
+
+public sealed record BatchDecideWardRenewalsCommand(
+    WardRenewalBatchDecisionRequest Request) : IRequest<WardRenewalBatchDecisionResult>;
+
+public sealed class BatchDecideWardRenewalsCommandValidator : AbstractValidator<BatchDecideWardRenewalsCommand>
+{
+    public BatchDecideWardRenewalsCommandValidator()
+    {
+        RuleFor(x => x.Request.Items).NotEmpty().WithMessage("Danh sách hồ sơ không được để trống.");
+        RuleFor(x => x.Request.Items.Count).LessThanOrEqualTo(50).WithMessage("Số lượng hồ sơ duyệt cùng lúc tối đa là 50.");
+        RuleForEach(x => x.Request.Items).ChildRules(item =>
+        {
+            item.RuleFor(i => i.RenewalId).GreaterThan(0);
+            item.RuleFor(i => i.ExpectedStatus).NotEmpty().WithMessage("Thiếu trạng thái kỳ vọng của hồ sơ.");
+        });
+        RuleFor(x => x.Request.Decision).Must(d => d is "APPROVE" or "REJECT")
+            .WithMessage("Quyết định phải là APPROVE hoặc REJECT.");
+        RuleFor(x => x.Request.Reason)
+            .NotEmpty().WithMessage("Lý do quyết định không được để trống.")
+            .MaximumLength(500).WithMessage("Lý do quyết định không quá 500 ký tự.");
+    }
+}
+
+public sealed class BatchDecideWardRenewalsCommandHandler(
+    IWardActorContext actorContext,
+    IWardComplianceService complianceService)
+    : IRequestHandler<BatchDecideWardRenewalsCommand, WardRenewalBatchDecisionResult>
+{
+    public async Task<WardRenewalBatchDecisionResult> Handle(
+        BatchDecideWardRenewalsCommand request,
+        CancellationToken cancellationToken)
+    {
+        var actor = await actorContext.RequireAsync(cancellationToken);
+        return await complianceService.BatchDecideRenewalsAsync(actor, request.Request, cancellationToken);
+    }
+}
+#endregion
+
 #region On-site Inspection & Permit Use Cases
 public sealed record InspectWardPermitQuery(InspectWardPermitRequest Request) : IRequest<InspectWardPermitResult>;
 

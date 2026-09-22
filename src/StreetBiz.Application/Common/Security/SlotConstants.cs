@@ -89,6 +89,14 @@ public static class RenewalStatuses
 
     /// <summary>Statuses that count as an open, in-flight renewal (UQ_RenewalRequests_OpenPerContract).</summary>
     public static readonly string[] Open = [Pending, UnderReview];
+
+    /// <summary>NĐ 241/2026 Điều 21 (sửa NĐ 165/2024): hạn xử lý hồ sơ gia hạn 3 ngày làm việc,
+    /// tính gần đúng bằng ngày lịch (hệ thống chưa có lịch ngày nghỉ/lễ để tính đúng ngày làm việc).</summary>
+    public const int DecisionSlaDays = 3;
+
+    /// <summary>Trần số ngày được phép xin gia hạn 1 lần, khớp trần của đơn thuê ô lần đầu
+    /// (GetSlotQuoteQuery: 1-365 ngày) để nhất quán trong toàn hệ thống.</summary>
+    public const int MaxRequestedTermDays = 365;
 }
 
 /// <summary>AddressChangeRequests.change_status values (DB CHECK).</summary>
@@ -169,6 +177,9 @@ public static class SideMessages
     public const string CannotReturnWithDebt = "Cannot return a slot while fees are overdue or penalties unpaid."; // mirrors TR_RentalContracts_NoCancelWithDebt
     public const string RenewalAlreadyOpen = "A renewal request is already pending for this contract.";
     public const string RenewalRequested = "Your renewal request has been submitted successfully.";
+    public const string RenewalNotFound = "Renewal request not found.";
+    public const string RenewalNotWithdrawable = "This renewal request can no longer be withdrawn because it has already been decided.";
+    public const string RenewalWithdrawn = "Your renewal request has been withdrawn.";
     public const string ContractNotActive = "This action requires an active rental contract.";
     public const string ContractCancelled = "Your rental slot has been returned successfully.";
     public const string PermitNotFound = "No digital permit has been issued for this contract yet.";

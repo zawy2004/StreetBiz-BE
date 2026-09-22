@@ -70,6 +70,34 @@ public sealed class WardComplianceController(ISender sender) : ControllerBase
         Ok(await sender.Send(new DecideWardRentalApplicationCommand(id, decision), ct));
     #endregion
 
+    #region Renewal Applications (WARD-09)
+    [HttpGet("renewals")]
+    public async Task<ActionResult<IReadOnlyList<WardRenewalListItemDto>>> ListRenewals(
+        [FromQuery] string? status,
+        [FromQuery] int page = 1,
+        CancellationToken ct = default) =>
+        Ok(await sender.Send(new ListWardRenewalsQuery(status, page), ct));
+
+    [HttpGet("renewals/{id:long}")]
+    public async Task<ActionResult<WardRenewalDetailDto>> GetRenewal(
+        long id,
+        CancellationToken ct) =>
+        Ok(await sender.Send(new GetWardRenewalDetailQuery(id), ct));
+
+    [HttpPost("renewals/{id:long}/decision")]
+    public async Task<ActionResult<WardRenewalDetailDto>> DecideRenewal(
+        long id,
+        WardRenewalDecision decision,
+        CancellationToken ct) =>
+        Ok(await sender.Send(new DecideWardRenewalCommand(id, decision), ct));
+
+    [HttpPost("renewals/batch-decision")]
+    public async Task<ActionResult<WardRenewalBatchDecisionResult>> BatchDecideRenewals(
+        WardRenewalBatchDecisionRequest request,
+        CancellationToken ct) =>
+        Ok(await sender.Send(new BatchDecideWardRenewalsCommand(request), ct));
+    #endregion
+
     #region On-site Inspection & Permit Verification
     [HttpPost("permits/inspect")]
     public async Task<ActionResult<InspectWardPermitResult>> InspectPermit(

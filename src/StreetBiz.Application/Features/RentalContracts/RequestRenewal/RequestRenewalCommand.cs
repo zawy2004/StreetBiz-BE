@@ -14,7 +14,8 @@ public sealed class RequestRenewalCommandValidator : AbstractValidator<RequestRe
 {
     public RequestRenewalCommandValidator()
     {
-        RuleFor(x => x.RequestedTermDays).GreaterThan(0);
+        // Same bound as the original application's term (GetSlotQuoteQuery: 1-365 days).
+        RuleFor(x => x.RequestedTermDays).InclusiveBetween(1, RenewalStatuses.MaxRequestedTermDays);
     }
 }
 

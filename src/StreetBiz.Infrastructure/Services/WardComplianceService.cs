@@ -577,6 +577,478 @@ public sealed class WardComplianceService(
     }
     #endregion
 
+    #region Renewal Applications (WARD-09)
+    private sealed record RenewalComplianceSnapshot(
+        IReadOnlyList<string> Blockers,
+        WardVendorComplianceScorecardDto Scorecard);
+
+    private static bool IsUnpaidPenalty(Penalty penalty) =>
+        penalty.penalty_status == DebtStatuses.PenaltyUnpaid;
+
+    private static DigitalPermit? SelectCurrentPermit(IEnumerable<DigitalPermit> permits) =>
+        permits
+            .OrderBy(p => p.permit_status == PermitStatuses.Revoked ? 1 : 0)
+            .ThenByDescending(p => p.issued_at)
+            .FirstOrDefault();
+
+    private async Task<RenewalComplianceSnapshot> BuildRenewalComplianceSnapshotAsync(
+        RenewalRequest renewal,
+        BusinessRegistration registration,
+        CancellationToken ct)
+    {
+        var contract = renewal.contract;
+        var blockers = new List<string>();
+
+        if (registration.registration_status != "APPROVED")
+        {
+            blockers.Add("Hồ sơ đăng ký điểm kinh doanh liên kết chưa được phê duyệt hoặc đã hết hiệu lực (BR-16).");
+        }
+
+        if (contract.contract_status != ContractStatuses.Active)
+        {
+            blockers.Add($"Hợp đồng hiện tại không ở trạng thái ACTIVE (Trạng thái hiện tại: {contract.contract_status}).");
+        }
+
+        if (contract.slot.slot_status == SlotStatuses.Suspended)
+        {
+            blockers.Add("Ô hè phố đang bị tạm dừng khai thác hoặc điều chỉnh quy hoạch.");
+        }
+
+        var violations = await db.Violations.AsNoTracking()
+            .Include(v => v.Penalty)
+            .Where(v => v.contract_id == contract.contract_id || v.vendor_id == contract.vendor_id)
+            .ToListAsync(ct);
+
+        var penalties = violations.Where(v => v.Penalty != null).Select(v => v.Penalty!).ToList();
+        var unpaidPenalties = penalties.Where(IsUnpaidPenalty).ToList();
+        if (unpaidPenalties.Count > 0)
+        {
+            blockers.Add($"Điểm bán đang có {unpaidPenalties.Count} quyết định xử phạt vi phạm chưa hoàn thành nộp phạt.");
+        }
+
+        // Same debt definition as IRentalContractRepository.HasOutstandingDebtAsync (which
+        // already blocks SIDE-07 return-slot and BR-27 slot transfer): an OVERDUE fee item is
+        // unpaid rent for the current term, not a violation penalty, so it needs its own blocker
+        // here -- a vendor who owes the ward money for the term they're on should not have that
+        // term automatically extended.
+        var hasOverdueFee = await db.FeeScheduleItems.AsNoTracking()
+            .AnyAsync(i => i.fee_schedule.contract_id == contract.contract_id
+                && i.item_status == DebtStatuses.FeeItemOverdue, ct);
+        if (hasOverdueFee)
+        {
+            blockers.Add("Hợp đồng đang có khoản phí thuê hè phố quá hạn chưa thanh toán cho kỳ hiện tại.");
+        }
+
+        var permit = SelectCurrentPermit(await db.DigitalPermits.AsNoTracking()
+            .Where(p => p.contract_id == contract.contract_id)
+            .ToListAsync(ct));
+        var permitStatus = permit?.permit_status ?? "NO_PERMIT";
+        if (permit is null)
+        {
+            blockers.Add("Hợp đồng chưa có giấy phép số QR để gia hạn hiệu lực.");
+        }
+        else if (permit.permit_status == PermitStatuses.Revoked)
+        {
+            blockers.Add("Giấy phép sử dụng hè phố đã bị thu hồi (REVOKED).");
+        }
+        else if (permit.permit_status == PermitStatuses.Suspended)
+        {
+            blockers.Add("Giấy phép sử dụng hè phố đang bị tạm đình chỉ (SUSPENDED).");
+        }
+
+        var reports = await db.VendorReports.AsNoTracking()
+            .Where(r => r.vendor_id == contract.vendor_id
+                || (permit != null && r.scanned_permit_id == permit.permit_id)
+                || r.slot_id == contract.slot_id)
+            .ToListAsync(ct);
+
+        var inspections = permit is not null
+            ? await db.PermitScanLogs.AsNoTracking()
+                .Where(s => s.permit_id == permit.permit_id && s.scan_context == "WARD_INSPECTION")
+                .CountAsync(ct)
+            : 0;
+
+        var isClean = violations.Count == 0
+            && unpaidPenalties.Count == 0
+            && !hasOverdueFee
+            && reports.Count == 0
+            && registration.registration_status == "APPROVED"
+            && contract.contract_status == ContractStatuses.Active
+            && contract.slot.slot_status != SlotStatuses.Suspended
+            && permitStatus == PermitStatuses.Active;
+
+        var scorecard = new WardVendorComplianceScorecardDto(
+            TotalInspections: inspections,
+            ViolationCount: violations.Count,
+            UnpaidPenaltyCount: unpaidPenalties.Count,
+            TotalPenaltyAmount: penalties.Sum(p => p.amount),
+            ReportCount: reports.Count,
+            CurrentPermitStatus: permitStatus,
+            IsCleanRecord: isClean);
+
+        return new RenewalComplianceSnapshot(blockers, scorecard);
+    }
+
+    public async Task<IReadOnlyList<WardRenewalListItemDto>> ListRenewalsAsync(
+        WardActor actor,
+        string? status,
+        int page,
+        CancellationToken ct)
+    {
+        var query = db.RenewalRequests.AsNoTracking()
+            .Include(x => x.contract).ThenInclude(c => c.slot).ThenInclude(s => s.zone)
+            .Include(x => x.contract).ThenInclude(c => c.application).ThenInclude(a => a.registration)
+            .Where(x => x.contract.slot.zone.ward_unit_id == actor.WardId);
+
+        if (!string.IsNullOrWhiteSpace(status))
+        {
+            query = query.Where(x => x.renewal_status == status);
+        }
+
+        var offset = (page - 1) * 20;
+        var renewals = await query
+            .OrderByDescending(x => x.created_at)
+            .Skip(offset)
+            .Take(20)
+            .ToListAsync(ct);
+
+        var contractIds = renewals.Select(r => r.contract_id).Distinct().ToList();
+        var vendorIds = renewals.Select(r => r.contract.vendor_id).Distinct().ToList();
+        var slotIds = renewals.Select(r => r.contract.slot_id).Distinct().ToList();
+
+        var violations = await db.Violations.AsNoTracking()
+            .Include(v => v.Penalty)
+            .Where(v => (v.contract_id.HasValue && contractIds.Contains(v.contract_id.Value))
+                || (v.vendor_id.HasValue && vendorIds.Contains(v.vendor_id.Value)))
+            .ToListAsync(ct);
+
+        var permits = await db.DigitalPermits.AsNoTracking()
+            .Where(p => contractIds.Contains(p.contract_id))
+            .ToListAsync(ct);
+        var permitByContract = permits
+            .GroupBy(p => p.contract_id)
+            .ToDictionary(g => g.Key, g => SelectCurrentPermit(g)!);
+
+        var permitIds = permitByContract.Values.Select(p => p.permit_id).ToList();
+        var reports = await db.VendorReports.AsNoTracking()
+            .Where(r => (r.vendor_id.HasValue && vendorIds.Contains(r.vendor_id.Value))
+                || (r.slot_id.HasValue && slotIds.Contains(r.slot_id.Value))
+                || (r.scanned_permit_id.HasValue && permitIds.Contains(r.scanned_permit_id.Value)))
+            .ToListAsync(ct);
+
+        // Same debt definition as BuildRenewalComplianceSnapshotAsync / HasOutstandingDebtAsync.
+        var contractIdsWithOverdueFee = (await db.FeeScheduleItems.AsNoTracking()
+            .Where(i => contractIds.Contains(i.fee_schedule.contract_id) && i.item_status == DebtStatuses.FeeItemOverdue)
+            .Select(i => i.fee_schedule.contract_id)
+            .Distinct()
+            .ToListAsync(ct)).ToHashSet();
+
+        var result = new List<WardRenewalListItemDto>();
+        foreach (var r in renewals)
+        {
+            var reg = r.contract.application.registration;
+            var vendorName = reg.display_name;
+            var currentEnd = r.contract.end_date;
+            var proposedEnd = currentEnd.AddDays(r.requested_term_days);
+            var pricePerDay = r.contract.slot.zone.price_per_day;
+            var totalFee = r.requested_term_days * pricePerDay;
+
+            var vList = violations.Where(v => v.contract_id == r.contract_id || v.vendor_id == r.contract.vendor_id).ToList();
+            var vCount = vList.Count;
+            var hasUnpaidPenalty = vList.Any(v => v.Penalty != null && IsUnpaidPenalty(v.Penalty));
+            permitByContract.TryGetValue(r.contract_id, out var permit);
+            var reportCount = reports.Count(report => report.vendor_id == r.contract.vendor_id
+                || report.slot_id == r.contract.slot_id
+                || (permit != null && report.scanned_permit_id == permit.permit_id));
+
+            var isClean = vCount == 0
+                && !hasUnpaidPenalty
+                && !contractIdsWithOverdueFee.Contains(r.contract_id)
+                && reportCount == 0
+                && reg.registration_status == "APPROVED"
+                && r.contract.contract_status == ContractStatuses.Active
+                && r.contract.slot.slot_status != SlotStatuses.Suspended
+                && permit?.permit_status == PermitStatuses.Active;
+
+            var slaDueAt = r.created_at.AddDays(RenewalStatuses.DecisionSlaDays);
+            var isOverdue = RenewalStatuses.Open.Contains(r.renewal_status) && Now > slaDueAt;
+
+            result.Add(new WardRenewalListItemDto(
+                Id(r.renewal_id),
+                r.contract_id,
+                r.contract.slot.slot_code,
+                r.contract.slot.zone.zone_code ?? r.contract.slot.zone.zone_name,
+                vendorName,
+                r.renewal_status,
+                r.requested_term_days,
+                currentEnd,
+                proposedEnd,
+                pricePerDay,
+                totalFee,
+                isClean,
+                vCount,
+                r.created_at,
+                slaDueAt,
+                isOverdue));
+        }
+
+        return result;
+    }
+
+    public async Task<WardRenewalDetailDto> GetRenewalDetailAsync(
+        WardActor actor,
+        long renewalId,
+        CancellationToken ct)
+    {
+        var renewal = await db.RenewalRequests.AsNoTracking()
+            .Include(x => x.contract).ThenInclude(c => c.slot).ThenInclude(s => s.zone)
+            .Include(x => x.contract).ThenInclude(c => c.vendor).ThenInclude(v => v.user)
+            .Include(x => x.contract).ThenInclude(c => c.application).ThenInclude(a => a.registration)
+            .SingleOrDefaultAsync(x => x.renewal_id == renewalId, ct);
+
+        if (renewal is null || renewal.contract.slot.zone.ward_unit_id != actor.WardId)
+        {
+            throw new NotFoundException("Không tìm thấy đơn xin gia hạn tại địa bàn của bạn.");
+        }
+
+        var contract = renewal.contract;
+        var reg = contract.application.registration;
+        var regId = reg.registration_id;
+        var regStatus = reg.registration_status;
+        var vendorName = reg.display_name;
+        var vendorPhone = contract.vendor.user.phone_number;
+        var vendorType = reg.vendor_type;
+
+        var today = DateOnly.FromDateTime(Now);
+        var currentEndDate = contract.end_date;
+        var remainingDays = currentEndDate.DayNumber - today.DayNumber;
+        var proposedEndDate = currentEndDate.AddDays(renewal.requested_term_days);
+
+        var pricePerDay = contract.slot.zone.price_per_day;
+        var totalFee = renewal.requested_term_days * pricePerDay;
+
+        var compliance = await BuildRenewalComplianceSnapshotAsync(renewal, reg, ct);
+        var canApprove = (renewal.renewal_status is RenewalStatuses.Pending or RenewalStatuses.UnderReview)
+            && compliance.Blockers.Count == 0;
+        var isFastTrack = canApprove && compliance.Scorecard.IsCleanRecord;
+
+        var slaDueAt = renewal.created_at.AddDays(RenewalStatuses.DecisionSlaDays);
+        var isOverdue = RenewalStatuses.Open.Contains(renewal.renewal_status) && Now > slaDueAt;
+
+        return new WardRenewalDetailDto(
+            Id(renewal.renewal_id),
+            contract.contract_id,
+            renewal.renewal_status,
+            renewal.requested_term_days,
+            currentEndDate,
+            proposedEndDate,
+            remainingDays,
+            contract.slot_id,
+            contract.slot.slot_code,
+            contract.slot.zone.zone_code ?? contract.slot.zone.zone_name,
+            contract.slot.width_meters ?? 0,
+            contract.slot.length_meters ?? 0,
+            pricePerDay,
+            totalFee,
+            contract.vendor_id,
+            vendorName,
+            vendorPhone,
+            vendorType,
+            regId,
+            regStatus,
+            renewal.review_decision_reason,
+            renewal.reviewed_by?.ToString(CultureInfo.InvariantCulture),
+            renewal.reviewed_at,
+            canApprove,
+            isFastTrack,
+            compliance.Blockers,
+            compliance.Scorecard,
+            renewal.created_at,
+            slaDueAt,
+            isOverdue);
+    }
+
+    public async Task<WardRenewalDetailDto> DecideRenewalAsync(
+        WardActor actor,
+        long renewalId,
+        WardRenewalDecision decision,
+        CancellationToken ct)
+    {
+        await Write(async () =>
+        {
+            var renewal = await db.RenewalRequests
+                .Include(x => x.contract).ThenInclude(c => c.slot).ThenInclude(s => s.zone)
+                .Include(x => x.contract).ThenInclude(c => c.vendor)
+                .Include(x => x.contract).ThenInclude(c => c.application).ThenInclude(a => a.registration)
+                .SingleOrDefaultAsync(x => x.renewal_id == renewalId, ct);
+
+            if (renewal is null || renewal.contract.slot.zone.ward_unit_id != actor.WardId)
+            {
+                throw new NotFoundException("Không tìm thấy đơn xin gia hạn tại địa bàn của bạn.");
+            }
+
+            if (!string.Equals(renewal.renewal_status, decision.ExpectedStatus, StringComparison.OrdinalIgnoreCase))
+            {
+                throw new ConflictException("Đơn đã được xử lý hoặc thay đổi trạng thái trước đó. Vui lòng tải lại.");
+            }
+
+            if (renewal.renewal_status is not (RenewalStatuses.Pending or RenewalStatuses.UnderReview))
+            {
+                throw new ConflictException("Đơn gia hạn đã có quyết định cuối cùng. Vui lòng tải lại hồ sơ.");
+            }
+
+            var isApprove = string.Equals(decision.Decision, "APPROVE", StringComparison.OrdinalIgnoreCase);
+            var reason = decision.Reason.Trim();
+
+            if (isApprove)
+            {
+                var compliance = await BuildRenewalComplianceSnapshotAsync(
+                    renewal,
+                    renewal.contract.application.registration,
+                    ct);
+                if (compliance.Blockers.Count > 0)
+                {
+                    throw new DomainRuleException(string.Join(" ", compliance.Blockers));
+                }
+
+                var currentEndDate = renewal.contract.end_date;
+                var newEndDate = currentEndDate.AddDays(renewal.requested_term_days);
+
+                renewal.renewal_status = "APPROVED";
+                renewal.new_end_date = newEndDate;
+                renewal.reviewed_by = actor.UserId;
+                renewal.reviewer_role = RoleCodes.WardAuthority;
+                renewal.reviewed_at = Now;
+                renewal.review_decision_reason = reason;
+
+                renewal.contract.end_date = newEndDate;
+
+                // Mark current active fee schedule superseded
+                var feeSchedules = await db.FeeSchedules
+                    .Where(fs => fs.contract_id == renewal.contract_id)
+                    .ToListAsync(ct);
+
+                var activeFee = feeSchedules.FirstOrDefault(fs => fs.superseded_at == null);
+                if (activeFee != null)
+                {
+                    activeFee.superseded_at = Now;
+                }
+
+                var nextRev = feeSchedules.Count > 0 ? feeSchedules.Max(fs => fs.revision) + 1 : 1;
+                var pricePerDay = renewal.contract.slot.zone.price_per_day;
+                var totalFee = renewal.requested_term_days * pricePerDay;
+
+                db.FeeSchedules.Add(new FeeSchedule
+                {
+                    contract_id = renewal.contract_id,
+                    revision = nextRev,
+                    total_amount = totalFee,
+                    generated_at = Now
+                });
+
+                db.AuditLogs.Add(new AuditLog
+                {
+                    actor_user_id = actor.UserId,
+                    action = "RENEWAL_APPROVED",
+                    entity_type = "RenewalRequest",
+                    entity_id = renewal.renewal_id,
+                    details = $"Cán bộ {actor.Name} phê duyệt gia hạn hợp đồng #{renewal.contract_id} tại ô {renewal.contract.slot.slot_code} thêm {renewal.requested_term_days} ngày đến {newEndDate:yyyy-MM-dd}. Lý do: {reason}",
+                    created_at = Now
+                });
+
+                db.Notifications.Add(new Notification
+                {
+                    user_id = renewal.contract.vendor.user_id,
+                    notification_type = "RENEWAL_APPROVED",
+                    title = "Đã được phê duyệt gia hạn hợp đồng hè phố",
+                    body = $"UBND Phường đã phê duyệt gia hạn hợp đồng thuê hè phố ô {renewal.contract.slot.slot_code} thêm {renewal.requested_term_days} ngày đến hết ngày {newEndDate:dd/MM/yyyy}. Giấy phép số QR đã tự động cập nhật thời hạn mới.",
+                    related_entity_type = "RenewalRequest",
+                    related_entity_id = renewal.renewal_id,
+                    is_read = false,
+                    sent_at = Now
+                });
+            }
+            else
+            {
+                renewal.renewal_status = "REJECTED";
+                renewal.reviewed_by = actor.UserId;
+                renewal.reviewer_role = RoleCodes.WardAuthority;
+                renewal.reviewed_at = Now;
+                renewal.review_decision_reason = reason;
+
+                db.AuditLogs.Add(new AuditLog
+                {
+                    actor_user_id = actor.UserId,
+                    action = "RENEWAL_REJECTED",
+                    entity_type = "RenewalRequest",
+                    entity_id = renewal.renewal_id,
+                    details = $"Cán bộ {actor.Name} từ chối gia hạn hợp đồng #{renewal.contract_id} tại ô {renewal.contract.slot.slot_code}. Lý do: {reason}",
+                    created_at = Now
+                });
+
+                db.Notifications.Add(new Notification
+                {
+                    user_id = renewal.contract.vendor.user_id,
+                    notification_type = "RENEWAL_REJECTED",
+                    title = "Yêu cầu gia hạn hợp đồng hè phố bị từ chối",
+                    body = $"UBND Phường đã từ chối yêu cầu gia hạn hợp đồng ô {renewal.contract.slot.slot_code}. Lý do: {reason}",
+                    related_entity_type = "RenewalRequest",
+                    related_entity_id = renewal.renewal_id,
+                    is_read = false,
+                    sent_at = Now
+                });
+            }
+        }, ct);
+
+        return await GetRenewalDetailAsync(actor, renewalId, ct);
+    }
+
+    /// <summary>
+    /// Idea 4 (WARD-09): batch fast-approval for the officer's Fast-track filtered queue.
+    /// Each item runs through the same DecideRenewalAsync as a single-item decision -- its own
+    /// Serializable transaction, its own BR-16/contract-status checks, its own AuditLog/
+    /// Notification -- so a batch call is exactly "click Approve N times" with one shared
+    /// reason, never a shortcut that skips any check a single approval would run. One item
+    /// failing (stale status, newly-ineligible vendor, etc.) never aborts the rest.
+    /// </summary>
+    public async Task<WardRenewalBatchDecisionResult> BatchDecideRenewalsAsync(
+        WardActor actor,
+        WardRenewalBatchDecisionRequest request,
+        CancellationToken ct)
+    {
+        var isApprove = string.Equals(request.Decision, "APPROVE", StringComparison.OrdinalIgnoreCase);
+        var results = new List<WardRenewalBatchDecisionItemResult>();
+
+        foreach (var item in request.Items)
+        {
+            try
+            {
+                var detail = await DecideRenewalAsync(
+                    actor,
+                    item.RenewalId,
+                    new WardRenewalDecision(request.Decision, request.Reason, item.ExpectedStatus),
+                    ct);
+
+                results.Add(new WardRenewalBatchDecisionItemResult(
+                    item.RenewalId,
+                    Success: true,
+                    NewEndDate: isApprove ? detail.CurrentEndDate : null));
+            }
+            catch (Exception ex) when (ex is NotFoundException or ConflictException or DomainRuleException)
+            {
+                results.Add(new WardRenewalBatchDecisionItemResult(
+                    item.RenewalId, Success: false, ErrorMessage: ex.Message));
+            }
+        }
+
+        return new WardRenewalBatchDecisionResult(
+            TotalRequested: request.Items.Count,
+            SuccessCount: results.Count(r => r.Success),
+            FailureCount: results.Count(r => !r.Success),
+            Results: results);
+    }
+    #endregion
+
     #region On-site Inspection & Permit Actions
     public async Task<InspectWardPermitResult> InspectPermitAsync(
         WardActor actor,

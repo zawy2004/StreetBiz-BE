@@ -10,6 +10,7 @@ using StreetBiz.Application.Features.RentalContracts.GetContract;
 using StreetBiz.Application.Features.RentalContracts.ListContracts;
 using StreetBiz.Application.Features.RentalContracts.ListRenewals;
 using StreetBiz.Application.Features.RentalContracts.RequestRenewal;
+using StreetBiz.Application.Features.RentalContracts.WithdrawRenewal;
 
 namespace StreetBiz.API.Controllers;
 
@@ -43,6 +44,17 @@ public sealed class RentalContractsController(ISender sender) : ControllerBase
     public async Task<ActionResult<IReadOnlyList<RenewalRequestDto>>> ListRenewals(
         long contractId, CancellationToken cancellationToken)
         => Ok(await sender.Send(new ListRenewalsQuery(contractId), cancellationToken));
+
+    /// <summary>SIDE-06: withdraw a renewal request that is still PENDING/UNDER_REVIEW, e.g. the
+    /// vendor submitted the wrong term. contractId is part of the route for REST consistency with
+    /// the sibling endpoints above; ownership is still re-checked from the contract server-side.</summary>
+    [HttpPost("{contractId:long}/renewals/{renewalId:long}/withdraw")]
+    public async Task<IActionResult> WithdrawRenewal(
+        long renewalId, CancellationToken cancellationToken)
+    {
+        await sender.Send(new WithdrawRenewalCommand(renewalId), cancellationToken);
+        return Ok(new { message = SideMessages.RenewalWithdrawn });
+    }
 
     /// <summary>SIDE-07: voluntarily return the slot. No ward approval is involved.</summary>
     [HttpPost("{contractId:long}/cancel")]
