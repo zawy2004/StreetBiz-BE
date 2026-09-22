@@ -14,6 +14,10 @@ public sealed class ConfiguredPaymentGateway(
 {
     private readonly PaymentGatewaySettings settings = options.Value;
 
+    public bool IsProviderAvailable(string provider) =>
+        !string.IsNullOrWhiteSpace(settings.For(provider).CheckoutUrlTemplate)
+        || settings.SandboxEnabled;
+
     public Task<PaymentGatewayCheckoutResult> CreateCheckoutAsync(
         PaymentGatewayCheckoutRequest request,
         CancellationToken cancellationToken)

@@ -130,6 +130,7 @@ public enum OrderMutationOutcome
     MenuItemUnavailable,
     StorefrontUnavailable,
     PaymentNotFound,
+    PendingCheckout,
 }
 
 public sealed record OrderMutationResult(OrderMutationOutcome Outcome, CommerceOrderRow? Order);

@@ -602,6 +602,8 @@ internal static class CommerceMapping
                 CommerceMessages.StorefrontUnavailable),
             OrderMutationOutcome.PaymentNotFound => throw new DomainRuleException(
                 CommerceMessages.PaymentNotFound),
+            OrderMutationOutcome.PendingCheckout => throw new ConflictException(
+                CommerceMessages.CheckoutAlreadyPending),
             _ => throw new ConflictException(CommerceMessages.OrderConflict),
         };
 }

@@ -85,6 +85,7 @@ public sealed class CommerceUseCaseTests
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(new OrderMutationResult(OrderMutationOutcome.Updated, row));
         var gateway = new Mock<IPaymentGateway>();
+        gateway.Setup(x => x.IsProviderAvailable(PaymentProviders.Momo)).Returns(true);
         gateway.Setup(x => x.CreateCheckoutAsync(
                 It.Is<PaymentGatewayCheckoutRequest>(request =>
                     request.TransactionId == 42
@@ -106,6 +107,23 @@ public sealed class CommerceUseCaseTests
         result.PaymentUrl.Should().Be("streetbiz://payment/momo");
         repository.VerifyAll();
         gateway.VerifyAll();
+    }
+
+    [Fact]
+    public async Task Checkout_refuses_an_unconfigured_provider_before_writing_an_order()
+    {
+        var repository = new Mock<ICommerceRepository>(MockBehavior.Strict);
+        var gateway = new Mock<IPaymentGateway>();
+        gateway.Setup(x => x.IsProviderAvailable(PaymentProviders.Momo)).Returns(false);
+        var handler = new CheckoutOrderCommandHandler(
+            CustomerContext(), repository.Object, gateway.Object);
+
+        var action = () => handler.Handle(
+            new CheckoutOrderCommand(3, "momo", "checkout-unconfigured"), default);
+
+        await action.Should().ThrowAsync<DomainRuleException>();
+        // The strict repository mock fails the test if any order was written.
+        repository.VerifyNoOtherCalls();
     }
 
     [Fact]

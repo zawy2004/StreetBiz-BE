@@ -21,6 +21,13 @@ public sealed record PaymentGatewayCallback(
 
 public interface IPaymentGateway
 {
+    /// <summary>
+    /// Whether this provider can currently start a checkout. Checked before the order
+    /// is written, so a provider that is switched off does not leave the customer with
+    /// an unpayable PENDING_PAYMENT order.
+    /// </summary>
+    bool IsProviderAvailable(string provider);
+
     Task<PaymentGatewayCheckoutResult> CreateCheckoutAsync(
         PaymentGatewayCheckoutRequest request,
         CancellationToken cancellationToken);

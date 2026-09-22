@@ -1,5 +1,6 @@
 using FluentValidation;
 using MediatR;
+using StreetBiz.Application.Common.Exceptions;
 using StreetBiz.Application.Common.Interfaces;
 using StreetBiz.Application.Common.Models;
 using StreetBiz.Application.Common.Security;
@@ -38,6 +39,11 @@ public sealed class CheckoutOrderCommandHandler(
         var customerUserId = await customerContext.RequireCustomerUserIdAsync(cancellationToken);
         var provider = request.Provider.Trim().ToUpperInvariant();
         var idempotencyKey = request.IdempotencyKey.Trim();
+        if (!paymentGateway.IsProviderAvailable(provider))
+        {
+            throw new DomainRuleException($"Payment provider {provider} is not configured.");
+        }
+
         var mutation = await repository.CheckoutAsync(
             customerUserId,
             request.CartId,

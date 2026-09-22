@@ -77,5 +77,7 @@ public static class CommerceMessages
     public const string CartConflict = "The cart changed. Refresh and try again.";
     public const string OrderNotFound = "The order was not found.";
     public const string OrderConflict = "The order status changed. Refresh and try again.";
+    public const string CheckoutAlreadyPending =
+        "An order is already awaiting payment. Pay for it or cancel it before ordering again.";
     public const string PaymentNotFound = "The prepaid order has no successful payment.";
 }

@@ -376,6 +376,14 @@ public sealed partial class CommerceRepository(
                 return (OrderMutationOutcome.Conflict, (long?)null);
             }
 
+            // Checked after the idempotency branch above, so retrying the same request
+            // still returns its order. A different key while one checkout is unpaid would
+            // otherwise bill the same still-active cart twice.
+            if (await HasPendingCheckoutAsync(customerUserId, cancellationToken))
+            {
+                return (OrderMutationOutcome.PendingCheckout, (long?)null);
+            }
+
             var cart = await db.ShoppingCarts
                 .Include(row => row.storefront)
                     .ThenInclude(storefront => storefront.registration)
