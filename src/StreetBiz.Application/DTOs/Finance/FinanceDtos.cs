@@ -24,6 +24,47 @@ public sealed record FeeScheduleDto(
     DateTime GeneratedAt,
     IReadOnlyList<FeeItemDto> Items);
 
+/// <summary>A penalty as the vendor sees it (FEE-04).</summary>
+public sealed record PenaltyDto(
+    long PenaltyId,
+    string ViolationLabel,
+    string? SlotCode,
+    decimal Amount,
+    string PenaltyStatus);
+
+/// <summary>One invoice in a list (FEE-03).</summary>
+public sealed record InvoiceDto(
+    long InvoiceId,
+    string InvoiceNumber,
+    string Kind,
+    decimal Amount,
+    DateTime IssuedAt,
+    string? PeriodLabel);
+
+/// <summary>Full invoice detail (FEE-03).</summary>
+public sealed record InvoiceDetailDto(
+    long InvoiceId,
+    string InvoiceNumber,
+    string Kind,
+    decimal Amount,
+    DateTime IssuedAt,
+    string? PeriodLabel,
+    string? SlotCode,
+    string? ViolationLabel,
+    long? FeeItemId,
+    long? PenaltyId,
+    string? PaymentProvider,
+    DateTime? PaidAt);
+
+/// <summary>FEE-01/FEE-04: a checkout was opened, here is where to send the vendor to pay it.</summary>
+public sealed record FinanceCheckoutDto(
+    long TransactionId,
+    string Purpose,
+    long ReferenceId,
+    string Provider,
+    decimal Amount,
+    string PaymentUrl);
+
 public static class FinanceMapper
 {
     /// <summary>
@@ -55,4 +96,17 @@ public static class FinanceMapper
         row.TotalAmount,
         DateTime.SpecifyKind(row.GeneratedAt, DateTimeKind.Utc),
         row.Items.Select(item => item.ToDto(row.ContractId, slotCode)).ToList());
+
+    public static string FeeItemPeriodLabel(this FeeItemCheckoutRow row) =>
+        PeriodLabel(row.Ordinal, row.OfCount, row.DueDate);
+
+    public static PenaltyDto ToDto(this PenaltyCheckoutRow row) => new(
+        row.PenaltyId, row.ViolationLabel, row.SlotCode, row.Amount, row.PenaltyStatus);
+
+    public static InvoiceDto ToListDto(this InvoiceRow row) => new(
+        row.InvoiceId, row.InvoiceNumber, row.Kind, row.Amount, row.IssuedAt, row.PeriodLabel);
+
+    public static InvoiceDetailDto ToDetailDto(this InvoiceRow row) => new(
+        row.InvoiceId, row.InvoiceNumber, row.Kind, row.Amount, row.IssuedAt, row.PeriodLabel,
+        row.SlotCode, row.ViolationLabel, row.FeeItemId, row.PenaltyId, row.PaymentProvider, row.PaidAt);
 }

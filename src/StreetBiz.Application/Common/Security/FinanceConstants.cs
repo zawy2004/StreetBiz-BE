@@ -103,6 +103,13 @@ public static class FinanceMessages
     public const string PenaltyNotPayable = "Biên bản phạt này không ở trạng thái chờ thanh toán.";
     public const string InvoiceNotFound = "Không tìm thấy hoá đơn.";
     public const string TransactionNotFound = "Không tìm thấy giao dịch thanh toán.";
+    public const string TransactionAlreadyProcessed = "Giao dịch này đã được xử lý.";
+
+    /// <summary>FEE-01: the instalment moved on (paid by another attempt, or gone OVERDUE/PAID) between the read and the checkout write.</summary>
+    public const string FeeItemNoLongerPayable = "Kỳ phí này vừa thay đổi trạng thái. Vui lòng tải lại.";
+
+    /// <summary>FEE-04: same race, for a penalty.</summary>
+    public const string PenaltyNoLongerPayable = "Biên bản phạt này vừa thay đổi trạng thái. Vui lòng tải lại.";
 
     /// <summary>MSG27.</summary>
     public const string FeePaid = "Đã thanh toán phí thuê ô. Hoá đơn đã được phát hành.";

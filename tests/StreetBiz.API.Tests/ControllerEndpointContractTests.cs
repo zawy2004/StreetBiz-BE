@@ -137,6 +137,11 @@ public sealed class ControllerEndpointContractTests
         "PUT /api/ward/cases/proposals/{id}/location",
         "GET /api/ward/geo/search",
         "POST /api/ward/geo/verify",
+        "POST /api/vendor/finance/fees/{feeItemId}/checkout",
+        "POST /api/vendor/finance/penalties/{penaltyId}/checkout",
+        "POST /api/vendor/finance/payments/{transactionId}/sandbox-confirm",
+        "GET /api/vendor/finance/invoices",
+        "GET /api/vendor/finance/invoices/{invoiceId}",
     ];
 
     private static readonly (HttpMethod Method, string Path)[] ProtectedEndpoints =
@@ -265,7 +270,9 @@ public sealed class ControllerEndpointContractTests
         using var document = JsonDocument.Parse(await client.GetStringAsync("/swagger/v1/swagger.json"));
         var actual = document.RootElement.GetProperty("paths")
             .EnumerateObject()
-            .Where(path => !path.NameEquals("/api/dev/ward-session"))
+            // Development-only minimal-API endpoints (ward dev session, finance dev shortcuts)
+            // are not part of the production controller contract this test pins down.
+            .Where(path => !path.Name.StartsWith("/api/dev/", StringComparison.Ordinal))
             .SelectMany(path => path.Value.EnumerateObject()
                 .Where(operation => IsHttpMethod(operation.Name))
                 .Select(operation => $"{operation.Name.ToUpperInvariant()} {path.Name}"))

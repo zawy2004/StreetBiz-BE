@@ -22,8 +22,8 @@ public sealed class ConfiguredPaymentGateway(
         if (!string.IsNullOrWhiteSpace(provider.CheckoutUrlTemplate))
         {
             var url = provider.CheckoutUrlTemplate
-                .Replace("{orderId}", request.OrderId.ToString(CultureInfo.InvariantCulture), StringComparison.Ordinal)
-                .Replace("{orderCode}", Uri.EscapeDataString(request.OrderCode), StringComparison.Ordinal)
+                .Replace("{referenceId}", request.ReferenceId.ToString(CultureInfo.InvariantCulture), StringComparison.Ordinal)
+                .Replace("{referenceCode}", Uri.EscapeDataString(request.ReferenceCode), StringComparison.Ordinal)
                 .Replace("{transactionId}", request.TransactionId.ToString(CultureInfo.InvariantCulture), StringComparison.Ordinal)
                 .Replace("{idempotencyKey}", Uri.EscapeDataString(request.IdempotencyKey), StringComparison.Ordinal)
                 .Replace("{amount}", request.Amount.ToString(CultureInfo.InvariantCulture), StringComparison.Ordinal);
@@ -33,7 +33,7 @@ public sealed class ConfiguredPaymentGateway(
         if (settings.SandboxEnabled)
         {
             var url = $"streetbiz://payment/sandbox/{request.Provider.ToLowerInvariant()}" +
-                $"?orderId={request.OrderId}&transactionId={request.TransactionId}";
+                $"?referenceId={request.ReferenceId}&transactionId={request.TransactionId}";
             return Task.FromResult(new PaymentGatewayCheckoutResult(url, null));
         }
 

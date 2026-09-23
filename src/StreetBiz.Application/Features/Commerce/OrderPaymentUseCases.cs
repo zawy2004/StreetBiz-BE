@@ -101,9 +101,19 @@ public sealed class ProcessPaymentCallbackCommandValidator
     }
 }
 
+/// <summary>
+/// SYS-04's one entry point for every provider: a real MoMo/ZaloPay merchant account has exactly
+/// one configured webhook URL, so RENTAL_FEE, PENALTY and ORDER callbacks must all land here.
+/// <see cref="StreetBiz.Application.Common.Interfaces.IFinanceRepository.FindPaymentPurposeAsync"/>
+/// is a read-only lookup by the transaction's own provider reference/idempotency key — the same
+/// keys used to match it below — so routing never guesses and never writes before dispatch.
+/// Exactly one repository's ApplyPaymentCallbackAsync runs per callback, so exactly one
+/// PaymentCallbackEvents row is written, whichever purpose owns it.
+/// </summary>
 public sealed class ProcessPaymentCallbackCommandHandler(
     IPaymentGateway paymentGateway,
-    ICommerceRepository repository)
+    ICommerceRepository repository,
+    IFinanceRepository finance)
     : IRequestHandler<ProcessPaymentCallbackCommand, PaymentCallbackReceiptDto>
 {
     public async Task<PaymentCallbackReceiptDto> Handle(
@@ -116,16 +126,29 @@ public sealed class ProcessPaymentCallbackCommandHandler(
             request.RawPayload,
             request.Signature,
             cancellationToken);
-        var result = await repository.ApplyPaymentCallbackAsync(
-            new PaymentCallbackData(
-                provider,
-                verified.ProviderReference,
-                verified.IdempotencyKey,
-                verified.Amount,
-                verified.Status,
-                request.RawPayload,
-                verified.SignatureValid),
-            cancellationToken);
+        var data = new PaymentCallbackData(
+            provider,
+            verified.ProviderReference,
+            verified.IdempotencyKey,
+            verified.Amount,
+            verified.Status,
+            request.RawPayload,
+            verified.SignatureValid);
+
+        var purpose = await finance.FindPaymentPurposeAsync(
+            verified.ProviderReference, verified.IdempotencyKey, cancellationToken);
+        if (PaymentPurposes.IsFinance(purpose))
+        {
+            var financeResult = await finance.ApplyPaymentCallbackAsync(data, cancellationToken);
+            return new PaymentCallbackReceiptDto(
+                financeResult.Outcome.ToString().ToUpperInvariant(),
+                financeResult.CallbackEventId,
+                financeResult.TransactionId,
+                null,
+                null);
+        }
+
+        var result = await repository.ApplyPaymentCallbackAsync(data, cancellationToken);
         return new PaymentCallbackReceiptDto(
             result.Outcome.ToString().ToUpperInvariant(),
             result.CallbackEventId,
