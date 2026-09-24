@@ -88,6 +88,11 @@
    The API never runs schema changes (docs/database.md).
 
    CHANGE LOG (newest first)
+     2026-09-24  Indexes for the three UPDLOCK/HOLDLOCK triggers (RentalContracts.slot_id,
+                 FeeScheduleItems.fee_schedule_id, RefundTransactions.payment_transaction_id)
+                 so they lock rows instead of whole tables, plus hot foreign keys: ward queue
+                 (BusinessRegistrations.ward_unit_id), order items/payments, cart items,
+                 menu categories, business hours, invoices, transfers, complaints, reports.
      2026-09-21  BusinessRegistrations: Mau so 01 owner/business fields, food-safety
                  commitment, manual identity check (identity_verified_*), cached AI check
                  (ai_check_*). New tables BusinessRegistrationHouseholdMembers and
@@ -347,6 +352,8 @@ CREATE TABLE BusinessRegistrations (
 );
 CREATE INDEX IX_BusinessRegistrations_Vendor ON BusinessRegistrations(vendor_id);
 CREATE INDEX IX_BusinessRegistrations_Status ON BusinessRegistrations(registration_status);
+-- Ward queues (REG-06, WARD-xx) always filter by the ward, then the status.
+CREATE INDEX IX_BusinessRegistrations_Ward_Status ON BusinessRegistrations(ward_unit_id, registration_status);
 -- BR-09: at most one active (SUBMITTED/UNDER_REVIEW) registration per vendor,
 -- enforced in the application layer (status transitions span multiple rows/time).
 
@@ -633,6 +640,9 @@ CREATE TABLE RentalContracts (
 );
 CREATE INDEX IX_RentalContracts_Vendor ON RentalContracts(vendor_id);
 CREATE INDEX IX_RentalContracts_Status ON RentalContracts(contract_status);
+-- TR_RentalContracts_NoOverlap reads contracts of one slot under UPDLOCK/HOLDLOCK;
+-- without this index it range-locks the whole table and serialises every signing.
+CREATE INDEX IX_RentalContracts_Slot ON RentalContracts(slot_id, contract_status) INCLUDE (start_date, end_date);
 GO
 -- A sidewalk slot is a physical place: it cannot be let to two vendors at once.
 -- slot_status alone cannot express this (it is a single flag with no date range,
@@ -783,6 +793,8 @@ CREATE TABLE SlotTransferRequests (
         FOREIGN KEY (reviewed_by, reviewer_role)
         REFERENCES UserAccounts(user_id, role_code)
 );
+CREATE INDEX IX_SlotTransferRequests_Contract ON SlotTransferRequests(contract_id);
+CREATE INDEX IX_SlotTransferRequests_ToVendor ON SlotTransferRequests(to_vendor_id);
 -- BR-26 (receiver must hold an approved registration) and BR-27 (no outstanding
 -- balance) are validated in the application layer before WARD-18 approval.
 
@@ -957,6 +969,7 @@ CREATE TABLE VendorReports (
         FOREIGN KEY (reviewed_by, reviewer_role)
         REFERENCES UserAccounts(user_id, role_code)
 );
+CREATE INDEX IX_VendorReports_Vendor ON VendorReports(vendor_id);
 
 
 /* ============================================================
@@ -1142,6 +1155,8 @@ CREATE TABLE FeeScheduleItems (
         FOREIGN KEY (fee_schedule_id) REFERENCES FeeSchedules(fee_schedule_id)
 );
 CREATE INDEX IX_FeeScheduleItems_DueDate ON FeeScheduleItems(due_date, item_status);
+-- Fee list per schedule, and TR_RentalContracts_NoCancelWithDebt (UPDLOCK/HOLDLOCK).
+CREATE INDEX IX_FeeScheduleItems_Schedule ON FeeScheduleItems(fee_schedule_id, item_status);
 
 -- FEE-03, SYS-05: issued only after a confirmed payment (BR-32)
 CREATE TABLE Invoices (
@@ -1166,6 +1181,7 @@ CREATE TABLE Invoices (
     CONSTRAINT FK_Invoices_Vendor
         FOREIGN KEY (vendor_id) REFERENCES Vendors(vendor_id)
 );
+CREATE INDEX IX_Invoices_Vendor ON Invoices(vendor_id);
 
 -- SYS-04: idempotent callback processing (BR-37). order_id FK added later
 -- (ALTER TABLE) once the Phase 2 Orders table exists.
@@ -1201,6 +1217,7 @@ CREATE TABLE PaymentTransactions (
     CONSTRAINT FK_PaymentTransactions_Penalty
         FOREIGN KEY (penalty_id) REFERENCES Penalties(penalty_id)
 );
+CREATE INDEX IX_PaymentTransactions_Order ON PaymentTransactions(order_id);
 
 -- SYS-04. PaymentTransactions.idempotency_key stops a callback being applied
 -- twice, but it keeps nothing of what the provider actually sent. When MoMo or
@@ -1417,6 +1434,7 @@ CREATE TABLE StorefrontBusinessHours (
     CONSTRAINT FK_StorefrontBusinessHours_Storefront
         FOREIGN KEY (storefront_id) REFERENCES Storefronts(storefront_id)
 );
+CREATE INDEX IX_StorefrontBusinessHours_Storefront ON StorefrontBusinessHours(storefront_id);
 
 CREATE TABLE MenuItems (
     menu_item_id         BIGINT IDENTITY(1,1)  PRIMARY KEY,
@@ -1439,6 +1457,7 @@ CREATE TABLE MenuItems (
         FOREIGN KEY (category_id) REFERENCES FoodCategories(category_id)
 );
 CREATE INDEX IX_MenuItems_Storefront ON MenuItems(storefront_id);
+CREATE INDEX IX_MenuItems_Category ON MenuItems(category_id);
 
 -- BR-52: a cart holds items from exactly one storefront (enforced by storefront_id here)
 CREATE TABLE ShoppingCarts (
@@ -1472,6 +1491,7 @@ CREATE TABLE ShoppingCartItems (
     CONSTRAINT FK_ShoppingCartItems_MenuItem
         FOREIGN KEY (menu_item_id) REFERENCES MenuItems(menu_item_id)
 );
+CREATE INDEX IX_ShoppingCartItems_Cart ON ShoppingCartItems(cart_id);
 
 -- ORD-01: pickup-only lifecycle. An order is created as PENDING_PAYMENT and
 -- only becomes PLACED once a payment succeeds (BR-54) — PaymentTransactions
@@ -1517,6 +1537,7 @@ CREATE TABLE OrderItems (
     CONSTRAINT FK_OrderItems_MenuItem
         FOREIGN KEY (menu_item_id) REFERENCES MenuItems(menu_item_id)
 );
+CREATE INDEX IX_OrderItems_Order ON OrderItems(order_id);
 
 -- ORD-02. order_status holds only where the order is now; the tracking screen
 -- has to show when it was accepted, when it started being prepared and when it
@@ -1583,6 +1604,7 @@ CREATE TABLE Complaints (
         FOREIGN KEY (resolved_by, resolver_role)
         REFERENCES UserAccounts(user_id, role_code)
 );
+CREATE INDEX IX_Complaints_Order ON Complaints(order_id);
 
 -- PAY-04. The marketplace takes money up front and hands goods over at the
 -- stall, so every REJECTED order (SORD-01) and every CANCELLED paid order
@@ -1629,6 +1651,9 @@ CREATE TABLE RefundTransactions (
         FOREIGN KEY (complaint_id) REFERENCES Complaints(complaint_id)
 );
 CREATE INDEX IX_RefundTransactions_Order ON RefundTransactions(order_id);
+-- TR_RefundTransactions_NotMoreThanPaid sums refunds of one payment under
+-- UPDLOCK/HOLDLOCK; the index keeps that lock to the one payment.
+CREATE INDEX IX_RefundTransactions_Payment ON RefundTransactions(payment_transaction_id, refund_status) INCLUDE (amount);
 GO
 -- Refunding more than was taken would be a hole straight through the ledger,
 -- and partial refunds are legitimate (ADM-05 can award part of an order), so

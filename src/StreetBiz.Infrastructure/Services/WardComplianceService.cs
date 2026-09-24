@@ -1,5 +1,8 @@
 using System.Data;
 using System.Globalization;
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using StreetBiz.Application.Common.Exceptions;
 using StreetBiz.Application.Common.Security;
@@ -87,6 +90,8 @@ public sealed class WardComplianceService(
             .Include(x => x.vendor).ThenInclude(v => v.user)
             .Include(x => x.RegistrationEvidences)
             .Include(x => x.HouseholdMembers)
+            // Two collections in one JOIN return evidence x members rows; split them.
+            .AsSplitQuery()
             .SingleOrDefaultAsync(x => x.registration_id == registrationId, ct);
 
         if (reg is null || reg.ward_unit_id != actor.WardId)
@@ -102,7 +107,7 @@ public sealed class WardComplianceService(
 
         // AI Document Inspector [BR-41/42]: extract real CCCD data from the
         // uploaded ID photo (multimodal), never compare against phone number.
-        var aiCheck = await RunDocumentCheckAsync(reg, evidence, ownerName, ct);
+        var aiCheck = await RunDocumentCheckAsync(reg, evidence, ownerName, refresh: false, ct);
 
         return new WardEnrollmentDetailDto(
             Id(reg.registration_id),
@@ -189,7 +194,8 @@ public sealed class WardComplianceService(
             .ToList();
         var ownerName = reg.vendor?.user?.full_name ?? reg.display_name;
 
-        return await RunDocumentCheckAsync(reg, evidence, ownerName, ct);
+        // An explicit re-run is the officer asking for a fresh answer: skip the cache.
+        return await RunDocumentCheckAsync(reg, evidence, ownerName, refresh: true, ct);
     }
 
     /// <summary>
@@ -202,6 +208,7 @@ public sealed class WardComplianceService(
         BusinessRegistration reg,
         IReadOnlyList<WardEvidenceDto> evidence,
         string ownerName,
+        bool refresh,
         CancellationToken ct)
     {
         if (reg.biometric_consent_at is null)
@@ -226,17 +233,83 @@ public sealed class WardComplianceService(
                 IsAiGenerated: false);
         }
 
+        // Opening a record used to call the provider twice (OCR + compare) every time:
+        // ~3.5 s per page view and paid credits for an answer that cannot change until
+        // the evidence or the declared data does. Reuse the stored result while its
+        // inputs are unchanged.
+        if (!refresh
+            && TryReadCachedDocumentCheck(reg.ai_check_result, DocumentCheckKey(reg, evidence, ownerName)) is { } cached)
+        {
+            return cached;
+        }
+
         var extraction = await aiService.ExtractIdDocumentAsync(evidence, ct);
 
+        var changed = false;
         if (string.IsNullOrWhiteSpace(reg.id_number) && !string.IsNullOrWhiteSpace(extraction.IdNumber)
             && extraction.ConfidencePercent >= 85)
         {
             reg.id_number = extraction.IdNumber;
+            changed = true;
+        }
+
+        var result = await aiService.CompareDeclaredProfileAsync(
+            ownerName, reg.id_number, reg.declared_address ?? "", extraction, ct);
+
+        // Only a real provider answer is cached; a fallback ("provider unavailable")
+        // must be retried on the next open. The key is taken after the id_number
+        // backfill so the next read, which sees the stored id_number, matches it.
+        if (result.IsAiGenerated)
+        {
+            reg.ai_check_result = JsonSerializer.Serialize(
+                new CachedDocumentCheck(DocumentCheckKey(reg, evidence, ownerName), result));
+            reg.ai_checked_at = Now;
+            changed = true;
+        }
+
+        if (changed)
+        {
             await db.SaveChangesAsync(ct);
         }
 
-        return await aiService.CompareDeclaredProfileAsync(
-            ownerName, reg.id_number, reg.declared_address ?? "", extraction, ct);
+        return result;
+    }
+
+    private sealed record CachedDocumentCheck(string Key, AiDocumentCheckResult Result);
+
+    /// <summary>Fingerprint of everything the AI check reads; any change forces a fresh check.</summary>
+    private static string DocumentCheckKey(
+        BusinessRegistration reg, IReadOnlyList<WardEvidenceDto> evidence, string ownerName)
+    {
+        var parts = new StringBuilder()
+            .Append(ownerName).Append('\n')
+            .Append(reg.id_number).Append('\n')
+            .Append(reg.declared_address).Append('\n');
+        foreach (var e in evidence.OrderBy(e => e.EvidenceId))
+        {
+            parts.Append(e.EvidenceId).Append('|').Append(e.Type).Append('|').Append(e.FileUrl).Append('\n');
+        }
+
+        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(parts.ToString())));
+    }
+
+    private static AiDocumentCheckResult? TryReadCachedDocumentCheck(string? json, string key)
+    {
+        if (string.IsNullOrEmpty(json))
+        {
+            return null;
+        }
+
+        try
+        {
+            var cached = JsonSerializer.Deserialize<CachedDocumentCheck>(json);
+            return cached is not null && cached.Key == key ? cached.Result : null;
+        }
+        catch (JsonException)
+        {
+            // An unreadable cache entry is just a miss; the check runs again and overwrites it.
+            return null;
+        }
     }
 
     public async Task<WardEnrollmentDetailDto> DecideEnrollmentAsync(

@@ -212,6 +212,8 @@ public partial class StreetBizDbContext : DbContext
         {
             entity.HasKey(e => e.registration_id).HasName("PK__Business__22A298F6FD116948");
 
+            entity.HasIndex(e => new { e.ward_unit_id, e.registration_status }, "IX_BusinessRegistrations_Ward_Status");
+
             entity.HasIndex(e => e.registration_status, "IX_BusinessRegistrations_Status");
 
             entity.HasIndex(e => e.vendor_id, "IX_BusinessRegistrations_Vendor");
@@ -253,6 +255,8 @@ public partial class StreetBizDbContext : DbContext
         modelBuilder.Entity<Complaint>(entity =>
         {
             entity.HasKey(e => e.complaint_id).HasName("PK__Complain__A771F61CF7685B46");
+
+            entity.HasIndex(e => e.order_id, "IX_Complaints_Order");
 
             entity.Property(e => e.complaint_type).HasMaxLength(20);
             entity.Property(e => e.created_at).HasDefaultValueSql("(sysutcdatetime())");
@@ -330,6 +334,8 @@ public partial class StreetBizDbContext : DbContext
         {
             entity.HasKey(e => e.fee_item_id).HasName("PK__FeeSched__CED35C72C7077097");
 
+            entity.HasIndex(e => new { e.fee_schedule_id, e.item_status }, "IX_FeeScheduleItems_Schedule");
+
             entity.HasIndex(e => new { e.due_date, e.item_status }, "IX_FeeScheduleItems_DueDate");
 
             entity.Property(e => e.amount).HasColumnType("decimal(18, 0)");
@@ -364,6 +370,8 @@ public partial class StreetBizDbContext : DbContext
         {
             entity.HasKey(e => e.invoice_id).HasName("PK__Invoices__F58DFD4900F5A3E0");
 
+            entity.HasIndex(e => e.vendor_id, "IX_Invoices_Vendor");
+
             entity.HasIndex(e => e.invoice_number, "UQ__Invoices__8081A63A9588B1C5").IsUnique();
 
             entity.Property(e => e.amount).HasColumnType("decimal(18, 0)");
@@ -387,6 +395,8 @@ public partial class StreetBizDbContext : DbContext
         modelBuilder.Entity<MenuItem>(entity =>
         {
             entity.HasKey(e => e.menu_item_id).HasName("PK__MenuItem__973431D52331EADA");
+
+            entity.HasIndex(e => e.category_id, "IX_MenuItems_Category");
 
             entity.HasIndex(e => e.storefront_id, "IX_MenuItems_Storefront");
 
@@ -463,6 +473,8 @@ public partial class StreetBizDbContext : DbContext
         {
             entity.HasKey(e => e.order_item_id).HasName("PK__OrderIte__3764B6BC0C88DD06");
 
+            entity.HasIndex(e => e.order_id, "IX_OrderItems_Order");
+
             entity.Property(e => e.item_name_snapshot).HasMaxLength(180);
             entity.Property(e => e.note).HasMaxLength(300);
             entity.Property(e => e.unit_price_snapshot).HasColumnType("decimal(18, 0)");
@@ -533,6 +545,8 @@ public partial class StreetBizDbContext : DbContext
         modelBuilder.Entity<PaymentTransaction>(entity =>
         {
             entity.HasKey(e => e.transaction_id).HasName("PK__PaymentT__85C600AF31BF28B7");
+
+            entity.HasIndex(e => e.order_id, "IX_PaymentTransactions_Order");
 
             entity.HasIndex(e => e.idempotency_key, "UQ__PaymentT__A7BA59F41B3C497A").IsUnique();
 
@@ -694,6 +708,9 @@ public partial class StreetBizDbContext : DbContext
         {
             entity.HasKey(e => e.refund_id).HasName("PK__RefundTr__897E9EA3EC0A741E");
 
+            entity.HasIndex(e => new { e.payment_transaction_id, e.refund_status }, "IX_RefundTransactions_Payment")
+                .IncludeProperties(e => e.amount);
+
             entity.ToTable(tb => tb.HasTrigger("TR_RefundTransactions_NotMoreThanPaid"));
 
             entity.HasIndex(e => e.order_id, "IX_RefundTransactions_Order");
@@ -808,6 +825,9 @@ public partial class StreetBizDbContext : DbContext
         modelBuilder.Entity<RentalContract>(entity =>
         {
             entity.HasKey(e => e.contract_id).HasName("PK__RentalCo__F8D664239881D220");
+
+            entity.HasIndex(e => new { e.slot_id, e.contract_status }, "IX_RentalContracts_Slot")
+                .IncludeProperties(e => new { e.start_date, e.end_date });
 
             entity.ToTable(tb =>
                 {
@@ -950,6 +970,8 @@ public partial class StreetBizDbContext : DbContext
         {
             entity.HasKey(e => e.cart_item_id).HasName("PK__Shopping__5D9A6C6E9D93CF7C");
 
+            entity.HasIndex(e => e.cart_id, "IX_ShoppingCartItems_Cart");
+
             entity.Property(e => e.note).HasMaxLength(300);
 
             entity.HasOne(d => d.cart).WithMany(p => p.ShoppingCartItems)
@@ -1036,6 +1058,10 @@ public partial class StreetBizDbContext : DbContext
         {
             entity.HasKey(e => e.transfer_id).HasName("PK__SlotTran__78E6FD3330AAC388");
 
+            entity.HasIndex(e => e.contract_id, "IX_SlotTransferRequests_Contract");
+
+            entity.HasIndex(e => e.to_vendor_id, "IX_SlotTransferRequests_ToVendor");
+
             entity.Property(e => e.initiated_at).HasDefaultValueSql("(sysutcdatetime())");
             entity.Property(e => e.review_decision_reason).HasMaxLength(500);
             entity.Property(e => e.reviewer_role)
@@ -1098,6 +1124,8 @@ public partial class StreetBizDbContext : DbContext
         modelBuilder.Entity<StorefrontBusinessHour>(entity =>
         {
             entity.HasKey(e => e.hour_id).HasName("PK__Storefro__21EED6C8BE6EE50D");
+
+            entity.HasIndex(e => e.storefront_id, "IX_StorefrontBusinessHours_Storefront");
 
             entity.HasOne(d => d.storefront).WithMany(p => p.StorefrontBusinessHours)
                 .HasForeignKey(d => d.storefront_id)
@@ -1235,6 +1263,8 @@ public partial class StreetBizDbContext : DbContext
         modelBuilder.Entity<VendorReport>(entity =>
         {
             entity.HasKey(e => e.report_id).HasName("PK__VendorRe__779B7C584924C5EC");
+
+            entity.HasIndex(e => e.vendor_id, "IX_VendorReports_Vendor");
 
             entity.Property(e => e.ai_extracted_location).HasMaxLength(200);
             entity.Property(e => e.created_at).HasDefaultValueSql("(sysutcdatetime())");
