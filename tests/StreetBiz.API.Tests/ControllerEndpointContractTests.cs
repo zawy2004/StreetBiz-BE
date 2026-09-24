@@ -137,6 +137,8 @@ public sealed class ControllerEndpointContractTests
         "PUT /api/ward/cases/proposals/{id}/location",
         "GET /api/ward/geo/search",
         "POST /api/ward/geo/verify",
+        "GET /api/ward/reports/collection",
+        "GET /api/ward/dashboard",
         "POST /api/vendor/finance/fees/{feeItemId}/checkout",
         "POST /api/vendor/finance/penalties/{penaltyId}/checkout",
         "POST /api/vendor/finance/payments/{transactionId}/sandbox-confirm",

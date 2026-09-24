@@ -75,6 +75,7 @@ public static class DependencyInjection
         services.AddScoped<ICommunityVendorRepository, CommunityVendorRepository>();
         services.AddScoped<IPlatformAdministrationRepository, PlatformAdministrationRepository>();
         services.AddScoped<IFinanceRepository, FinanceRepository>();
+        services.AddScoped<IWardReportRepository, WardReportRepository>();
         services.AddScoped<ICommerceRepository, CommerceRepository>();
         services.AddScoped<StreetBiz.Application.Features.Commerce.ICommerceManagement, CommerceManagement>();
         services.AddScoped<StreetBiz.Application.Features.Commerce.IOrderPaymentTesting, OrderPaymentTesting>();
