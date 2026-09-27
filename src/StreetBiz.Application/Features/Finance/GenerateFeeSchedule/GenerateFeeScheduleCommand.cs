@@ -35,6 +35,12 @@ public sealed class GenerateFeeScheduleCommandHandler(IFinanceRepository finance
         var context = await finance.GetFeeScheduleContextAsync(request.ContractId, cancellationToken)
             ?? throw new NotFoundException(FinanceMessages.ContractNotFound);
 
+        // An expired, cancelled or revoked contract must not start billing the vendor again.
+        if (context.ContractStatus != ContractStatuses.Active)
+        {
+            throw new DomainRuleException(FinanceMessages.ContractNotActive);
+        }
+
         if (context.PricePerDay <= 0)
         {
             throw new DomainRuleException(FinanceMessages.ZoneMissingPrice);

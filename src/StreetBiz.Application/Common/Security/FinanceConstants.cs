@@ -25,6 +25,8 @@ public static class FeeItemStatuses
 
     /// <summary>A fee instalment still owed: PENDING or OVERDUE.</summary>
     public static bool IsOutstanding(string value) => value is Pending or Overdue;
+
+    public static bool IsValid(string value) => value is Pending or Paid or Overdue;
 }
 
 /// <summary>Penalties.penalty_status values (DB CHECK CK_Penalties_Status).</summary>
@@ -37,6 +39,8 @@ public static class PenaltyStatuses
 
     /// <summary>Only an UNPAID penalty can be paid; WAIVED and CANCELLED are closed.</summary>
     public static bool IsPayable(string value) => value == Unpaid;
+
+    public static bool IsValid(string value) => value is Unpaid or Paid or Waived or Cancelled;
 }
 
 /// <summary>PaymentTransactions.transaction_status values (DB CHECK CK_PaymentTransactions_Status).</summary>
@@ -82,6 +86,12 @@ public static class FinanceNotificationTypes
     public const string Invoice = "INVOICE";
 }
 
+/// <summary>FEE-02: how many days ahead of the due date a reminder goes out.</summary>
+public static class FeeReminderPolicy
+{
+    public const int ReminderWindowDays = 3;
+}
+
 /// <summary>Messages for the Fee, Payment, Invoice and Reporting workflow (SRS MSG27-MSG32).</summary>
 public static class FinanceMessages
 {
@@ -102,6 +112,13 @@ public static class FinanceMessages
     public const string PenaltyNotFound = "Không tìm thấy biên bản phạt.";
     public const string PenaltyNotPayable = "Biên bản phạt này không ở trạng thái chờ thanh toán.";
     public const string InvoiceNotFound = "Không tìm thấy hoá đơn.";
+
+    /// <summary>
+    /// The Idempotency-Key already opened a different checkout (another instalment/penalty, or
+    /// another provider). A genuine retry of the same checkout replays it instead.
+    /// </summary>
+    public const string IdempotencyKeyReused =
+        "Mã yêu cầu thanh toán này đã được dùng cho một giao dịch khác. Vui lòng thử lại.";
     public const string TransactionNotFound = "Không tìm thấy giao dịch thanh toán.";
     public const string TransactionAlreadyProcessed = "Giao dịch này đã được xử lý.";
 

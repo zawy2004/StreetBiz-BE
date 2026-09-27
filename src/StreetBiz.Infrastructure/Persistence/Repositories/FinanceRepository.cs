@@ -1,4 +1,5 @@
 using System.Data;
+using System.Globalization;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using StreetBiz.Application.Common.Exceptions;
@@ -14,7 +15,14 @@ public sealed class FinanceRepository(
     StreetBizDbContext db,
     TimeProvider clock) : IFinanceRepository
 {
+    private static readonly CultureInfo Vietnamese = CultureInfo.GetCultureInfo("vi-VN");
+
     private DateTime Now => clock.GetUtcNow().UtcDateTime;
+
+    /// <summary>"1.040.000 đ" whatever the server's own culture is.</summary>
+    private static string Vnd(decimal amount) => $"{amount.ToString("N0", Vietnamese)} đ";
+
+    private static string Day(DateOnly date) => date.ToString("dd/MM/yyyy", CultureInfo.InvariantCulture);
 
     public Task<FeeScheduleContextRow?> GetFeeScheduleContextAsync(
         long contractId,
@@ -53,84 +61,106 @@ public sealed class FinanceRepository(
         IReadOnlyList<FeeInstalment> instalments,
         CancellationToken cancellationToken)
     {
-        var strategy = db.Database.CreateExecutionStrategy();
-        var scheduleId = await strategy.ExecuteAsync(async () =>
+        long scheduleId;
+        if (db.Database.CurrentTransaction is not null)
         {
-            db.ChangeTracker.Clear();
-            await using var transaction = await db.Database.BeginTransactionAsync(
-                IsolationLevel.Serializable, cancellationToken);
-
-            var current = await db.FeeSchedules
-                .Include(schedule => schedule.FeeScheduleItems)
-                .SingleOrDefaultAsync(
-                    schedule => schedule.contract_id == contractId && schedule.superseded_at == null,
-                    cancellationToken);
-
-            if (current is not null
-                && current.FeeScheduleItems.Any(item => item.item_status == FeeItemStatuses.Paid))
+            // Published from inside the approver's own transaction (WARD-08/09 raising
+            // RentalContractApprovedEvent, as that event requires): join it. Clearing the change
+            // tracker would discard the approver's pending writes, and opening a second
+            // transaction on the same connection throws.
+            scheduleId = await WriteScheduleAsync(contractId, actorUserId, total, instalments, cancellationToken);
+        }
+        else
+        {
+            var strategy = db.Database.CreateExecutionStrategy();
+            scheduleId = await strategy.ExecuteAsync(async () =>
             {
-                // Superseding a schedule the vendor has already paid into would hide those
-                // payments from the current revision and leave their invoices pointing at a
-                // closed schedule. Reworking a part-paid contract needs a proration decision
-                // that BR-18 does not make, so it is refused here rather than guessed at.
-                throw new ConflictException(FinanceMessages.ScheduleAlreadyPaidInto);
-            }
-
-            var now = Now;
-            if (current is not null)
-            {
-                current.superseded_at = now;
-            }
-
-            // UQ_FeeSchedules_ContractRevision is over every revision, not just the open one, so
-            // the next number comes from the highest ever used for this contract.
-            var highestRevision = await db.FeeSchedules
-                .Where(schedule => schedule.contract_id == contractId)
-                .MaxAsync(schedule => (int?)schedule.revision, cancellationToken) ?? 0;
-
-            var schedule = new FeeSchedule
-            {
-                contract_id = contractId,
-                revision = highestRevision + 1,
-                total_amount = total,
-                generated_at = now,
-            };
-
-            foreach (var instalment in instalments.OrderBy(item => item.Ordinal))
-            {
-                schedule.FeeScheduleItems.Add(new FeeScheduleItem
-                {
-                    due_date = instalment.DueDate,
-                    amount = instalment.Amount,
-                    item_status = FeeItemStatuses.Pending,
-                });
-            }
-
-            db.FeeSchedules.Add(schedule);
-
-            db.AuditLogs.Add(new AuditLog
-            {
-                actor_user_id = actorUserId,
-                action = "FEE_SCHEDULE_GENERATED",
-                entity_type = "RentalContract",
-                entity_id = contractId,
-                details = JsonSerializer.Serialize(new
-                {
-                    revision = schedule.revision,
-                    total,
-                    instalments = instalments.Count,
-                    supersededScheduleId = current?.fee_schedule_id,
-                }),
-                created_at = now,
+                db.ChangeTracker.Clear();
+                await using var transaction = await db.Database.BeginTransactionAsync(
+                    IsolationLevel.Serializable, cancellationToken);
+                var id = await WriteScheduleAsync(contractId, actorUserId, total, instalments, cancellationToken);
+                await transaction.CommitAsync(cancellationToken);
+                return id;
             });
-
-            await db.SaveChangesAsync(cancellationToken);
-            await transaction.CommitAsync(cancellationToken);
-            return schedule.fee_schedule_id;
-        });
+        }
 
         return await ReadScheduleAsync(scheduleId, cancellationToken)
             ?? throw new NotFoundException(FinanceMessages.FeeScheduleNotFound);
+    }
+
+    private async Task<long> WriteScheduleAsync(
+        long contractId,
+        long actorUserId,
+        decimal total,
+        IReadOnlyList<FeeInstalment> instalments,
+        CancellationToken cancellationToken)
+    {
+        var current = await db.FeeSchedules
+            .Include(schedule => schedule.FeeScheduleItems)
+            .SingleOrDefaultAsync(
+                schedule => schedule.contract_id == contractId && schedule.superseded_at == null,
+                cancellationToken);
+
+        if (current is not null
+            && current.FeeScheduleItems.Any(item => item.item_status == FeeItemStatuses.Paid))
+        {
+            // Superseding a schedule the vendor has already paid into would hide those
+            // payments from the current revision and leave their invoices pointing at a
+            // closed schedule. Reworking a part-paid contract needs a proration decision
+            // that BR-18 does not make, so it is refused here rather than guessed at.
+            throw new ConflictException(FinanceMessages.ScheduleAlreadyPaidInto);
+        }
+
+        var now = Now;
+        if (current is not null)
+        {
+            current.superseded_at = now;
+        }
+
+        // UQ_FeeSchedules_ContractRevision is over every revision, not just the open one, so
+        // the next number comes from the highest ever used for this contract.
+        var highestRevision = await db.FeeSchedules
+            .Where(schedule => schedule.contract_id == contractId)
+            .MaxAsync(schedule => (int?)schedule.revision, cancellationToken) ?? 0;
+
+        var schedule = new FeeSchedule
+        {
+            contract_id = contractId,
+            revision = highestRevision + 1,
+            total_amount = total,
+            generated_at = now,
+        };
+
+        foreach (var instalment in instalments.OrderBy(item => item.Ordinal))
+        {
+            schedule.FeeScheduleItems.Add(new FeeScheduleItem
+            {
+                due_date = instalment.DueDate,
+                amount = instalment.Amount,
+                item_status = FeeItemStatuses.Pending,
+            });
+        }
+
+        db.FeeSchedules.Add(schedule);
+
+        db.AuditLogs.Add(new AuditLog
+        {
+            actor_user_id = actorUserId,
+            action = "FEE_SCHEDULE_GENERATED",
+            entity_type = "RentalContract",
+            entity_id = contractId,
+            details = JsonSerializer.Serialize(new
+            {
+                revision = schedule.revision,
+                total,
+                instalments = instalments.Count,
+                supersededScheduleId = current?.fee_schedule_id,
+            }),
+            created_at = now,
+        });
+
+        await db.SaveChangesAsync(cancellationToken);
+        return schedule.fee_schedule_id;
     }
 
     public async Task<FeeScheduleRow?> GetCurrentFeeScheduleAsync(
@@ -207,7 +237,9 @@ public sealed class FinanceRepository(
     public Task<FeeItemCheckoutRow?> GetFeeItemForCheckoutAsync(
         long vendorId, long feeItemId, CancellationToken cancellationToken) =>
         db.FeeScheduleItems.AsNoTracking()
-            .Where(item => item.fee_item_id == feeItemId && item.fee_schedule.contract.vendor_id == vendorId)
+            .Where(item => item.fee_item_id == feeItemId
+                && item.fee_schedule.contract.vendor_id == vendorId
+                && item.fee_schedule.superseded_at == null)
             .Select(item => new FeeItemCheckoutRow(
                 item.fee_item_id,
                 item.fee_schedule.contract.vendor_id,
@@ -232,9 +264,17 @@ public sealed class FinanceRepository(
 
             var item = await db.FeeScheduleItems
                 .SingleOrDefaultAsync(
-                    row => row.fee_item_id == feeItemId && row.fee_schedule.contract.vendor_id == vendorId,
+                    row => row.fee_item_id == feeItemId
+                        && row.fee_schedule.contract.vendor_id == vendorId
+                        && row.fee_schedule.superseded_at == null,
                     cancellationToken)
                 ?? throw new NotFoundException(FinanceMessages.FeeItemNotFound);
+
+            var replay = await FindCheckoutReplayAsync(idempotencyKey, feeItemId, null, provider, cancellationToken);
+            if (replay is not null)
+            {
+                return replay;
+            }
 
             if (!FeeItemStatuses.IsOutstanding(item.item_status))
             {
@@ -295,6 +335,12 @@ public sealed class FinanceRepository(
                     cancellationToken)
                 ?? throw new NotFoundException(FinanceMessages.PenaltyNotFound);
 
+            var replay = await FindCheckoutReplayAsync(idempotencyKey, null, penaltyId, provider, cancellationToken);
+            if (replay is not null)
+            {
+                return replay;
+            }
+
             if (!PenaltyStatuses.IsPayable(penalty.penalty_status))
             {
                 throw new DomainRuleException(FinanceMessages.PenaltyNoLongerPayable);
@@ -315,6 +361,42 @@ public sealed class FinanceRepository(
             await transaction.CommitAsync(cancellationToken);
             return new FinanceCheckoutTransactionRow(payment.transaction_id, idempotencyKey, provider, penalty.amount);
         });
+    }
+
+    /// <summary>
+    /// Idempotency-Key replay, mirroring Commerce's checkout: the same key for the same
+    /// instalment/penalty and provider is a client retry after a lost response and gets the
+    /// original transaction back. The key reused for anything else is a conflict — without this
+    /// the retry would hit the UNIQUE constraint on idempotency_key and surface as a 500.
+    /// Callers have already scoped the target to the calling vendor, so a match on the target id
+    /// is also a match on ownership.
+    /// </summary>
+    private async Task<FinanceCheckoutTransactionRow?> FindCheckoutReplayAsync(
+        string idempotencyKey, long? feeItemId, long? penaltyId, string provider, CancellationToken cancellationToken)
+    {
+        var existing = await db.PaymentTransactions.AsNoTracking()
+            .Where(payment => payment.idempotency_key == idempotencyKey)
+            .Select(payment => new
+            {
+                payment.transaction_id,
+                payment.fee_item_id,
+                payment.penalty_id,
+                payment.provider,
+                payment.amount,
+            })
+            .SingleOrDefaultAsync(cancellationToken);
+
+        if (existing is null)
+        {
+            return null;
+        }
+
+        if (existing.fee_item_id == feeItemId && existing.penalty_id == penaltyId && existing.provider == provider)
+        {
+            return new FinanceCheckoutTransactionRow(existing.transaction_id, idempotencyKey, provider, existing.amount);
+        }
+
+        throw new ConflictException(FinanceMessages.IdempotencyKeyReused);
     }
 
     public async Task SetPaymentProviderReferenceAsync(
@@ -475,6 +557,17 @@ public sealed class FinanceRepository(
                 throw new ConflictException(FinanceMessages.TransactionAlreadyProcessed);
             }
 
+            if (!IsStillPayable(payment))
+            {
+                // Same guard as the real callback: a second PENDING attempt on an instalment or
+                // penalty another attempt already paid (two tabs, a double tap after a lost
+                // response) must not mark it PAID again and issue a second invoice — Invoices has
+                // no unique constraint on fee_item_id/penalty_id to stop that at the database.
+                throw new DomainRuleException(payment.fee_item is not null
+                    ? FinanceMessages.FeeItemNoLongerPayable
+                    : FinanceMessages.PenaltyNoLongerPayable);
+            }
+
             payment.transaction_status = PaymentStatuses.Success;
             payment.callback_received_at = Now;
             await ApplySuccessAsync(payment, cancellationToken);
@@ -498,9 +591,14 @@ public sealed class FinanceRepository(
         });
     }
 
-    /// <summary>True while nobody has already paid the instalment/penalty this transaction targets.</summary>
+    /// <summary>
+    /// True while nobody has already paid the instalment/penalty this transaction targets, and
+    /// (for an instalment) its schedule has not been superseded since the checkout was opened.
+    /// Assumes <c>fee_item.fee_schedule</c> is loaded.
+    /// </summary>
     private static bool IsStillPayable(PaymentTransaction payment) =>
-        payment.fee_item is { } item ? FeeItemStatuses.IsOutstanding(item.item_status)
+        payment.fee_item is { } item
+            ? FeeItemStatuses.IsOutstanding(item.item_status) && item.fee_schedule.superseded_at == null
         : payment.penalty is { } penalty ? PenaltyStatuses.IsPayable(penalty.penalty_status)
         : false;
 
@@ -538,7 +636,7 @@ public sealed class FinanceRepository(
 
             Notify(await VendorUserIdAsync(vendorId, cancellationToken), FinanceNotificationTypes.Fee,
                 "Thanh toán phí thuê ô thành công",
-                $"Kỳ phí {periodLabel} đã được ghi nhận. Hoá đơn đã phát hành.",
+                $"Đã ghi nhận thanh toán phí thuê ô ({periodLabel}). Hoá đơn đã phát hành.",
                 "FeeScheduleItem", item.fee_item_id, now);
         }
         else if (payment.penalty is { } penalty)
@@ -577,22 +675,28 @@ public sealed class FinanceRepository(
             .FirstAsync(cancellationToken);
 
     /// <summary>
-    /// HD-{year}-{6 digits}, matching the format the demo seed already uses. The UNIQUE constraint
-    /// on invoice_number is the real backstop against a race producing the same number twice — a
-    /// collision fails this write outright rather than issuing a duplicate invoice.
+    /// HD-{year}-{6 digits}, matching the format the demo seed already uses. The sequence is
+    /// zero-padded to a fixed width, so the highest number sorts last as a string and one indexed
+    /// TOP 1 lookup (UNIQUE on invoice_number) finds it — instead of reading every invoice of the
+    /// year. Holds while a year stays under 1,000,000 invoices. The UNIQUE constraint remains the
+    /// backstop against a race: under Serializable the loser deadlocks and EnableRetryOnFailure
+    /// retries it, rather than a duplicate number ever being written.
     /// </summary>
     private async Task<string> NextInvoiceNumberAsync(DateTime issuedAt, CancellationToken cancellationToken)
     {
-        var prefix = $"HD-{issuedAt:yyyy}-";
-        var existing = await db.Invoices.AsNoTracking()
+        // The Vietnamese calendar year: an invoice issued at 05:00 on 1 January in Đà Nẵng is
+        // still 31 December in UTC.
+        var year = TimeZoneInfo.ConvertTimeFromUtc(issuedAt, BusinessCalendar.TimeZone).Year;
+        var prefix = $"HD-{year}-";
+        var last = await db.Invoices.AsNoTracking()
             .Where(invoice => invoice.invoice_number.StartsWith(prefix))
+            .OrderByDescending(invoice => invoice.invoice_number)
             .Select(invoice => invoice.invoice_number)
-            .ToListAsync(cancellationToken);
+            .FirstOrDefaultAsync(cancellationToken);
 
-        var next = existing
-            .Select(number => int.TryParse(number.AsSpan(prefix.Length), out var sequence) ? sequence : 0)
-            .DefaultIfEmpty(0)
-            .Max() + 1;
+        var next = last is not null && int.TryParse(last.AsSpan(prefix.Length), out var sequence)
+            ? sequence + 1
+            : 1;
 
         return $"{prefix}{next:D6}";
     }
@@ -690,4 +794,247 @@ public sealed class FinanceRepository(
         string? ViolationLabel,
         string? PaymentProvider,
         DateTime? PaidAt);
+
+    // ------------------------------------------------------------------
+    // FEE-02 / SYS-06 reminder sweep
+    // ------------------------------------------------------------------
+
+    public async Task<FeeReminderSweepResult> RunFeeReminderSweepAsync(
+        DateOnly today, CancellationToken cancellationToken)
+    {
+        var strategy = db.Database.CreateExecutionStrategy();
+        return await strategy.ExecuteAsync(async () =>
+        {
+            db.ChangeTracker.Clear();
+            await using var transaction = await db.Database.BeginTransactionAsync(
+                IsolationLevel.Serializable, cancellationToken);
+            var now = Now;
+
+            // Superseded revisions keep their items as PENDING (the CHECK constraint has no
+            // "superseded" status), so every live-debt query must exclude them explicitly.
+            var overdue = await db.FeeScheduleItems
+                .Include(item => item.fee_schedule).ThenInclude(schedule => schedule.contract).ThenInclude(contract => contract.slot)
+                .Include(item => item.fee_schedule).ThenInclude(schedule => schedule.contract).ThenInclude(contract => contract.vendor)
+                .Where(item => item.item_status == FeeItemStatuses.Pending
+                    && item.due_date < today
+                    && item.fee_schedule.superseded_at == null)
+                .ToListAsync(cancellationToken);
+            foreach (var item in overdue)
+            {
+                item.item_status = FeeItemStatuses.Overdue;
+                var contract = item.fee_schedule.contract;
+                Notify(contract.vendor.user_id, FinanceNotificationTypes.Fee,
+                    "Phí thuê ô đã quá hạn",
+                    $"Khoản phí {Vnd(item.amount)} của ô {contract.slot.slot_code}, hạn {Day(item.due_date)}, "
+                        + "đã quá hạn thanh toán.",
+                    "FeeScheduleItem", item.fee_item_id, now);
+            }
+
+            await db.SaveChangesAsync(cancellationToken);
+
+            var reminderCutoff = today.AddDays(FeeReminderPolicy.ReminderWindowDays);
+            var upcoming = await db.FeeScheduleItems
+                .Include(item => item.fee_schedule).ThenInclude(schedule => schedule.contract).ThenInclude(contract => contract.slot)
+                .Include(item => item.fee_schedule).ThenInclude(schedule => schedule.contract).ThenInclude(contract => contract.vendor)
+                .Where(item => item.item_status == FeeItemStatuses.Pending
+                    && item.due_date >= today && item.due_date <= reminderCutoff
+                    && item.fee_schedule.superseded_at == null)
+                .ToListAsync(cancellationToken);
+
+            // One query for "reminded already today" across every candidate, not one per item.
+            var todayStart = BusinessCalendar.StartOfDayUtc(today);
+            var upcomingIds = upcoming.Select(item => item.fee_item_id).ToList();
+            var remindedToday = (await db.Notifications.AsNoTracking()
+                .Where(notification => notification.related_entity_type == "FeeScheduleItem"
+                    && notification.notification_type == FinanceNotificationTypes.Fee
+                    && notification.sent_at >= todayStart
+                    && notification.related_entity_id != null
+                    && upcomingIds.Contains(notification.related_entity_id.Value))
+                .Select(notification => notification.related_entity_id!.Value)
+                .ToListAsync(cancellationToken))
+                .ToHashSet();
+
+            var reminderCount = 0;
+            foreach (var item in upcoming.Where(item => !remindedToday.Contains(item.fee_item_id)))
+            {
+                var contract = item.fee_schedule.contract;
+                var daysLeft = item.due_date.DayNumber - today.DayNumber;
+                Notify(contract.vendor.user_id, FinanceNotificationTypes.Fee,
+                    "Sắp đến hạn đóng phí",
+                    daysLeft <= 0
+                        ? $"Khoản phí {Vnd(item.amount)} của ô {contract.slot.slot_code} đến hạn hôm nay."
+                        : $"Khoản phí {Vnd(item.amount)} của ô {contract.slot.slot_code} sẽ đến hạn trong {daysLeft} ngày "
+                            + $"({Day(item.due_date)}).",
+                    "FeeScheduleItem", item.fee_item_id, now);
+                reminderCount++;
+            }
+
+            await db.SaveChangesAsync(cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
+            return new FeeReminderSweepResult(overdue.Count, reminderCount);
+        });
+    }
+
+    // ------------------------------------------------------------------
+    // FinanceHome (summary, fee list, penalty list) and FEE-05 (payments, violations)
+    // ------------------------------------------------------------------
+
+    public async Task<FinanceSummaryRow> GetSummaryAsync(long vendorId, CancellationToken cancellationToken)
+    {
+        var feeDue = await CurrentFeeItems(vendorId)
+            .Where(item => item.item_status == FeeItemStatuses.Pending || item.item_status == FeeItemStatuses.Overdue)
+            .SumAsync(item => (decimal?)item.amount, cancellationToken) ?? 0m;
+
+        var penaltyDue = await VendorPenalties(vendorId)
+            .Where(penalty => penalty.penalty_status == PenaltyStatuses.Unpaid)
+            .SumAsync(penalty => (decimal?)penalty.amount, cancellationToken) ?? 0m;
+
+        var overdueCount = await CurrentFeeItems(vendorId)
+            .CountAsync(item => item.item_status == FeeItemStatuses.Overdue, cancellationToken);
+
+        var nextDueDate = await CurrentFeeItems(vendorId)
+            .Where(item => item.item_status == FeeItemStatuses.Pending)
+            .OrderBy(item => item.due_date)
+            .Select(item => (DateOnly?)item.due_date)
+            .FirstOrDefaultAsync(cancellationToken);
+
+        return new FinanceSummaryRow(feeDue, penaltyDue, overdueCount, nextDueDate);
+    }
+
+    public async Task<IReadOnlyList<FeeItemListRow>> ListFeeItemsAsync(
+        long vendorId, string? status, CancellationToken cancellationToken)
+    {
+        // The status filter is applied after Ordinal/OfCount are computed (not pushed into the
+        // SQL query): filtering the schedule's items first would recompute each item's position
+        // relative to the filtered subset instead of its actual schedule, e.g. "Kỳ 2/2" for an
+        // item that is really the 3rd of 3 instalments once the other two are excluded.
+        var raw = await CurrentFeeItems(vendorId)
+            .Select(item => new
+            {
+                item.fee_item_id,
+                item.fee_schedule_id,
+                item.due_date,
+                item.amount,
+                item.item_status,
+                item.paid_at,
+                item.fee_schedule.contract_id,
+                SlotCode = item.fee_schedule.contract.slot.slot_code,
+            })
+            .ToListAsync(cancellationToken);
+
+        // Ordinal/OfCount are the item's position within its own schedule, computed in memory —
+        // the same reason ReadScheduleAsync does it there instead of as a correlated subquery.
+        var rows = raw.GroupBy(row => row.fee_schedule_id)
+            .SelectMany(group =>
+            {
+                var ordered = group.OrderBy(row => row.due_date).ToList();
+                return ordered.Select((row, index) => new FeeItemListRow(
+                    row.fee_item_id, row.contract_id, row.SlotCode,
+                    index + 1, ordered.Count, row.due_date, row.amount, row.item_status, row.paid_at));
+            });
+
+        if (status is not null)
+        {
+            rows = rows.Where(row => row.ItemStatus == status);
+        }
+
+        return rows.OrderByDescending(row => row.DueDate).ToList();
+    }
+
+    public async Task<IReadOnlyList<PenaltyListRow>> ListPenaltiesAsync(
+        long vendorId, string? status, CancellationToken cancellationToken)
+    {
+        var query = VendorPenalties(vendorId);
+        if (status is not null)
+        {
+            query = query.Where(penalty => penalty.penalty_status == status);
+        }
+
+        return await query.OrderByDescending(penalty => penalty.created_at)
+            .Select(penalty => new PenaltyListRow(
+                penalty.penalty_id,
+                penalty.violation_id,
+                penalty.violation.violation_type,
+                penalty.violation.violation_typeNavigation.description,
+                penalty.violation.slot != null ? penalty.violation.slot.slot_code : null,
+                penalty.amount,
+                penalty.penalty_status,
+                penalty.created_at,
+                penalty.paid_at))
+            .ToListAsync(cancellationToken);
+    }
+
+    public async Task<IReadOnlyList<PaymentTransactionRow>> ListPaymentTransactionsAsync(
+        long vendorId, CancellationToken cancellationToken)
+    {
+        // Two simple, separately-executed queries rather than one combined by purpose: the same
+        // lesson from the FEE-03 invoice list — a single projection spanning both the fee and
+        // penalty navigation chains is exactly the shape EF Core previously failed to translate.
+        // The period label is formatted in memory (a hand-formatted string does not translate);
+        // its ordinal uses the same correlated count as the FEE-01 checkout read.
+        var feeTransactions = (await db.PaymentTransactions.AsNoTracking()
+            .Where(t => t.payment_purpose == PaymentPurposes.RentalFee
+                && t.fee_item != null && t.fee_item.fee_schedule.contract.vendor_id == vendorId)
+            .Select(t => new
+            {
+                t.transaction_id,
+                t.payment_purpose,
+                t.provider,
+                t.amount,
+                t.transaction_status,
+                t.fee_item!.due_date,
+                Ordinal = t.fee_item.fee_schedule.FeeScheduleItems.Count(sibling => sibling.due_date < t.fee_item.due_date) + 1,
+                OfCount = t.fee_item.fee_schedule.FeeScheduleItems.Count(),
+                t.fee_item.fee_schedule.contract.slot.slot_code,
+                t.created_at,
+                t.callback_received_at,
+            })
+            .ToListAsync(cancellationToken))
+            .Select(t => new PaymentTransactionRow(
+                t.transaction_id, t.payment_purpose, t.provider, t.amount, t.transaction_status,
+                FinanceMapper.PeriodLabel(t.Ordinal, t.OfCount, t.due_date), t.slot_code,
+                t.created_at, t.callback_received_at));
+
+        var penaltyTransactions = await db.PaymentTransactions.AsNoTracking()
+            .Where(t => t.payment_purpose == PaymentPurposes.Penalty
+                && t.penalty != null && t.penalty.violation.vendor_id == vendorId)
+            .Select(t => new PaymentTransactionRow(
+                t.transaction_id, t.payment_purpose, t.provider, t.amount, t.transaction_status,
+                t.penalty!.violation.violation_typeNavigation.description,
+                t.penalty.violation.slot != null ? t.penalty.violation.slot.slot_code : null,
+                t.created_at, t.callback_received_at))
+            .ToListAsync(cancellationToken);
+
+        return feeTransactions.Concat(penaltyTransactions)
+            .OrderByDescending(row => row.CreatedAt)
+            .ThenByDescending(row => row.TransactionId)
+            .ToList();
+    }
+
+    public async Task<IReadOnlyList<VendorViolationRow>> ListVendorViolationsAsync(
+        long vendorId, CancellationToken cancellationToken) =>
+        await db.Violations.AsNoTracking()
+            .Where(violation => violation.vendor_id == vendorId)
+            .OrderByDescending(violation => violation.recorded_at)
+            .Select(violation => new VendorViolationRow(
+                violation.violation_id,
+                violation.violation_type,
+                violation.violation_typeNavigation.description,
+                violation.description,
+                violation.evidence_url,
+                violation.source,
+                violation.recorded_at,
+                violation.slot != null ? violation.slot.slot_code : null,
+                violation.Penalty != null ? violation.Penalty.amount : (decimal?)null,
+                violation.Penalty != null ? violation.Penalty.penalty_status : null))
+            .ToListAsync(cancellationToken);
+
+    /// <summary>The vendor's fee instalments on each contract's current (non-superseded) schedule.</summary>
+    private IQueryable<ScaffoldedModels.FeeScheduleItem> CurrentFeeItems(long vendorId) =>
+        db.FeeScheduleItems.AsNoTracking()
+            .Where(item => item.fee_schedule.contract.vendor_id == vendorId && item.fee_schedule.superseded_at == null);
+
+    /// <summary>Every penalty raised against a violation identified to this vendor.</summary>
+    private IQueryable<ScaffoldedModels.Penalty> VendorPenalties(long vendorId) =>
+        db.Penalties.AsNoTracking().Where(penalty => penalty.violation.vendor_id == vendorId);
 }

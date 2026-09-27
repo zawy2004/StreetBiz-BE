@@ -32,6 +32,51 @@ public sealed record PenaltyDto(
     decimal Amount,
     string PenaltyStatus);
 
+/// <summary>One penalty in FinanceHome's "Biên bản phạt" tab.</summary>
+public sealed record PenaltyListDto(
+    long PenaltyId,
+    long ViolationId,
+    string ViolationType,
+    string ViolationLabel,
+    string? SlotCode,
+    decimal Amount,
+    string PenaltyStatus,
+    DateTime IssuedAt,
+    DateTime? PaidAt);
+
+/// <summary>FinanceHome's top summary card.</summary>
+public sealed record FinanceSummaryDto(
+    decimal FeeDue,
+    decimal PenaltyDue,
+    decimal TotalDue,
+    int OverdueCount,
+    DateOnly? NextDueDate);
+
+/// <summary>FEE-05: one payment attempt.</summary>
+public sealed record PaymentTransactionDto(
+    long TransactionId,
+    string Purpose,
+    string Provider,
+    decimal Amount,
+    string TransactionStatus,
+    string ReferenceLabel,
+    string? SlotCode,
+    DateTime CreatedAt,
+    DateTime? CallbackReceivedAt);
+
+/// <summary>FEE-05: one violation recorded against the vendor.</summary>
+public sealed record VendorViolationDto(
+    long ViolationId,
+    string ViolationType,
+    string ViolationLabel,
+    string? Description,
+    string? EvidenceUrl,
+    string Source,
+    DateTime RecordedAt,
+    string? SlotCode,
+    decimal? PenaltyAmount,
+    string? PenaltyStatus);
+
 /// <summary>One invoice in a list (FEE-03).</summary>
 public sealed record InvoiceDto(
     long InvoiceId,
@@ -109,4 +154,34 @@ public static class FinanceMapper
     public static InvoiceDetailDto ToDetailDto(this InvoiceRow row) => new(
         row.InvoiceId, row.InvoiceNumber, row.Kind, row.Amount, row.IssuedAt, row.PeriodLabel,
         row.SlotCode, row.ViolationLabel, row.FeeItemId, row.PenaltyId, row.PaymentProvider, row.PaidAt);
+
+    public static FeeItemDto ToDto(this FeeItemListRow row) => new(
+        row.FeeItemId,
+        row.ContractId,
+        row.SlotCode,
+        PeriodLabel(row.Ordinal, row.OfCount, row.DueDate),
+        row.DueDate,
+        row.Amount,
+        row.ItemStatus,
+        row.PaidAt is null ? null : DateTime.SpecifyKind(row.PaidAt.Value, DateTimeKind.Utc));
+
+    public static PenaltyListDto ToDto(this PenaltyListRow row) => new(
+        row.PenaltyId, row.ViolationId, row.ViolationType, row.ViolationLabel, row.SlotCode,
+        row.Amount, row.PenaltyStatus,
+        DateTime.SpecifyKind(row.IssuedAt, DateTimeKind.Utc),
+        row.PaidAt is null ? null : DateTime.SpecifyKind(row.PaidAt.Value, DateTimeKind.Utc));
+
+    public static FinanceSummaryDto ToDto(this FinanceSummaryRow row) => new(
+        row.FeeDue, row.PenaltyDue, row.FeeDue + row.PenaltyDue, row.OverdueCount, row.NextDueDate);
+
+    public static PaymentTransactionDto ToDto(this PaymentTransactionRow row) => new(
+        row.TransactionId, row.Purpose, row.Provider, row.Amount, row.TransactionStatus,
+        row.ReferenceLabel, row.SlotCode,
+        DateTime.SpecifyKind(row.CreatedAt, DateTimeKind.Utc),
+        row.CallbackReceivedAt is null ? null : DateTime.SpecifyKind(row.CallbackReceivedAt.Value, DateTimeKind.Utc));
+
+    public static VendorViolationDto ToDto(this VendorViolationRow row) => new(
+        row.ViolationId, row.ViolationType, row.ViolationLabel, row.Description, row.EvidenceUrl,
+        row.Source, DateTime.SpecifyKind(row.RecordedAt, DateTimeKind.Utc), row.SlotCode,
+        row.PenaltyAmount, row.PenaltyStatus);
 }

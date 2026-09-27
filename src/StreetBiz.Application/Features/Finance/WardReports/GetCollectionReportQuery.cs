@@ -1,6 +1,7 @@
 using FluentValidation;
 using MediatR;
 using StreetBiz.Application.Common.Interfaces;
+using StreetBiz.Application.Common.Models;
 using StreetBiz.Application.DTOs.Finance;
 using StreetBiz.Application.Features.WardSlots;
 
@@ -28,7 +29,7 @@ public sealed class GetCollectionReportQueryHandler(
     public async Task<CollectionReportDto> Handle(GetCollectionReportQuery request, CancellationToken cancellationToken)
     {
         var actor = await wardActorContext.RequireAsync(cancellationToken);
-        var today = DateOnly.FromDateTime(clock.GetUtcNow().UtcDateTime);
+        var today = BusinessCalendar.Today(clock);
         var from = request.From ?? new DateOnly(today.Year, today.Month, 1);
         var to = request.To ?? today;
 

@@ -67,6 +67,65 @@ public sealed record FeeItemCheckoutRow(
     decimal Amount,
     string ItemStatus);
 
+/// <summary>One instalment in the vendor's cross-contract fee list (FinanceHome's "Phí thuê ô" tab).</summary>
+public sealed record FeeItemListRow(
+    long FeeItemId,
+    long ContractId,
+    string SlotCode,
+    int Ordinal,
+    int OfCount,
+    DateOnly DueDate,
+    decimal Amount,
+    string ItemStatus,
+    DateTime? PaidAt);
+
+/// <summary>One penalty in the vendor's cross-violation penalty list (FinanceHome's "Biên bản phạt" tab).</summary>
+public sealed record PenaltyListRow(
+    long PenaltyId,
+    long ViolationId,
+    string ViolationType,
+    string ViolationLabel,
+    string? SlotCode,
+    decimal Amount,
+    string PenaltyStatus,
+    DateTime IssuedAt,
+    DateTime? PaidAt);
+
+/// <summary>FinanceHome's top summary card.</summary>
+public sealed record FinanceSummaryRow(
+    decimal FeeDue,
+    decimal PenaltyDue,
+    int OverdueCount,
+    DateOnly? NextDueDate);
+
+/// <summary>
+/// FEE-05: one payment attempt in the vendor's history, fee or penalty. ReferenceLabel is what
+/// was being paid for: the instalment's period label for a fee, the violation label for a penalty.
+/// </summary>
+public sealed record PaymentTransactionRow(
+    long TransactionId,
+    string Purpose,
+    string Provider,
+    decimal Amount,
+    string TransactionStatus,
+    string ReferenceLabel,
+    string? SlotCode,
+    DateTime CreatedAt,
+    DateTime? CallbackReceivedAt);
+
+/// <summary>FEE-05: one violation recorded against the vendor.</summary>
+public sealed record VendorViolationRow(
+    long ViolationId,
+    string ViolationType,
+    string ViolationLabel,
+    string? Description,
+    string? EvidenceUrl,
+    string Source,
+    DateTime RecordedAt,
+    string? SlotCode,
+    decimal? PenaltyAmount,
+    string? PenaltyStatus);
+
 /// <summary>A penalty as seen for FEE-04 checkout.</summary>
 public sealed record PenaltyCheckoutRow(
     long PenaltyId,
@@ -93,6 +152,9 @@ public sealed record FinanceCallbackMutationResult(
     PaymentCallbackOutcome Outcome,
     long CallbackEventId,
     long? TransactionId);
+
+/// <summary>SYS-06/FEE-02: how many instalments a reminder sweep moved to OVERDUE and how many reminders it sent.</summary>
+public sealed record FeeReminderSweepResult(int OverdueCount, int ReminderCount);
 
 /// <summary>One invoice as the vendor sees it (FEE-03). <c>Kind</c> is FEE or PENALTY — never both (CK_Invoices_ExactlyOneSource).</summary>
 public sealed record InvoiceRow(
