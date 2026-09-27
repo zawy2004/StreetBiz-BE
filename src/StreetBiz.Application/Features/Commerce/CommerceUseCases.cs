@@ -168,6 +168,7 @@ public sealed class RemoveCartItemCommandHandler(
         {
             CartMutationOutcome.Updated => result.Cart?.ToDto(),
             CartMutationOutcome.NotFound => throw new NotFoundException(CommerceMessages.CartItemNotFound),
+            CartMutationOutcome.CheckoutPending => throw new ConflictException(CommerceMessages.CheckoutAlreadyPending),
             _ => throw new ConflictException(CommerceMessages.CartConflict),
         };
     }
@@ -554,7 +555,7 @@ internal static class CommerceMapping
             item.CartItemId, item.MenuItemId, item.ItemName, item.ImageUrl,
             item.UnitPrice, item.AvailabilityStatus, item.Quantity, item.Note)).ToArray(),
         row.Subtotal)
-        { StorefrontAddress = row.StorefrontAddress };
+        { StorefrontAddress = row.StorefrontAddress, PendingOrderId = row.PendingOrderId };
 
     public static OrderDto ToDto(this CommerceOrderRow row) => new(
         row.OrderId, row.OrderCode, row.CustomerUserId, row.CustomerName,
@@ -587,6 +588,10 @@ internal static class CommerceMapping
                 CommerceMessages.MenuItemUnavailable),
             CartMutationOutcome.StorefrontUnavailable => throw new DomainRuleException(
                 CommerceMessages.StorefrontUnavailable),
+            CartMutationOutcome.CheckoutPending => throw new ConflictException(
+                CommerceMessages.CheckoutAlreadyPending),
+            CartMutationOutcome.QuantityLimit => throw new DomainRuleException(
+                CommerceMessages.CartQuantityLimit),
             _ => throw new ConflictException(CommerceMessages.CartConflict),
         };
 

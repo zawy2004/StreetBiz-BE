@@ -530,6 +530,16 @@ public sealed class FinanceRepository(
         });
     }
 
+    public async Task<FinancePaymentStateRow?> GetVendorPaymentAsync(
+        long vendorId, long transactionId, CancellationToken cancellationToken) =>
+        await db.PaymentTransactions.AsNoTracking()
+            .Where(row => row.transaction_id == transactionId
+                && ((row.fee_item != null && row.fee_item.fee_schedule.contract.vendor_id == vendorId)
+                    || (row.penalty != null && row.penalty.violation.vendor_id == vendorId)))
+            .Select(row => new FinancePaymentStateRow(
+                row.transaction_id, row.provider, row.provider_reference, row.idempotency_key, row.transaction_status))
+            .SingleOrDefaultAsync(cancellationToken);
+
     public async Task<FinanceCallbackMutationResult> ConfirmSandboxSuccessAsync(
         long vendorId, long transactionId, CancellationToken cancellationToken)
     {

@@ -68,16 +68,18 @@ public static class MarketplaceMenuSorts
 
 public static class CommerceMessages
 {
-    public const string StorefrontNotFound = "The storefront was not found.";
-    public const string CartEmpty = "The active cart is empty.";
-    public const string CartItemNotFound = "The cart item was not found.";
-    public const string MenuItemNotFound = "The menu item was not found.";
-    public const string MenuItemUnavailable = "A menu item is no longer available.";
-    public const string StorefrontUnavailable = "The storefront is not open for orders.";
-    public const string CartConflict = "The cart changed. Refresh and try again.";
-    public const string OrderNotFound = "The order was not found.";
-    public const string OrderConflict = "The order status changed. Refresh and try again.";
+    // Shown to buyers as-is by the web client, so they are written in Vietnamese.
+    public const string StorefrontNotFound = "Không tìm thấy điểm bán.";
+    public const string CartEmpty = "Giỏ hàng đang trống.";
+    public const string CartItemNotFound = "Món này không còn trong giỏ hàng.";
+    public const string MenuItemNotFound = "Không tìm thấy món ăn.";
+    public const string MenuItemUnavailable = "Có món trong giỏ đã ngừng bán.";
+    public const string StorefrontUnavailable = "Điểm bán hiện không nhận đơn.";
+    public const string CartConflict = "Giỏ hàng vừa thay đổi. Vui lòng tải lại và thử lại.";
+    public const string CartQuantityLimit = "Mỗi món chỉ đặt tối đa 99 phần.";
+    public const string OrderNotFound = "Không tìm thấy đơn hàng.";
+    public const string OrderConflict = "Trạng thái đơn hàng vừa thay đổi. Vui lòng tải lại và thử lại.";
     public const string CheckoutAlreadyPending =
-        "An order is already awaiting payment. Pay for it or cancel it before ordering again.";
-    public const string PaymentNotFound = "The prepaid order has no successful payment.";
+        "Bạn có một đơn đang chờ thanh toán. Hãy thanh toán hoặc huỷ đơn đó trước khi sửa giỏ hàng.";
+    public const string PaymentNotFound = "Đơn trả trước chưa có giao dịch thanh toán thành công.";
 }

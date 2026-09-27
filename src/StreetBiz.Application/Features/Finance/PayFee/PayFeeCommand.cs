@@ -53,7 +53,8 @@ public sealed class PayFeeCommandHandler(
                 checkout.TransactionId,
                 checkout.IdempotencyKey,
                 checkout.Provider,
-                checkout.Amount),
+                checkout.Amount,
+                PaymentPurposes.RentalFee),
             cancellationToken);
 
         if (!string.IsNullOrWhiteSpace(gatewayResult.ProviderReference))

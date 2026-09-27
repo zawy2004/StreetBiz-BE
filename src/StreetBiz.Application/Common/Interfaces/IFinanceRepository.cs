@@ -75,6 +75,11 @@ public interface IFinanceRepository
     Task<FinanceCallbackMutationResult> ConfirmSandboxSuccessAsync(
         long vendorId, long transactionId, CancellationToken cancellationToken);
 
+    /// <summary>A fee/penalty payment this vendor opened, or null if it is not theirs.</summary>
+    Task<FinancePaymentStateRow?> GetVendorPaymentAsync(
+        long vendorId, long transactionId, CancellationToken cancellationToken) =>
+        Task.FromResult<FinancePaymentStateRow?>(null);
+
     /// <summary>FEE-03: the vendor's invoices, most recent first.</summary>
     Task<IReadOnlyList<InvoiceRow>> ListInvoicesAsync(long vendorId, CancellationToken cancellationToken);
 

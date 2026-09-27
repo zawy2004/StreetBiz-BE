@@ -10,18 +10,33 @@ using StreetBiz.Application.Common.Security;
 namespace StreetBiz.Infrastructure.Payments;
 
 public sealed class ConfiguredPaymentGateway(
-    IOptions<PaymentGatewaySettings> options) : IPaymentGateway
+    IOptions<PaymentGatewaySettings> options,
+    IHttpClientFactory? httpClientFactory = null) : IPaymentGateway
 {
     private readonly PaymentGatewaySettings settings = options.Value;
 
+    /// <summary>Real MoMo v2 is used for MOMO whenever its credentials are configured.</summary>
+    private bool UsesMomo(string provider) =>
+        provider == "MOMO" && settings.Momo.IsMomoConfigured && httpClientFactory is not null;
+
     public bool IsProviderAvailable(string provider) =>
         !string.IsNullOrWhiteSpace(settings.For(provider).CheckoutUrlTemplate)
+        || UsesMomo(provider)
         || settings.SandboxEnabled;
 
     public Task<PaymentGatewayCheckoutResult> CreateCheckoutAsync(
         PaymentGatewayCheckoutRequest request,
         CancellationToken cancellationToken)
     {
+        if (UsesMomo(request.Provider))
+        {
+            return MomoGateway.CreateAsync(
+                httpClientFactory!.CreateClient(MomoGateway.HttpClientName),
+                settings.Momo,
+                request,
+                cancellationToken);
+        }
+
         var provider = settings.For(request.Provider);
         if (!string.IsNullOrWhiteSpace(provider.CheckoutUrlTemplate))
         {
@@ -51,6 +66,12 @@ public sealed class ConfiguredPaymentGateway(
         string? signature,
         CancellationToken cancellationToken)
     {
+        // MoMo signs the IPN body itself (no signature header), in its own field layout.
+        if (UsesMomo(provider) && MomoGateway.IsIpn(rawPayload))
+        {
+            return Task.FromResult(MomoGateway.VerifyIpn(settings.Momo, rawPayload));
+        }
+
         string? providerReference = null;
         string? idempotencyKey = null;
         decimal? amount = null;
@@ -87,6 +108,18 @@ public sealed class ConfiguredPaymentGateway(
         return Task.FromResult(new PaymentGatewayCallback(
             providerReference, idempotencyKey, amount, status, valid));
     }
+
+    public async Task<PaymentGatewayCallback?> QueryPaymentAsync(
+        string provider,
+        string providerReference,
+        CancellationToken cancellationToken) =>
+        UsesMomo(provider)
+            ? await MomoGateway.QueryAsync(
+                httpClientFactory!.CreateClient(MomoGateway.HttpClientName),
+                settings.Momo,
+                providerReference,
+                cancellationToken)
+            : null;
 
     private static string? Text(JsonElement root, string name) =>
         root.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String

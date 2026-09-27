@@ -192,6 +192,20 @@ public sealed class OrdersController(
         return Ok(result);
     }
 
+    /// <summary>
+    /// Called when the buyer returns from the payment page: the backend asks the provider
+    /// for the real transaction state. Never trusts the return URL's query string.
+    /// </summary>
+    [HttpPost("{orderId:long}/payment/sync")]
+    public async Task<ActionResult<OrderDto>> SyncPayment(
+        long orderId,
+        CancellationToken cancellationToken)
+    {
+        var result = await sender.Send(new SyncOrderPaymentCommand(orderId), cancellationToken);
+        await realtime.PublishAsync(result, cancellationToken);
+        return Ok(result);
+    }
+
     [HttpPost("{orderId:long}/payment/sandbox-confirm")]
     [ApiExplorerSettings(IgnoreApi = true)]
     public async Task<ActionResult<OrderDto>> ConfirmSandboxPayment(
@@ -233,6 +247,13 @@ public sealed class PaymentCallbacksController(
         {
             await realtime.PublishAsync(orderId, orderStatus, cancellationToken);
         }
+
+        // MoMo's IPN contract: acknowledge with 204 No Content, or it keeps retrying.
+        if (string.Equals(provider, "momo", StringComparison.OrdinalIgnoreCase))
+        {
+            return NoContent();
+        }
+
         return Ok(result);
     }
 }

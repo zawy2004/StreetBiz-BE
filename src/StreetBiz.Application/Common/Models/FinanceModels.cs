@@ -148,6 +148,14 @@ public sealed record FinanceCheckoutTransactionRow(
 /// touches Orders. Reuses <see cref="PaymentCallbackOutcome"/> from the Commerce module — the
 /// four outcomes (Applied/Duplicate/Unmatched/Rejected) are purpose-agnostic already.
 /// </summary>
+/// <summary>What the payment-status sync needs to ask the provider about one transaction.</summary>
+public sealed record FinancePaymentStateRow(
+    long TransactionId,
+    string Provider,
+    string? ProviderReference,
+    string IdempotencyKey,
+    string Status);
+
 public sealed record FinanceCallbackMutationResult(
     PaymentCallbackOutcome Outcome,
     long CallbackEventId,

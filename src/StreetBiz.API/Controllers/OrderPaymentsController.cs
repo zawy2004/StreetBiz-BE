@@ -14,13 +14,28 @@ public sealed class OrderPaymentsController(IHostEnvironment environment, IConfi
 {
     private bool SandboxEnabled => environment.IsDevelopment() && configuration.GetValue<bool>("Payments:SandboxEnabled");
 
+    /// <summary>MoMo's own gateway is used whenever its merchant credentials are configured.</summary>
+    private bool MomoLive =>
+        !string.IsNullOrWhiteSpace(configuration["Payments:Momo:PartnerCode"])
+        && !string.IsNullOrWhiteSpace(configuration["Payments:Momo:SecretKey"]);
+
     [HttpGet("payment-options")]
-    public IActionResult Options() => Ok(new
+    public IActionResult Options()
     {
-        mode = SandboxEnabled ? "SANDBOX" : "UNAVAILABLE",
-        providers = SandboxEnabled ? new[] { "MOMO", "ZALOPAY" } : [],
-        message = SandboxEnabled ? "Thanh toán thử nghiệm, không trừ tiền thật." : "Thanh toán trực tuyến chưa sẵn sàng. Vui lòng thử lại sau."
-    });
+        // The simulator is only ever offered in Development; MoMo is offered wherever it is configured.
+        var providers = (SandboxEnabled ? new[] { "MOMO", "ZALOPAY" } : MomoLive ? ["MOMO"] : []);
+        var momoLive = MomoLive;
+        return Ok(new
+        {
+            mode = providers.Length == 0 ? "UNAVAILABLE" : momoLive ? "LIVE" : "SANDBOX",
+            providers,
+            message = providers.Length == 0
+                ? "Thanh toán trực tuyến chưa sẵn sàng. Vui lòng thử lại sau."
+                : momoLive
+                    ? "Thanh toán qua cổng MoMo (môi trường test của MoMo, không trừ tiền thật)."
+                    : "Thanh toán thử nghiệm, không trừ tiền thật."
+        });
+    }
 
     [HttpPost("{orderId:long}/payment/sandbox-fail")]
     public async Task<IActionResult> Fail(long orderId, CancellationToken ct)

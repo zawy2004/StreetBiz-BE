@@ -13,6 +13,7 @@ using StreetBiz.Application.Features.Finance.ListPenalties;
 using StreetBiz.Application.Features.Finance.ListViolations;
 using StreetBiz.Application.Features.Finance.PayFee;
 using StreetBiz.Application.Features.Finance.PayPenalty;
+using StreetBiz.Application.Features.Finance.SyncPayment;
 
 namespace StreetBiz.API.Controllers;
 
@@ -98,6 +99,15 @@ public sealed class FinanceController(
             new ConfirmSandboxFinancePaymentCommand(transactionId), cancellationToken);
         return Ok(new { outcome = result.Outcome.ToString().ToUpperInvariant(), result.CallbackEventId });
     }
+
+    /// <summary>
+    /// FEE-01/FEE-04: back from MoMo, ask MoMo for the real state of this vendor's payment
+    /// and apply it. Never trusts the return URL's query string.
+    /// </summary>
+    [HttpPost("payments/{transactionId:long}/sync")]
+    public async Task<ActionResult<FinancePaymentSyncDto>> SyncPayment(
+        long transactionId, CancellationToken cancellationToken) =>
+        Ok(await sender.Send(new SyncFinancePaymentCommand(transactionId), cancellationToken));
 
     /// <summary>FEE-03: the caller's invoices, most recent first.</summary>
     [HttpGet("invoices")]

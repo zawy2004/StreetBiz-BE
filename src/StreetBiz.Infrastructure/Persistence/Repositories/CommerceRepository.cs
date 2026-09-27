@@ -146,7 +146,7 @@ public sealed partial class CommerceRepository(
 
             if (await HasPendingCheckoutAsync(customerUserId, cancellationToken))
             {
-                return (CartMutationOutcome.Conflict, (long?)null);
+                return (CartMutationOutcome.CheckoutPending, (long?)null);
             }
 
             var otherCarts = await db.ShoppingCarts
@@ -194,7 +194,7 @@ public sealed partial class CommerceRepository(
             {
                 if (item.quantity + quantity > 99)
                 {
-                    return (CartMutationOutcome.Conflict, (long?)null);
+                    return (CartMutationOutcome.QuantityLimit, (long?)null);
                 }
 
                 item.quantity += quantity;
@@ -232,7 +232,7 @@ public sealed partial class CommerceRepository(
 
         if (await HasPendingCheckoutAsync(customerUserId, cancellationToken))
         {
-            return new CartMutationResult(CartMutationOutcome.Conflict, null);
+            return new CartMutationResult(CartMutationOutcome.CheckoutPending, null);
         }
 
         item.quantity = quantity;
@@ -267,7 +267,7 @@ public sealed partial class CommerceRepository(
 
             if (await HasPendingCheckoutAsync(customerUserId, cancellationToken))
             {
-                return (CartMutationOutcome.Conflict, (long?)null);
+                return (CartMutationOutcome.CheckoutPending, (long?)null);
             }
 
             var cartId = item.cart_id;
@@ -297,8 +297,7 @@ public sealed partial class CommerceRepository(
     {
         if (await HasPendingCheckoutAsync(customerUserId, cancellationToken))
         {
-            throw new ConflictException(
-                "The cart is locked while its order is awaiting payment.");
+            throw new ConflictException(CommerceMessages.CheckoutAlreadyPending);
         }
 
         var carts = await db.ShoppingCarts
@@ -987,6 +986,7 @@ public sealed partial class CommerceRepository(
             .Select(cart => new
             {
                 cart.cart_id,
+                cart.customer_user_id,
                 cart.storefront_id,
                 cart.storefront.storefront_name,
                 StorefrontAddress = cart.storefront.registration.declared_address,
@@ -1018,7 +1018,8 @@ public sealed partial class CommerceRepository(
             await EligibleStores().AnyAsync(x => x.storefront_id == header.storefront_id, cancellationToken) ? header.StorefrontStatus : "CLOSED",
             items,
             items.Sum(item => item.UnitPrice * item.Quantity),
-            header.StorefrontAddress);
+            header.StorefrontAddress,
+            await PendingCheckoutOrderIdAsync(header.customer_user_id, cancellationToken));
     }
 
     private async Task<IReadOnlyList<CommerceOrderRow>> BuildOrdersAsync(
@@ -1274,16 +1275,24 @@ public sealed partial class CommerceRepository(
             && order.OrderStatusHistories.Any(history =>
                 history.to_status == OrderStatuses.Placed), cancellationToken);
 
-    private Task<bool> HasPendingCheckoutAsync(
+    private async Task<bool> HasPendingCheckoutAsync(
         long customerUserId,
         CancellationToken cancellationToken) =>
-        db.Orders.AnyAsync(order =>
-            order.customer_user_id == customerUserId
-            && order.order_status == OrderStatuses.PendingPayment
-            && order.PaymentTransactions.Any(payment =>
-                payment.payment_purpose == PaymentPurposeOrder
-                && payment.transaction_status == PaymentPending),
-            cancellationToken);
+        await PendingCheckoutOrderIdAsync(customerUserId, cancellationToken) is not null;
+
+    /// <summary>The order that currently freezes this customer's cart, if any.</summary>
+    private Task<long?> PendingCheckoutOrderIdAsync(
+        long customerUserId,
+        CancellationToken cancellationToken) =>
+        db.Orders.AsNoTracking()
+            .Where(order => order.customer_user_id == customerUserId
+                && order.order_status == OrderStatuses.PendingPayment
+                && order.PaymentTransactions.Any(payment =>
+                    payment.payment_purpose == PaymentPurposeOrder
+                    && payment.transaction_status == PaymentPending))
+            .OrderByDescending(order => order.order_id)
+            .Select(order => (long?)order.order_id)
+            .FirstOrDefaultAsync(cancellationToken);
 
     private async Task<bool> AddFullRefundAsync(
         Order order,

@@ -88,6 +88,53 @@ public sealed class CheckoutOrderCommandHandler(
     }
 }
 
+/// <summary>
+/// The buyer is back from the provider's page. Rather than trusting the return URL's query
+/// string, ask the provider itself for the transaction state and apply it through the same
+/// path as a verified callback. This is what settles payments when the provider's IPN cannot
+/// reach the server (local development) or never arrives.
+/// </summary>
+public sealed record SyncOrderPaymentCommand(long OrderId) : IRequest<OrderDto>;
+
+public sealed class SyncOrderPaymentCommandHandler(
+    ICustomerContext customerContext,
+    ICommerceRepository repository,
+    IPaymentGateway paymentGateway) : IRequestHandler<SyncOrderPaymentCommand, OrderDto>
+{
+    public async Task<OrderDto> Handle(SyncOrderPaymentCommand request, CancellationToken cancellationToken)
+    {
+        var customerUserId = await customerContext.RequireCustomerUserIdAsync(cancellationToken);
+        var order = await repository.GetCustomerOrderAsync(customerUserId, request.OrderId, cancellationToken)
+            ?? throw new NotFoundException(CommerceMessages.OrderNotFound);
+        if (order.OrderStatus != OrderStatuses.PendingPayment
+            || string.IsNullOrWhiteSpace(order.PaymentProvider)
+            || string.IsNullOrWhiteSpace(order.PaymentProviderReference))
+        {
+            return order.ToDto();
+        }
+
+        var status = await paymentGateway.QueryPaymentAsync(
+            order.PaymentProvider, order.PaymentProviderReference, cancellationToken);
+        if (status?.Status is null)
+        {
+            return order.ToDto();
+        }
+
+        await repository.ApplyPaymentCallbackAsync(
+            new PaymentCallbackData(
+                order.PaymentProvider,
+                status.ProviderReference ?? order.PaymentProviderReference,
+                order.PaymentIdempotencyKey,
+                status.Amount,
+                status.Status,
+                status.RawPayload ?? "{}",
+                status.SignatureValid),
+            cancellationToken);
+        var updated = await repository.GetCustomerOrderAsync(customerUserId, request.OrderId, cancellationToken);
+        return (updated ?? order).ToDto();
+    }
+}
+
 public sealed record ProcessPaymentCallbackCommand(
     string Provider,
     string RawPayload,

@@ -12,7 +12,9 @@ public sealed record PaymentGatewayCheckoutRequest(
     long TransactionId,
     string IdempotencyKey,
     string Provider,
-    decimal Amount);
+    decimal Amount,
+    /// <summary>ORDER, RENTAL_FEE or PENALTY: decides which page the buyer returns to.</summary>
+    string Purpose = "ORDER");
 
 public sealed record PaymentGatewayCheckoutResult(
     string PaymentUrl,
@@ -23,7 +25,9 @@ public sealed record PaymentGatewayCallback(
     string? IdempotencyKey,
     decimal? Amount,
     string? Status,
-    bool SignatureValid);
+    bool SignatureValid,
+    /// <summary>What the provider actually sent, when it differs from the request body (status queries).</summary>
+    string? RawPayload = null);
 
 public interface IPaymentGateway
 {
@@ -43,6 +47,17 @@ public interface IPaymentGateway
         string rawPayload,
         string? signature,
         CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Asks the provider directly for a transaction's state, for when its callback cannot
+    /// reach us (local development) or was lost. Null when the provider has no status API
+    /// here (sandbox, URL-template gateways); a null Status means "not final yet".
+    /// </summary>
+    Task<PaymentGatewayCallback?> QueryPaymentAsync(
+        string provider,
+        string providerReference,
+        CancellationToken cancellationToken) =>
+        Task.FromResult<PaymentGatewayCallback?>(null);
 }
 
 public sealed record RefundGatewayRequest(

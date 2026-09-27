@@ -53,7 +53,8 @@ public sealed class PayPenaltyCommandHandler(
                 checkout.TransactionId,
                 checkout.IdempotencyKey,
                 checkout.Provider,
-                checkout.Amount),
+                checkout.Amount,
+                PaymentPurposes.Penalty),
             cancellationToken);
 
         if (!string.IsNullOrWhiteSpace(gatewayResult.ProviderReference))
