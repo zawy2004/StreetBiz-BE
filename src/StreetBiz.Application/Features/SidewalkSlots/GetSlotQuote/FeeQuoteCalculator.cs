@@ -27,6 +27,8 @@ public static class FeeQuoteCalculator
                 component.UnitAmount * quantity));
         }
 
-        return new FeeQuoteDto(slotId, termDays, lines, lines.Sum(l => l.Amount));
+        var baseFee = lines[0].Amount;
+        var referenceFees = lines.Skip(1).Sum(l => l.Amount);
+        return new FeeQuoteDto(slotId, termDays, lines, baseFee + referenceFees, baseFee, referenceFees, lines.Count > 1);
     }
 }

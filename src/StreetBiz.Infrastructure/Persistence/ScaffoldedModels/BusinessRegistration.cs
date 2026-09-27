@@ -70,6 +70,11 @@ public partial class BusinessRegistration
 
     public string? identity_verification_note { get; set; }
 
+    // ---- Kết quả AI đối soát CCCD gần nhất (cache, không phải quyết định) ----
+    public string? ai_check_result { get; set; }
+
+    public DateTime? ai_checked_at { get; set; }
+
     public bool fast_track_flag { get; set; }
 
     public long? reviewed_by { get; set; }

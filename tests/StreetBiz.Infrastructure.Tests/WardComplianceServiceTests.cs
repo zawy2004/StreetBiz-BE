@@ -152,6 +152,74 @@ public sealed class WardComplianceServiceTests
         Assert.Contains(result.Discrepancies, d => d.Contains("sinh trắc học"));
     }
 
+    [Fact]
+    public async Task Opening_an_enrollment_again_reuses_the_cached_ai_check()
+    {
+        // Every open used to call the provider twice (~3.5 s, paid credits).
+        using var f = await Fixture.Create();
+        await GiveConsentAndIdPhoto(f, registrationId: 2);
+        var ai = new CountingAiComplianceService();
+
+        var first = await f.NewService(ai).GetEnrollmentDetailAsync(f.Actor, 2, default);
+        var second = await f.NewService(ai).GetEnrollmentDetailAsync(f.Actor, 2, default);
+
+        Assert.Equal(1, ai.Extractions);
+        Assert.Equal(1, ai.Comparisons);
+        Assert.Equal(first.AiCheck!.Summary, second.AiCheck!.Summary);
+        Assert.True(second.AiCheck!.IsAiGenerated);
+    }
+
+    [Fact]
+    public async Task Explicit_rerun_and_changed_evidence_both_bypass_the_cached_ai_check()
+    {
+        using var f = await Fixture.Create();
+        await GiveConsentAndIdPhoto(f, registrationId: 2);
+        var ai = new CountingAiComplianceService();
+
+        await f.NewService(ai).GetEnrollmentDetailAsync(f.Actor, 2, default);
+        await f.NewService(ai).ReRunDocumentCheckAsync(f.Actor, 2, default);
+        Assert.Equal(2, ai.Comparisons);
+
+        using (var db = f.NewDb())
+        {
+            (await db.RegistrationEvidences.SingleAsync(e => e.registration_id == 2)).file_url = "/uploads/cccd-new.jpg";
+            await db.SaveChangesAsync();
+        }
+
+        await f.NewService(ai).GetEnrollmentDetailAsync(f.Actor, 2, default);
+        Assert.Equal(3, ai.Comparisons);
+    }
+
+    [Fact]
+    public async Task A_fallback_result_is_not_cached_so_the_next_open_retries_the_provider()
+    {
+        using var f = await Fixture.Create();
+        await GiveConsentAndIdPhoto(f, registrationId: 2);
+        var ai = new CountingAiComplianceService { ProviderDown = true };
+
+        await f.NewService(ai).GetEnrollmentDetailAsync(f.Actor, 2, default);
+        await f.NewService(ai).GetEnrollmentDetailAsync(f.Actor, 2, default);
+
+        Assert.Equal(2, ai.Comparisons);
+        using var db = f.NewDb();
+        Assert.Null((await db.BusinessRegistrations.SingleAsync(r => r.registration_id == 2)).ai_check_result);
+    }
+
+    private static async Task GiveConsentAndIdPhoto(Fixture f, long registrationId)
+    {
+        using var db = f.NewDb();
+        (await db.BusinessRegistrations.SingleAsync(r => r.registration_id == registrationId))
+            .biometric_consent_at = DateTime.UtcNow;
+        db.RegistrationEvidences.Add(new RegistrationEvidence
+        {
+            registration_id = registrationId,
+            evidence_type = "IDENTITY_DOCUMENT",
+            file_url = "/uploads/cccd.jpg",
+            uploaded_at = DateTime.UtcNow,
+        });
+        await db.SaveChangesAsync();
+    }
+
     [Theory]
     [InlineData("VALID", true)]
     [InlineData("NOT_YET_VALID", false)]
@@ -844,7 +912,7 @@ public sealed class WardComplianceServiceTests
         public TestContext NewDb() =>
             new(new DbContextOptionsBuilder<StreetBizDbContext>().UseSqlite(Connection).Options);
 
-        public WardComplianceService NewService()
+        public WardComplianceService NewService(IAiComplianceService? ai = null)
         {
             // One context per service, shared with its KYC repository, so both see the same
             // change tracker -- mirrors the scoped lifetimes in DependencyInjection.
@@ -852,7 +920,7 @@ public sealed class WardComplianceServiceTests
             return new WardComplianceService(
                 db,
                 new PermitTokenService(Options.Create(new PermitSettings { SigningKey = "test-only-signing-key-0123456789" })),
-                new NoOpAiComplianceService(),
+                ai ?? new NoOpAiComplianceService(),
                 new KycResultRepository(db, new DateTimeProvider()),
                 TimeProvider.System);
         }
@@ -878,6 +946,38 @@ public sealed class WardComplianceServiceTests
 
         public Task<string> AnswerVendorAssistantAsync(string question, string? context, CancellationToken ct) =>
             Task.FromResult("[test] Trợ lý StreetBiz sẵn sàng hỗ trợ.");
+    }
+
+    /// Counts provider calls; `ProviderDown` makes it answer like the real service does
+    /// when the AI provider is unreachable (IsAiGenerated = false).
+    private sealed class CountingAiComplianceService : IAiComplianceService
+    {
+        private readonly NoOpAiComplianceService inner = new();
+        public int Extractions { get; private set; }
+        public int Comparisons { get; private set; }
+        public bool ProviderDown { get; init; }
+
+        public Task<AiIdExtractionResult> ExtractIdDocumentAsync(IReadOnlyList<WardEvidenceDto> evidence, CancellationToken ct)
+        {
+            Extractions++;
+            return Task.FromResult(new AiIdExtractionResult("001200000001", "Hộ B", null, 95, !ProviderDown));
+        }
+
+        public Task<AiDocumentCheckResult> CompareDeclaredProfileAsync(string declaredName, string? extractedIdNumber, string declaredAddress, AiIdExtractionResult extraction, CancellationToken ct)
+        {
+            Comparisons++;
+            return Task.FromResult(new AiDocumentCheckResult(
+                92, true, false, $"check #{Comparisons}", Array.Empty<string>(), IsAiGenerated: !ProviderDown));
+        }
+
+        public Task<AiEncroachmentResult> AnalyzeInspectionPhotoAsync(string photoUrl, double? slotWidth, double? slotLength, CancellationToken ct) =>
+            inner.AnalyzeInspectionPhotoAsync(photoUrl, slotWidth, slotLength, ct);
+
+        public Task<AiLegalSuggestion> ClassifyAndDraftAsync(string? description, IReadOnlyList<PenaltyScheduleItemDto> availableSchedules, CancellationToken ct) =>
+            inner.ClassifyAndDraftAsync(description, availableSchedules, ct);
+
+        public Task<string> AnswerVendorAssistantAsync(string question, string? context, CancellationToken ct) =>
+            inner.AnswerVendorAssistantAsync(question, context, ct);
     }
 
     private sealed class TestContext(DbContextOptions<StreetBizDbContext> options) : StreetBizDbContext(options)

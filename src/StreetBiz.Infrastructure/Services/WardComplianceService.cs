@@ -1,5 +1,9 @@
 using System.Data;
 using System.Globalization;
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json;
+using System.Linq.Expressions;
 using Microsoft.EntityFrameworkCore;
 using StreetBiz.Application.Common.Exceptions;
 using StreetBiz.Application.Common.Security;
@@ -20,6 +24,21 @@ public sealed class WardComplianceService(
     : IWardComplianceService
 {
     private DateTime Now => clock.GetUtcNow().UtcDateTime;
+
+    private static readonly TimeZoneInfo VietnamTimeZone = TimeZoneInfo.CreateCustomTimeZone(
+        "Asia/Ho_Chi_Minh", TimeSpan.FromHours(7), "Asia/Ho_Chi_Minh", "Asia/Ho_Chi_Minh");
+
+    private DateOnly TodayVn => ToVnDate(Now);
+
+    private static DateOnly ToVnDate(DateTime utc) =>
+        DateOnly.FromDateTime(TimeZoneInfo.ConvertTimeFromUtc(DateTime.SpecifyKind(utc, DateTimeKind.Utc), VietnamTimeZone));
+
+    /// A violation has no ward column: it belongs to the ward of its slot, else of its
+    /// contract's slot, else of the officer who recorded it (BR-45).
+    private static Expression<Func<Violation, bool>> InWard(int wardId) => v =>
+        (v.slot_id != null && v.slot!.zone.ward_unit_id == wardId)
+        || (v.slot_id == null && v.contract_id != null && v.contract!.slot.zone.ward_unit_id == wardId)
+        || (v.slot_id == null && v.contract_id == null && v.UserAccount!.ward_unit_id == wardId);
 
     private static string Id(long id) => id.ToString(CultureInfo.InvariantCulture);
 
@@ -87,6 +106,8 @@ public sealed class WardComplianceService(
             .Include(x => x.vendor).ThenInclude(v => v.user)
             .Include(x => x.RegistrationEvidences)
             .Include(x => x.HouseholdMembers)
+            // Two collections in one JOIN return evidence x members rows; split them.
+            .AsSplitQuery()
             .SingleOrDefaultAsync(x => x.registration_id == registrationId, ct);
 
         if (reg is null || reg.ward_unit_id != actor.WardId)
@@ -102,7 +123,7 @@ public sealed class WardComplianceService(
 
         // AI Document Inspector [BR-41/42]: extract real CCCD data from the
         // uploaded ID photo (multimodal), never compare against phone number.
-        var aiCheck = await RunDocumentCheckAsync(reg, evidence, ownerName, ct);
+        var aiCheck = await RunDocumentCheckAsync(reg, evidence, ownerName, refresh: false, ct);
 
         return new WardEnrollmentDetailDto(
             Id(reg.registration_id),
@@ -189,7 +210,8 @@ public sealed class WardComplianceService(
             .ToList();
         var ownerName = reg.vendor?.user?.full_name ?? reg.display_name;
 
-        return await RunDocumentCheckAsync(reg, evidence, ownerName, ct);
+        // An explicit re-run is the officer asking for a fresh answer: skip the cache.
+        return await RunDocumentCheckAsync(reg, evidence, ownerName, refresh: true, ct);
     }
 
     /// <summary>
@@ -202,6 +224,7 @@ public sealed class WardComplianceService(
         BusinessRegistration reg,
         IReadOnlyList<WardEvidenceDto> evidence,
         string ownerName,
+        bool refresh,
         CancellationToken ct)
     {
         if (reg.biometric_consent_at is null)
@@ -226,17 +249,83 @@ public sealed class WardComplianceService(
                 IsAiGenerated: false);
         }
 
+        // Opening a record used to call the provider twice (OCR + compare) every time:
+        // ~3.5 s per page view and paid credits for an answer that cannot change until
+        // the evidence or the declared data does. Reuse the stored result while its
+        // inputs are unchanged.
+        if (!refresh
+            && TryReadCachedDocumentCheck(reg.ai_check_result, DocumentCheckKey(reg, evidence, ownerName)) is { } cached)
+        {
+            return cached;
+        }
+
         var extraction = await aiService.ExtractIdDocumentAsync(evidence, ct);
 
+        var changed = false;
         if (string.IsNullOrWhiteSpace(reg.id_number) && !string.IsNullOrWhiteSpace(extraction.IdNumber)
             && extraction.ConfidencePercent >= 85)
         {
             reg.id_number = extraction.IdNumber;
+            changed = true;
+        }
+
+        var result = await aiService.CompareDeclaredProfileAsync(
+            ownerName, reg.id_number, reg.declared_address ?? "", extraction, ct);
+
+        // Only a real provider answer is cached; a fallback ("provider unavailable")
+        // must be retried on the next open. The key is taken after the id_number
+        // backfill so the next read, which sees the stored id_number, matches it.
+        if (result.IsAiGenerated)
+        {
+            reg.ai_check_result = JsonSerializer.Serialize(
+                new CachedDocumentCheck(DocumentCheckKey(reg, evidence, ownerName), result));
+            reg.ai_checked_at = Now;
+            changed = true;
+        }
+
+        if (changed)
+        {
             await db.SaveChangesAsync(ct);
         }
 
-        return await aiService.CompareDeclaredProfileAsync(
-            ownerName, reg.id_number, reg.declared_address ?? "", extraction, ct);
+        return result;
+    }
+
+    private sealed record CachedDocumentCheck(string Key, AiDocumentCheckResult Result);
+
+    /// <summary>Fingerprint of everything the AI check reads; any change forces a fresh check.</summary>
+    private static string DocumentCheckKey(
+        BusinessRegistration reg, IReadOnlyList<WardEvidenceDto> evidence, string ownerName)
+    {
+        var parts = new StringBuilder()
+            .Append(ownerName).Append('\n')
+            .Append(reg.id_number).Append('\n')
+            .Append(reg.declared_address).Append('\n');
+        foreach (var e in evidence.OrderBy(e => e.EvidenceId))
+        {
+            parts.Append(e.EvidenceId).Append('|').Append(e.Type).Append('|').Append(e.FileUrl).Append('\n');
+        }
+
+        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(parts.ToString())));
+    }
+
+    private static AiDocumentCheckResult? TryReadCachedDocumentCheck(string? json, string key)
+    {
+        if (string.IsNullOrEmpty(json))
+        {
+            return null;
+        }
+
+        try
+        {
+            var cached = JsonSerializer.Deserialize<CachedDocumentCheck>(json);
+            return cached is not null && cached.Key == key ? cached.Result : null;
+        }
+        catch (JsonException)
+        {
+            // An unreadable cache entry is just a miss; the check runs again and overwrites it.
+            return null;
+        }
     }
 
     public async Task<WardEnrollmentDetailDto> DecideEnrollmentAsync(
@@ -1250,11 +1339,16 @@ public sealed class WardComplianceService(
     #region Violations & Sanctions (2-Step Administrative Flow)
     public async Task<IReadOnlyList<PenaltyScheduleItemDto>> ListPenaltySchedulesAsync(
         WardActor actor,
+        DateOnly? asOf,
         CancellationToken ct)
     {
+        var day = asOf ?? TodayVn;
         var list = await db.PenaltyFeeSchedules.AsNoTracking()
             .Include(s => s.violation_typeNavigation)
-            .Where(s => s.ward_unit_id == actor.WardId && s.effective_to == null)
+            .Where(s => s.ward_unit_id == actor.WardId
+                        && s.violation_typeNavigation.is_active
+                        && s.effective_from <= day
+                        && (s.effective_to == null || s.effective_to > day))
             .OrderBy(s => s.penalty_schedule_id)
             .Select(s => new PenaltyScheduleItemDto(
                 s.penalty_schedule_id,
@@ -1279,7 +1373,7 @@ public sealed class WardComplianceService(
             .Include(v => v.slot).ThenInclude(s => s!.zone)
             .Include(v => v.vendor).ThenInclude(vnd => vnd!.BusinessRegistrations)
             .Include(v => v.UserAccount)
-            .Where(v => v.slot == null || v.slot.zone.ward_unit_id == actor.WardId);
+            .Where(InWard(actor.WardId));
 
         var offset = (page - 1) * 20;
         var items = await query
@@ -1315,6 +1409,7 @@ public sealed class WardComplianceService(
             .Include(x => x.slot).ThenInclude(s => s!.zone)
             .Include(x => x.vendor).ThenInclude(vnd => vnd!.BusinessRegistrations)
             .Include(x => x.UserAccount)
+            .Where(InWard(actor.WardId))
             .SingleOrDefaultAsync(x => x.violation_id == violationId, ct);
 
         if (v is null)
@@ -1335,7 +1430,7 @@ public sealed class WardComplianceService(
 
         // AI Legal Co-pilot: classify + draft FROM the ward's own configured
         // schedule -- never invents a legal citation or amount [BR-41/42].
-        var availableSchedules = await ListPenaltySchedulesAsync(actor, ct);
+        var availableSchedules = await ListPenaltySchedulesAsync(actor, ToVnDate(v.recorded_at), ct);
         var aiSuggestion = await aiService.ClassifyAndDraftAsync(v.description, availableSchedules, ct);
 
         var status = v.Penalty?.penalty_status ?? "PENDING_SANCTION";
@@ -1368,6 +1463,27 @@ public sealed class WardComplianceService(
         RecordWardViolationRequest request,
         CancellationToken ct)
     {
+        var typeActive = await db.ViolationTypes.AsNoTracking()
+            .Where(t => t.violation_type_code == request.ViolationType)
+            .Select(t => (bool?)t.is_active)
+            .SingleOrDefaultAsync(ct);
+        if (typeActive is not true)
+        {
+            throw new WardException(400, "violation_type_inactive", "Loại vi phạm không tồn tại hoặc đã ngừng sử dụng.");
+        }
+
+        if (request.SlotId is { } slotId
+            && !await db.SidewalkSlots.AnyAsync(s => s.slot_id == slotId && s.zone.ward_unit_id == actor.WardId, ct))
+        {
+            throw new NotFoundException("Không tìm thấy ô sạp tại địa bàn phường của bạn.");
+        }
+
+        if (request.ContractId is { } contractId
+            && !await db.RentalContracts.AnyAsync(c => c.contract_id == contractId && c.slot.zone.ward_unit_id == actor.WardId, ct))
+        {
+            throw new NotFoundException("Không tìm thấy hợp đồng tại địa bàn phường của bạn.");
+        }
+
         var violation = new Violation
         {
             contract_id = request.ContractId,
@@ -1405,6 +1521,7 @@ public sealed class WardComplianceService(
     {
         var violation = await db.Violations
             .Include(v => v.Penalty)
+            .Where(InWard(actor.WardId))
             .SingleOrDefaultAsync(v => v.violation_id == violationId, ct);
 
         if (violation is null)
@@ -1420,6 +1537,24 @@ public sealed class WardComplianceService(
         if (schedule is null || schedule.ward_unit_id != actor.WardId)
         {
             throw new NotFoundException("Không tìm thấy khung xử phạt đã chọn tại địa bàn phường của bạn.");
+        }
+
+        if (schedule.violation_type != violation.violation_type)
+        {
+            throw new ConflictException("Mức phạt đã chọn không thuộc hành vi vi phạm của biên bản này.");
+        }
+
+        // The rate that applies is the one in force on the day of the violation, not today.
+        var violationDate = ToVnDate(violation.recorded_at);
+        if (!PenaltyRates.IsInForce(schedule.effective_from, schedule.effective_to, violationDate))
+        {
+            throw new ConflictException($"Mức phạt đã chọn không có hiệu lực vào ngày vi phạm {violationDate:dd/MM/yyyy}.");
+        }
+
+        // No legal basis, no fine: an administrative sanction must cite the provision it applies.
+        if (string.IsNullOrWhiteSpace(schedule.legal_basis))
+        {
+            throw new ConflictException("Vi phạm này chưa có căn cứ pháp lý hoặc mức phạt hiệu lực. Vui lòng cấu hình Bảng phạt trước.");
         }
 
         // WARD-12/13 authority split: the patrolling officer who recorded the violation

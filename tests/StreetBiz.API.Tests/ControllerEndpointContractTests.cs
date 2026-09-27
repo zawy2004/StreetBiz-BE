@@ -33,6 +33,7 @@ public sealed class ControllerEndpointContractTests
         "PUT /api/orders/{orderId}/review",
         "GET /api/orders/payment-options",
         "POST /api/orders/{orderId}/payment/sandbox-fail",
+        "POST /api/orders/{orderId}/payment/sync",
         "POST /api/orders/{orderId}/refund/sandbox-confirm",
         "GET /api/administrative-units/wards",
         "GET /api/community/vendors",
@@ -163,6 +164,41 @@ public sealed class ControllerEndpointContractTests
         "POST /api/ward/ai/vendor-assistant",
         "GET /api/ward/insights/risk-queue",
         "GET /api/ward/insights/patrol-heatmap",
+        "GET /api/ward/reports/collection",
+        "GET /api/ward/dashboard",
+        "GET /api/vendor/finance/summary",
+        "GET /api/vendor/finance/fees",
+        "GET /api/vendor/finance/penalties",
+        "GET /api/vendor/finance/payments",
+        "GET /api/vendor/finance/violations",
+        "POST /api/vendor/finance/fees/{feeItemId}/checkout",
+        "POST /api/vendor/finance/penalties/{penaltyId}/checkout",
+        "POST /api/vendor/finance/payments/{transactionId}/sandbox-confirm",
+        "POST /api/vendor/finance/payments/{transactionId}/sync",
+        "GET /api/vendor/finance/invoices",
+        "GET /api/vendor/finance/invoices/{invoiceId}",
+        "GET /api/ward/penalty-schedules/overview",
+        "GET /api/ward/penalty-schedules/history",
+        "POST /api/ward/penalty-schedules",
+        "DELETE /api/ward/penalty-schedules/{id}",
+        "GET /api/ward/pricing-zones",
+        "GET /api/ward/pricing-zones/{id}",
+        "POST /api/ward/pricing-zones",
+        "PUT /api/ward/pricing-zones/{id}",
+        "DELETE /api/ward/pricing-zones/{id}",
+        "POST /api/ward/pricing-zones/{id}/impact-preview",
+        "GET /api/ward/pricing-zones/{id}/history",
+        "GET /api/ward/slot-grid",
+        "POST /api/ward/slot-grid/check",
+        "POST /api/ward/slot-grid",
+        "PUT /api/ward/slot-grid/{id}",
+        "PUT /api/ward/slot-grid/{id}/status",
+        "DELETE /api/ward/slot-grid/{id}",
+        "POST /api/ward/slot-grid/batch-preview",
+        "POST /api/ward/slot-grid/batch",
+        "POST /api/ward/street-features",
+        "PUT /api/ward/street-features/{id}",
+        "DELETE /api/ward/street-features/{id}",
     ];
 
     private static readonly (HttpMethod Method, string Path)[] ProtectedEndpoints =
@@ -200,6 +236,7 @@ public sealed class ControllerEndpointContractTests
         (HttpMethod.Post, "/api/orders/1/cancel"),
         (HttpMethod.Post, "/api/orders/1/confirm-pickup"),
         (HttpMethod.Post, "/api/orders/1/payment/sandbox-confirm"),
+        (HttpMethod.Post, "/api/orders/1/payment/sync"),
         (HttpMethod.Get, "/api/seller/orders"),
         (HttpMethod.Get, "/api/seller/orders/1"),
         (HttpMethod.Post, "/api/seller/orders/1/decision"),
@@ -291,6 +328,28 @@ public sealed class ControllerEndpointContractTests
         (HttpMethod.Post, "/api/ward/ai/encroachment-check"),
         (HttpMethod.Get, "/api/ward/insights/risk-queue"),
         (HttpMethod.Get, "/api/ward/insights/patrol-heatmap"),
+        (HttpMethod.Get, "/api/ward/penalty-schedules/overview"),
+        (HttpMethod.Get, "/api/ward/penalty-schedules/history?violationType=X"),
+        (HttpMethod.Post, "/api/ward/penalty-schedules"),
+        (HttpMethod.Delete, "/api/ward/penalty-schedules/1"),
+        (HttpMethod.Get, "/api/ward/pricing-zones"),
+        (HttpMethod.Get, "/api/ward/pricing-zones/1"),
+        (HttpMethod.Post, "/api/ward/pricing-zones"),
+        (HttpMethod.Put, "/api/ward/pricing-zones/1"),
+        (HttpMethod.Delete, "/api/ward/pricing-zones/1?versionToken=x"),
+        (HttpMethod.Post, "/api/ward/pricing-zones/1/impact-preview"),
+        (HttpMethod.Get, "/api/ward/pricing-zones/1/history"),
+        (HttpMethod.Get, "/api/ward/slot-grid"),
+        (HttpMethod.Post, "/api/ward/slot-grid/check"),
+        (HttpMethod.Post, "/api/ward/slot-grid"),
+        (HttpMethod.Put, "/api/ward/slot-grid/1"),
+        (HttpMethod.Put, "/api/ward/slot-grid/1/status"),
+        (HttpMethod.Delete, "/api/ward/slot-grid/1?versionToken=x"),
+        (HttpMethod.Post, "/api/ward/slot-grid/batch-preview"),
+        (HttpMethod.Post, "/api/ward/slot-grid/batch"),
+        (HttpMethod.Post, "/api/ward/street-features"),
+        (HttpMethod.Put, "/api/ward/street-features/1"),
+        (HttpMethod.Delete, "/api/ward/street-features/1?versionToken=x"),
     ];
 
     private static readonly string[] PublicAuthEndpoints =
@@ -313,7 +372,9 @@ public sealed class ControllerEndpointContractTests
         using var document = JsonDocument.Parse(await client.GetStringAsync("/swagger/v1/swagger.json"));
         var actual = document.RootElement.GetProperty("paths")
             .EnumerateObject()
-            .Where(path => !path.NameEquals("/api/dev/ward-session"))
+            // Development-only minimal-API endpoints (ward dev session, finance dev shortcuts)
+            // are not part of the production controller contract this test pins down.
+            .Where(path => !path.Name.StartsWith("/api/dev/", StringComparison.Ordinal))
             .SelectMany(path => path.Value.EnumerateObject()
                 .Where(operation => IsHttpMethod(operation.Name))
                 .Select(operation => $"{operation.Name.ToUpperInvariant()} {path.Name}"))
