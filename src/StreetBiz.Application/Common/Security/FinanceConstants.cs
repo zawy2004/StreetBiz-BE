@@ -122,6 +122,10 @@ public static class FinanceMessages
     public const string TransactionNotFound = "Không tìm thấy giao dịch thanh toán.";
     public const string TransactionAlreadyProcessed = "Giao dịch này đã được xử lý.";
 
+    /// <summary>Refused when a provider with real credentials configured is asked to fake-confirm a payment.</summary>
+    public const string SandboxNotAvailableForRealProvider =
+        "Cổng thanh toán này đã được cấu hình để thanh toán thật; không thể xác nhận giả lập.";
+
     /// <summary>FEE-01: the instalment moved on (paid by another attempt, or gone OVERDUE/PAID) between the read and the checkout write.</summary>
     public const string FeeItemNoLongerPayable = "Kỳ phí này vừa thay đổi trạng thái. Vui lòng tải lại.";
 

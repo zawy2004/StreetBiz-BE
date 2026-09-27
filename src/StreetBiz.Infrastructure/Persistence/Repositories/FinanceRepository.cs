@@ -2,18 +2,21 @@ using System.Data;
 using System.Globalization;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
 using StreetBiz.Application.Common.Exceptions;
 using StreetBiz.Application.Common.Interfaces;
 using StreetBiz.Application.Common.Models;
 using StreetBiz.Application.Common.Security;
 using StreetBiz.Application.DTOs.Finance;
+using StreetBiz.Infrastructure.Payments;
 using StreetBiz.Infrastructure.Persistence.ScaffoldedModels;
 
 namespace StreetBiz.Infrastructure.Persistence.Repositories;
 
 public sealed class FinanceRepository(
     StreetBizDbContext db,
-    TimeProvider clock) : IFinanceRepository
+    TimeProvider clock,
+    IOptions<PaymentGatewaySettings> paymentSettings) : IFinanceRepository
 {
     private static readonly CultureInfo Vietnamese = CultureInfo.GetCultureInfo("vi-VN");
 
@@ -550,6 +553,15 @@ public sealed class FinanceRepository(
             if (owner != vendorId)
             {
                 throw new NotFoundException(FinanceMessages.TransactionNotFound);
+            }
+
+            // Once a provider has real credentials configured, its transactions are only ever
+            // confirmed by that provider's own signed callback (ApplyPaymentCallbackAsync) — never
+            // by this Development shortcut, which would otherwise mark real, unpaid MoMo money as
+            // received.
+            if (paymentSettings.Value.For(payment.provider).HasRealCredentials)
+            {
+                throw new DomainRuleException(FinanceMessages.SandboxNotAvailableForRealProvider);
             }
 
             if (payment.transaction_status is PaymentStatuses.Success or PaymentStatuses.Failed)

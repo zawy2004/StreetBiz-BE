@@ -62,6 +62,43 @@ evidence trail for a provider dispute.
 | WARD-14 | `GET /api/ward/reports/collection?from=&to=` |
 | WARD-15 | `GET /api/ward/dashboard` |
 
+## MoMo: real payments vs. the generic fallback
+
+`IPaymentGateway`'s only implementation, `ConfiguredPaymentGateway`, branches
+per call on whether `Payments:Momo:PartnerCode`/`AccessKey`/`SecretKey`/
+`ApiEndpoint` are all set (`PaymentProviderSettings.HasRealCredentials`):
+
+- **Configured** — `CreateCheckoutAsync` signs and POSTs a real "captureWallet"
+  request to MoMo's AIO v2 API and returns MoMo's own `payUrl`;
+  `VerifyCallbackAsync` parses MoMo's IPN JSON (a different field set and a
+  different signature than the create call) and verifies it with MoMo's own
+  scheme (`MoMoSignature`, `docs/momo-setup.md`).
+- **Not configured** (ZaloPay today, or MoMo before setup) — the existing
+  `CheckoutUrlTemplate`/`X-Payment-Signature` generic path, or the
+  Development-only `streetbiz://` fake link when nothing is configured at all.
+
+MoMo refuses any `orderId` it has already seen — including a retry of the same
+still-pending order (`resultCode 41`, verified against the live test
+endpoint) — and orderIds are unique per partner code, which every developer
+using MoMo's shared test key shares. So each create call sends a fresh
+`SB-{transactionId}-{8 hex}` as both `orderId` and `requestId`, and stores it as
+`provider_reference` (a retry replaces the previous attempt's). Our
+Idempotency-Key travels in the signed `extraData` (base64 JSON), which MoMo
+echoes back in the IPN: an IPN for the latest attempt matches on
+`provider_reference`, one for an earlier attempt's payUrl falls back to the
+idempotency key — the same two-step lookup `ApplyPaymentCallbackAsync` already
+does. If the vendor somehow pays through two attempts' pages, the second IPN
+finds the transaction already `SUCCESS` and is recorded as `DUPLICATE`.
+
+**Sandbox-confirm is refused once a provider has real credentials.** The
+Development-only `POST payments/{transactionId}/sandbox-confirm` fakes a
+successful callback locally; once MoMo is genuinely configured, using it on a
+MoMo transaction would mark real, unpaid money as received. `FinanceRepository`
+checks the transaction's own provider before confirming and throws instead.
+The vendor screens already only call this endpoint for the fake `streetbiz://`
+link (branching on the URL's scheme) — the guard is defense-in-depth for a
+direct API call, not the primary mechanism.
+
 ## Payment boundary
 
 `PaymentTransactions.payment_purpose` (`RENTAL_FEE`/`PENALTY`/`ORDER`) and its

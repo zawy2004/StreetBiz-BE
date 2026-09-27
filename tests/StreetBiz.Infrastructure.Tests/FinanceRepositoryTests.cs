@@ -1,9 +1,11 @@
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.Extensions.Options;
 using StreetBiz.Application.Common.Exceptions;
 using StreetBiz.Application.Common.Models;
 using StreetBiz.Application.Common.Security;
+using StreetBiz.Infrastructure.Payments;
 using StreetBiz.Infrastructure.Persistence;
 using StreetBiz.Infrastructure.Persistence.Repositories;
 using StreetBiz.Infrastructure.Persistence.ScaffoldedModels;
@@ -65,6 +67,45 @@ public sealed class FinanceRepositoryTests
         var invoice = Assert.Single(invoices);
         // Continues from the seeded HD-2026-000010; the 2025 sequence is a different year.
         Assert.Equal("HD-2026-000011", invoice.invoice_number);
+    }
+
+    [Fact]
+    public async Task Sandbox_confirm_is_refused_once_the_transactions_provider_has_real_credentials()
+    {
+        using var f = await Fixture.Create();
+        var checkout = await f.Repository().CreateFeeCheckoutAsync(Vendor, PastDueItem, "MOMO", "real-momo", default);
+        var withRealMomo = f.Repository(new PaymentGatewaySettings
+        {
+            Momo = new PaymentProviderSettings
+            {
+                PartnerCode = "MOMO", AccessKey = "key", SecretKey = "secret", ApiEndpoint = "https://example.test/create",
+            },
+        });
+
+        await Assert.ThrowsAsync<DomainRuleException>(() =>
+            withRealMomo.ConfirmSandboxSuccessAsync(Vendor, checkout.TransactionId, default));
+
+        Assert.Equal(FeeItemStatuses.Pending,
+            (await f.Db.FeeScheduleItems.AsNoTracking().SingleAsync(i => i.fee_item_id == PastDueItem)).item_status);
+    }
+
+    [Fact]
+    public async Task Paying_through_an_earlier_attempts_MoMo_link_still_settles_the_transaction()
+    {
+        // A retry replaced provider_reference with the newer orderId; the vendor then paid on the
+        // first attempt's page. MoMo's IPN carries the old orderId plus our key in extraData.
+        using var f = await Fixture.Create();
+        var repository = f.Repository();
+        var checkout = await repository.CreateFeeCheckoutAsync(Vendor, PastDueItem, "MOMO", "key-1", default);
+        await repository.SetPaymentProviderReferenceAsync(checkout.TransactionId, "SB-1-newer000", default);
+
+        var result = await repository.ApplyPaymentCallbackAsync(new PaymentCallbackData(
+            "MOMO", "SB-1-older000", "key-1", checkout.Amount, PaymentStatuses.Success, "{}", true), default);
+
+        Assert.Equal(PaymentCallbackOutcome.Applied, result.Outcome);
+        Assert.Equal(checkout.TransactionId, result.TransactionId);
+        Assert.Equal(FeeItemStatuses.Paid,
+            (await f.Db.FeeScheduleItems.AsNoTracking().SingleAsync(i => i.fee_item_id == PastDueItem)).item_status);
     }
 
     [Fact]
@@ -152,7 +193,8 @@ public sealed class FinanceRepositoryTests
         private TimeProvider Clock { get; init; } = null!;
         public TestContext Db { get; private set; } = null!;
 
-        public FinanceRepository Repository() => new(Db, Clock);
+        public FinanceRepository Repository(PaymentGatewaySettings? paymentSettings = null) =>
+            new(Db, Clock, Options.Create(paymentSettings ?? new PaymentGatewaySettings()));
 
         public static async Task<Fixture> Create(DateTimeOffset? now = null)
         {

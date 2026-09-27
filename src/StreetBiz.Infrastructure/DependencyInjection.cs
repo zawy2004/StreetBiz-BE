@@ -54,7 +54,7 @@ public static class DependencyInjection
         services.AddSingleton<IJwtTokenService, JwtTokenService>();
         services.AddSingleton<ISmsSender, LoggingSmsSender>();
         services.AddSingleton<IFileStorage, LocalFileStorage>();
-        services.AddSingleton<IPaymentGateway, ConfiguredPaymentGateway>();
+        services.AddHttpClient<IPaymentGateway, ConfiguredPaymentGateway>();
         services.AddSingleton<IRefundGateway, ConfiguredRefundGateway>();
 
         services.AddScoped<IOtpService, OtpService>();

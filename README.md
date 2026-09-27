@@ -76,7 +76,30 @@ dotnet user-secrets --project src/StreetBiz.API set "Payments:ZaloPay:CallbackSe
 
 Equivalent environment keys use double underscores, for example
 `Payments__Momo__CallbackSecret`. Callback requests send the hexadecimal
-HMAC-SHA256 in `X-Payment-Signature`.
+HMAC-SHA256 in `X-Payment-Signature`. That generic path is what ZaloPay
+(and any provider with no real credentials configured) still uses today —
+a locally-built fake checkout URL, confirmed via the Development-only
+sandbox-confirm endpoint.
+
+### Real MoMo payments
+
+Once all four of `Payments:Momo:PartnerCode`, `AccessKey`, `SecretKey` and
+`ApiEndpoint` are set, `ConfiguredPaymentGateway` stops building a fake URL for
+MoMo and instead calls MoMo's own "captureWallet" AIO v2 API to open a real
+payment and verifies its IPN (server-to-server payment notification) with
+MoMo's own signature scheme — a completely different code path from the
+generic template above. See `docs/fee-payment-invoicing.md` for how checkout,
+the IPN callback and the Development sandbox-confirm guard interact, and
+`docs/momo-setup.md` for how to obtain these values and run it locally.
+
+~~~powershell
+dotnet user-secrets --project src/StreetBiz.API set "Payments:Momo:PartnerCode" "<partner-code>"
+dotnet user-secrets --project src/StreetBiz.API set "Payments:Momo:AccessKey" "<access-key>"
+dotnet user-secrets --project src/StreetBiz.API set "Payments:Momo:SecretKey" "<secret-key>"
+dotnet user-secrets --project src/StreetBiz.API set "Payments:Momo:ApiEndpoint" "https://test-payment.momo.vn/v2/gateway/api/create"
+dotnet user-secrets --project src/StreetBiz.API set "Payments:Momo:RedirectUrl" "http://localhost:5173/vendor/finance"
+dotnet user-secrets --project src/StreetBiz.API set "Payments:Momo:IpnUrl" "<public-https-url>/api/payments/momo/callback"
+~~~
 
 ## Reverse-engineer the existing database
 

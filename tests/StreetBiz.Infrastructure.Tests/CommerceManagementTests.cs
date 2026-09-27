@@ -355,10 +355,12 @@ public sealed class CommerceManagementTests
         const string secret = "test-callback-secret";
         using var hmac = new HMACSHA256(Encoding.UTF8.GetBytes(secret));
         var signature = Convert.ToHexString(hmac.ComputeHash(Encoding.UTF8.GetBytes(raw)));
-        var gateway = new ConfiguredPaymentGateway(Options.Create(new PaymentGatewaySettings
-        {
-            Momo = new PaymentProviderSettings { CallbackSecret = secret }
-        }));
+        var gateway = new ConfiguredPaymentGateway(
+            Options.Create(new PaymentGatewaySettings
+            {
+                Momo = new PaymentProviderSettings { CallbackSecret = secret }
+            }),
+            new HttpClient());
         var valid = await gateway.VerifyCallbackAsync("MOMO", raw, signature, default);
         var invalid = await gateway.VerifyCallbackAsync("MOMO", raw, "00", default);
         Assert.True(valid.SignatureValid);
