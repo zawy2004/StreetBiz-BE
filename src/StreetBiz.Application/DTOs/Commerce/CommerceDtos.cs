@@ -31,6 +31,12 @@ public sealed record CartDto(
     decimal Subtotal)
 {
     public string? StorefrontAddress { get; init; }
+
+    /// <summary>
+    /// Set while an order from this cart awaits payment. The cart cannot be edited until
+    /// that order is paid or cancelled, so the client shows a way to do either.
+    /// </summary>
+    public long? PendingOrderId { get; init; }
 }
 
 public sealed record OrderItemDto(

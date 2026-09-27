@@ -29,7 +29,8 @@ public sealed record CommerceCartRow(
     string StorefrontStatus,
     IReadOnlyList<CommerceCartItemRow> Items,
     decimal Subtotal,
-    string? StorefrontAddress = null);
+    string? StorefrontAddress = null,
+    long? PendingOrderId = null);
 
 public sealed record CommerceOrderItemRow(
     long OrderItemId,
@@ -117,6 +118,10 @@ public enum CartMutationOutcome
     MenuItemUnavailable,
     StorefrontUnavailable,
     Conflict,
+    /// <summary>An order awaits payment; the cart is frozen until it is paid or cancelled.</summary>
+    CheckoutPending,
+    /// <summary>The line would exceed the per-item limit of 99.</summary>
+    QuantityLimit,
 }
 
 public sealed record CartMutationResult(CartMutationOutcome Outcome, CommerceCartRow? Cart);

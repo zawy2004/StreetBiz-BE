@@ -58,6 +58,7 @@ public static class DependencyInjection
         services.AddSingleton<IJwtTokenService, JwtTokenService>();
         services.AddSingleton<ISmsSender, LoggingSmsSender>();
         services.AddSingleton<IFileStorage, LocalFileStorage>();
+        services.AddHttpClient(MomoGateway.HttpClientName, client => client.Timeout = TimeSpan.FromSeconds(30));
         services.AddSingleton<IPaymentGateway, ConfiguredPaymentGateway>();
         services.AddSingleton<IRefundGateway, ConfiguredRefundGateway>();
 
@@ -79,6 +80,10 @@ public static class DependencyInjection
         services.AddScoped<ISlotTransferRequestRepository, SlotTransferRequestRepository>();
         services.AddScoped<ICommunityVendorRepository, CommunityVendorRepository>();
         services.AddScoped<IPlatformAdministrationRepository, PlatformAdministrationRepository>();
+        services.AddScoped<IFinanceRepository, FinanceRepository>();
+        services.AddScoped<IWardReportRepository, WardReportRepository>();
+        services.Configure<FeeReminderOptions>(configuration.GetSection(FeeReminderOptions.SectionName));
+        services.AddHostedService<FeeReminderHostedService>();
         services.AddScoped<ICommerceRepository, CommerceRepository>();
         services.AddScoped<StreetBiz.Application.Features.Commerce.ICommerceManagement, CommerceManagement>();
         services.AddScoped<StreetBiz.Application.Features.Commerce.IOrderPaymentTesting, OrderPaymentTesting>();

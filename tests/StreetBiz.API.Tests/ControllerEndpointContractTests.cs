@@ -33,6 +33,7 @@ public sealed class ControllerEndpointContractTests
         "PUT /api/orders/{orderId}/review",
         "GET /api/orders/payment-options",
         "POST /api/orders/{orderId}/payment/sandbox-fail",
+        "POST /api/orders/{orderId}/payment/sync",
         "POST /api/orders/{orderId}/refund/sandbox-confirm",
         "GET /api/administrative-units/wards",
         "GET /api/community/vendors",
@@ -163,6 +164,19 @@ public sealed class ControllerEndpointContractTests
         "POST /api/ward/ai/vendor-assistant",
         "GET /api/ward/insights/risk-queue",
         "GET /api/ward/insights/patrol-heatmap",
+        "GET /api/ward/reports/collection",
+        "GET /api/ward/dashboard",
+        "GET /api/vendor/finance/summary",
+        "GET /api/vendor/finance/fees",
+        "GET /api/vendor/finance/penalties",
+        "GET /api/vendor/finance/payments",
+        "GET /api/vendor/finance/violations",
+        "POST /api/vendor/finance/fees/{feeItemId}/checkout",
+        "POST /api/vendor/finance/penalties/{penaltyId}/checkout",
+        "POST /api/vendor/finance/payments/{transactionId}/sandbox-confirm",
+        "POST /api/vendor/finance/payments/{transactionId}/sync",
+        "GET /api/vendor/finance/invoices",
+        "GET /api/vendor/finance/invoices/{invoiceId}",
         "GET /api/ward/penalty-schedules/overview",
         "GET /api/ward/penalty-schedules/history",
         "POST /api/ward/penalty-schedules",
@@ -222,6 +236,7 @@ public sealed class ControllerEndpointContractTests
         (HttpMethod.Post, "/api/orders/1/cancel"),
         (HttpMethod.Post, "/api/orders/1/confirm-pickup"),
         (HttpMethod.Post, "/api/orders/1/payment/sandbox-confirm"),
+        (HttpMethod.Post, "/api/orders/1/payment/sync"),
         (HttpMethod.Get, "/api/seller/orders"),
         (HttpMethod.Get, "/api/seller/orders/1"),
         (HttpMethod.Post, "/api/seller/orders/1/decision"),
@@ -357,7 +372,9 @@ public sealed class ControllerEndpointContractTests
         using var document = JsonDocument.Parse(await client.GetStringAsync("/swagger/v1/swagger.json"));
         var actual = document.RootElement.GetProperty("paths")
             .EnumerateObject()
-            .Where(path => !path.NameEquals("/api/dev/ward-session"))
+            // Development-only minimal-API endpoints (ward dev session, finance dev shortcuts)
+            // are not part of the production controller contract this test pins down.
+            .Where(path => !path.Name.StartsWith("/api/dev/", StringComparison.Ordinal))
             .SelectMany(path => path.Value.EnumerateObject()
                 .Where(operation => IsHttpMethod(operation.Name))
                 .Select(operation => $"{operation.Name.ToUpperInvariant()} {path.Name}"))

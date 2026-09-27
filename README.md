@@ -12,6 +12,11 @@ food-category management, content moderation and order-complaint resolution. See
 pickup, seller processing, refund-request, address snapshots, authenticated
 SignalR updates and sales-summary contracts.
 
+SYS-03–06, FEE-01/03/04 and WARD-14/15 are also implemented. See
+[Fee, payment, invoicing and reporting](docs/fee-payment-invoicing.md) for fee
+schedule generation, the shared payment-callback dispatch with Commerce, the
+hourly reminder sweep, and the ward collection report and dashboard.
+
 StreetBiz backend foundation built with .NET 8, ASP.NET Core, Entity Framework
 Core 8, SQL Server, and Clean Architecture. The current codebase includes
 authentication, vendor onboarding, sidewalk/rental workflows and the ward slot

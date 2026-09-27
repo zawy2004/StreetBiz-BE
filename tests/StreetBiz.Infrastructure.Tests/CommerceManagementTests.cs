@@ -159,6 +159,37 @@ public sealed class CommerceManagementTests
     }
 
     [Fact]
+    public async Task Pending_checkout_freezes_the_cart_and_says_so_until_the_order_is_cancelled()
+    {
+        using var f = await Fixture.Create();
+        var cartId = await AddCart(f);
+        var order = (await f.Repository.CheckoutAsync(2, cartId, "MOMO", "freeze", default)).Order!;
+        f.Db.ChangeTracker.Clear();
+
+        // The cart tells the client which order holds it, so the UI can offer pay/cancel.
+        Assert.Equal(order.OrderId, (await f.Repository.GetActiveCartAsync(2, default))!.PendingOrderId);
+        Assert.Equal(CartMutationOutcome.CheckoutPending, (await f.Repository.AddCartItemAsync(2, 1, 1, null, default)).Outcome);
+        Assert.Equal(CartMutationOutcome.CheckoutPending, (await f.Repository.UpdateCartItemAsync(2, 1, 3, null, default)).Outcome);
+        Assert.Equal(CartMutationOutcome.CheckoutPending, (await f.Repository.RemoveCartItemAsync(2, 1, default)).Outcome);
+
+        await f.Repository.CancelCustomerOrderAsync(2, order.OrderId, "PENDING_PAYMENT", default);
+        f.Db.ChangeTracker.Clear();
+
+        var cart = await f.Repository.GetActiveCartAsync(2, default);
+        Assert.Null(cart!.PendingOrderId);
+        Assert.Equal(CartMutationOutcome.Updated, (await f.Repository.UpdateCartItemAsync(2, 1, 3, null, default)).Outcome);
+    }
+
+    [Fact]
+    public async Task Adding_past_99_of_one_item_reports_the_limit_not_a_conflict()
+    {
+        using var f = await Fixture.Create();
+        await AddCart(f, quantity: 99);
+
+        Assert.Equal(CartMutationOutcome.QuantityLimit, (await f.Repository.AddCartItemAsync(2, 1, 1, null, default)).Outcome);
+    }
+
+    [Fact]
     public async Task Checkout_is_idempotent_for_same_customer_and_key()
     {
         using var f = await Fixture.Create();

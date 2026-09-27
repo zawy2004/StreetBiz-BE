@@ -91,8 +91,10 @@ builder.Services
 
 var app = builder.Build();
 
-app.UseExceptionHandler();
+// Request logging wraps the exception handler so it records the status the client
+// actually received (a validation failure is a 400, not a 500).
 app.UseSerilogRequestLogging();
+app.UseExceptionHandler();
 
 if (app.Environment.IsDevelopment())
 {
@@ -114,6 +116,7 @@ app.UseRateLimiter();
 
 app.MapControllers();
 app.MapWardApi();
+app.MapFinanceDevApi();
 app.MapHub<OrderHub>("/hubs/orders");
 
 app.MapHealthChecks(

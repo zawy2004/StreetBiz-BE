@@ -2,6 +2,8 @@ using MediatR;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
+using StreetBiz.Application.DTOs.Finance;
+using StreetBiz.Application.Features.Finance.WardReports;
 using StreetBiz.Application.Features.WardSlots;
 
 namespace StreetBiz.API.Controllers;
@@ -66,6 +68,19 @@ public sealed class WardReviewsController(ISender sender) : ControllerBase
         Ok(await sender.Send(
             new VerifyWardLocationQuery(request.Latitude, request.Longitude),
             cancellationToken));
+
+    /// <summary>WARD-14: fee/penalty collection totals for a period, default the current month to date.</summary>
+    [HttpGet("reports/collection")]
+    public async Task<ActionResult<CollectionReportDto>> CollectionReport(
+        [FromQuery] DateOnly? from,
+        [FromQuery] DateOnly? to,
+        CancellationToken cancellationToken) =>
+        Ok(await sender.Send(new GetCollectionReportQuery(from, to), cancellationToken));
+
+    /// <summary>WARD-15: the ward's current operational snapshot.</summary>
+    [HttpGet("dashboard")]
+    public async Task<ActionResult<WardDashboardDto>> Dashboard(CancellationToken cancellationToken) =>
+        Ok(await sender.Send(new GetWardDashboardQuery(), cancellationToken));
 }
 
 public sealed record WardDecisionRequest(
