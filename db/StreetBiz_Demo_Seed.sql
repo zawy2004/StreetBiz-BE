@@ -191,9 +191,12 @@ GO
 /* ============================================================
    3. PRICING ZONES, SLOTS AND STREET CONTEXT
    The Nguyễn Văn Linh pilot corridor:
-   NVL-01..10 walk the real road centreline at a 15 m pitch, NVL-11..20 mirror
-   them 38 m across to the far carriageway. Keeping the geometry means the
-   street-strip diagram and its straightness check still work.
+   NVL-01..10 walk a 15 m pitch starting at 50 Nguyễn Văn Linh (Nam Dương,
+   Hải Châu -- geocoded), matching the zone's own segment_from "Nút giao
+   Hoàng Diệu"; NVL-11..20 mirror them 38 m across to the far carriageway.
+   Keeping the geometry means the street-strip diagram and its straightness
+   check still work. The other three zones' 1-2 slots each anchor at a
+   geocoded point on their own real street instead of a single made-up spot.
    ============================================================ */
 
 IF NOT EXISTS (SELECT 1 FROM PricingZones)
@@ -237,12 +240,12 @@ GO
 IF NOT EXISTS (SELECT 1 FROM StreetFeatures)
 BEGIN
     INSERT INTO StreetFeatures (zone_id, feature_type, label, latitude, longitude, blocks_business, note) VALUES
-        (1, 'TRANSFORMER', N'Trạm biến áp NVL-T1', 16.047120, 108.214900, 1, N'Hành lang an toàn lưới điện 3 m'),
-        (1, 'HYDRANT',     N'Trụ nước chữa cháy',  16.047260, 108.216300, 1, N'Không được che chắn'),
-        (1, 'TREE',        N'Cây xanh đô thị',     16.047190, 108.215600, 0, NULL),
-        (1, 'LIGHT_POLE',  N'Cột đèn chiếu sáng',  16.047220, 108.215950, 0, NULL),
-        (1, 'BUS_STOP',    N'Điểm dừng xe buýt',   16.047300, 108.216700, 1, N'Phạm vi 10 m mỗi bên'),
-        (1, 'PARKING',     N'Vạch đỗ xe máy',      16.047150, 108.215200, 0, NULL);
+        (1, 'TRANSFORMER', N'Trạm biến áp NVL-T1', 16.061005, 108.217960, 1, N'Hành lang an toàn lưới điện 3 m'),
+        (1, 'HYDRANT',     N'Trụ nước chữa cháy',  16.061145, 108.219360, 1, N'Không được che chắn'),
+        (1, 'TREE',        N'Cây xanh đô thị',     16.061075, 108.218660, 0, NULL),
+        (1, 'LIGHT_POLE',  N'Cột đèn chiếu sáng',  16.061105, 108.219010, 0, NULL),
+        (1, 'BUS_STOP',    N'Điểm dừng xe buýt',   16.061185, 108.219760, 1, N'Phạm vi 10 m mỗi bên'),
+        (1, 'PARKING',     N'Vạch đỗ xe máy',      16.061035, 108.218260, 0, NULL);
 END;
 GO
 
@@ -253,42 +256,43 @@ IF NOT EXISTS (SELECT 1 FROM SidewalkSlots)
 BEGIN
     SET IDENTITY_INSERT SidewalkSlots ON;
 
-    -- Near carriageway, NVL-01..10: 15 m pitch along the fitted road axis.
+    -- Near carriageway, NVL-01..10: 15 m pitch starting at 50 Nguyễn Văn Linh (geocoded).
     INSERT INTO SidewalkSlots
         (slot_id, slot_code, zone_id, latitude, longitude, width_meters, length_meters,
          slot_status, source, has_power, has_water, has_trash_bin, business_category)
     VALUES
-        ( 1, 'NVL-01', 1, 16.047050, 108.214700, 2.00, 3.00, 'AVAILABLE', 'WARD_DEFINED', 1, 1, 1, 'FOOD_BEVERAGE'),
-        ( 2, 'NVL-02', 1, 16.047063, 108.214840, 2.00, 3.00, 'AVAILABLE', 'WARD_DEFINED', 1, 0, 1, 'FOOD_BEVERAGE'),
-        ( 3, 'NVL-03', 1, 16.047076, 108.214980, 2.00, 3.00, 'AVAILABLE', 'WARD_DEFINED', 0, 0, 1, 'RETAIL'),
-        ( 4, 'NVL-04', 1, 16.047089, 108.215120, 2.00, 3.00, 'AVAILABLE', 'WARD_DEFINED', 1, 1, 0, 'FOOD_BEVERAGE'),
-        ( 5, 'NVL-05', 1, 16.047102, 108.215260, 2.00, 3.00, 'AVAILABLE', 'WARD_DEFINED', 0, 0, 0, 'GENERAL'),
-        ( 6, 'NVL-06', 1, 16.047115, 108.215400, 2.00, 3.00, 'AVAILABLE', 'WARD_DEFINED', 1, 0, 1, 'FOOD_BEVERAGE'),
-        ( 7, 'NVL-07', 1, 16.047128, 108.215540, 2.00, 3.00, 'AVAILABLE', 'WARD_DEFINED', 0, 1, 1, 'CRAFTS'),
-        ( 8, 'NVL-08', 1, 16.047141, 108.215680, 2.00, 3.00, 'AVAILABLE', 'WARD_DEFINED', 1, 1, 1, 'FOOD_BEVERAGE'),
-        ( 9, 'NVL-09', 1, 16.047154, 108.215820, 2.00, 3.00, 'AVAILABLE', 'WARD_DEFINED', 0, 0, 0, 'SERVICES'),
-        (10, 'NVL-10', 1, 16.047167, 108.215960, 2.00, 3.00, 'AVAILABLE', 'WARD_DEFINED', 1, 0, 1, 'RETAIL'),
+        ( 1, 'NVL-01', 1, 16.060935, 108.217760, 2.00, 3.00, 'AVAILABLE', 'WARD_DEFINED', 1, 1, 1, 'FOOD_BEVERAGE'),
+        ( 2, 'NVL-02', 1, 16.060948, 108.217900, 2.00, 3.00, 'AVAILABLE', 'WARD_DEFINED', 1, 0, 1, 'FOOD_BEVERAGE'),
+        ( 3, 'NVL-03', 1, 16.060961, 108.218040, 2.00, 3.00, 'AVAILABLE', 'WARD_DEFINED', 0, 0, 1, 'RETAIL'),
+        ( 4, 'NVL-04', 1, 16.060974, 108.218180, 2.00, 3.00, 'AVAILABLE', 'WARD_DEFINED', 1, 1, 0, 'FOOD_BEVERAGE'),
+        ( 5, 'NVL-05', 1, 16.060987, 108.218320, 2.00, 3.00, 'AVAILABLE', 'WARD_DEFINED', 0, 0, 0, 'GENERAL'),
+        ( 6, 'NVL-06', 1, 16.061000, 108.218460, 2.00, 3.00, 'AVAILABLE', 'WARD_DEFINED', 1, 0, 1, 'FOOD_BEVERAGE'),
+        ( 7, 'NVL-07', 1, 16.061013, 108.218600, 2.00, 3.00, 'AVAILABLE', 'WARD_DEFINED', 0, 1, 1, 'CRAFTS'),
+        ( 8, 'NVL-08', 1, 16.061026, 108.218740, 2.00, 3.00, 'AVAILABLE', 'WARD_DEFINED', 1, 1, 1, 'FOOD_BEVERAGE'),
+        ( 9, 'NVL-09', 1, 16.061039, 108.218880, 2.00, 3.00, 'AVAILABLE', 'WARD_DEFINED', 0, 0, 0, 'SERVICES'),
+        (10, 'NVL-10', 1, 16.061052, 108.219020, 2.00, 3.00, 'AVAILABLE', 'WARD_DEFINED', 1, 0, 1, 'RETAIL'),
 
     -- Far carriageway, NVL-11..20: the same run mirrored 38 m across the road.
-        (11, 'NVL-11', 1, 16.047392, 108.214700, 2.00, 3.00, 'AVAILABLE', 'WARD_DEFINED', 1, 1, 1, 'FOOD_BEVERAGE'),
-        (12, 'NVL-12', 1, 16.047405, 108.214840, 2.00, 3.00, 'AVAILABLE', 'WARD_DEFINED', 0, 0, 1, 'FOOD_BEVERAGE'),
-        (13, 'NVL-13', 1, 16.047418, 108.214980, 2.00, 3.00, 'AVAILABLE', 'WARD_DEFINED', 1, 0, 0, 'RETAIL'),
-        (14, 'NVL-14', 1, 16.047431, 108.215120, 2.00, 3.00, 'AVAILABLE', 'WARD_DEFINED', 0, 1, 1, 'GENERAL'),
-        (15, 'NVL-15', 1, 16.047444, 108.215260, 2.00, 3.00, 'AVAILABLE', 'WARD_DEFINED', 1, 1, 1, 'FOOD_BEVERAGE'),
-        (16, 'NVL-16', 1, 16.047457, 108.215400, 2.00, 3.00, 'AVAILABLE', 'WARD_DEFINED', 0, 0, 0, 'SERVICES'),
-        (17, 'NVL-17', 1, 16.047470, 108.215540, 2.00, 3.00, 'AVAILABLE', 'WARD_DEFINED', 1, 0, 1, 'CRAFTS'),
-        (18, 'NVL-18', 1, 16.047483, 108.215680, 2.00, 3.00, 'AVAILABLE', 'WARD_DEFINED', 0, 1, 0, 'FOOD_BEVERAGE'),
-        (19, 'NVL-19', 1, 16.047496, 108.215820, 2.00, 3.00, 'AVAILABLE', 'WARD_DEFINED', 1, 1, 1, 'FOOD_BEVERAGE'),
-        (20, 'NVL-20', 1, 16.047509, 108.215960, 2.00, 3.00, 'AVAILABLE', 'WARD_DEFINED', 0, 0, 1, 'RETAIL'),
+        (11, 'NVL-11', 1, 16.061277, 108.217760, 2.00, 3.00, 'AVAILABLE', 'WARD_DEFINED', 1, 1, 1, 'FOOD_BEVERAGE'),
+        (12, 'NVL-12', 1, 16.061290, 108.217900, 2.00, 3.00, 'AVAILABLE', 'WARD_DEFINED', 0, 0, 1, 'FOOD_BEVERAGE'),
+        (13, 'NVL-13', 1, 16.061303, 108.218040, 2.00, 3.00, 'AVAILABLE', 'WARD_DEFINED', 1, 0, 0, 'RETAIL'),
+        (14, 'NVL-14', 1, 16.061316, 108.218180, 2.00, 3.00, 'AVAILABLE', 'WARD_DEFINED', 0, 1, 1, 'GENERAL'),
+        (15, 'NVL-15', 1, 16.061329, 108.218320, 2.00, 3.00, 'AVAILABLE', 'WARD_DEFINED', 1, 1, 1, 'FOOD_BEVERAGE'),
+        (16, 'NVL-16', 1, 16.061342, 108.218460, 2.00, 3.00, 'AVAILABLE', 'WARD_DEFINED', 0, 0, 0, 'SERVICES'),
+        (17, 'NVL-17', 1, 16.061355, 108.218600, 2.00, 3.00, 'AVAILABLE', 'WARD_DEFINED', 1, 0, 1, 'CRAFTS'),
+        (18, 'NVL-18', 1, 16.061368, 108.218740, 2.00, 3.00, 'AVAILABLE', 'WARD_DEFINED', 0, 1, 0, 'FOOD_BEVERAGE'),
+        (19, 'NVL-19', 1, 16.061381, 108.218880, 2.00, 3.00, 'AVAILABLE', 'WARD_DEFINED', 1, 1, 1, 'FOOD_BEVERAGE'),
+        (20, 'NVL-20', 1, 16.061394, 108.219020, 2.00, 3.00, 'AVAILABLE', 'WARD_DEFINED', 0, 0, 1, 'RETAIL'),
 
-    -- A few slots in the other zones so every ward map has content.
-        (21, 'HD-01',  2, 16.069500, 108.222100, 2.00, 2.50, 'AVAILABLE', 'WARD_DEFINED', 0, 0, 1, 'FOOD_BEVERAGE'),
-        (22, 'HD-02',  2, 16.069620, 108.222240, 2.00, 2.50, 'AVAILABLE', 'WARD_DEFINED', 1, 0, 1, 'RETAIL'),
-        (23, 'HD-03',  2, 16.069740, 108.222380, 2.00, 2.50, 'AVAILABLE', 'WARD_DEFINED', 0, 1, 0, 'GENERAL'),
-        (24, 'DBP-01', 3, 16.061200, 108.201400, 2.00, 3.00, 'AVAILABLE', 'WARD_DEFINED', 1, 1, 1, 'FOOD_BEVERAGE'),
-        (25, 'DBP-02', 3, 16.061340, 108.201560, 2.00, 3.00, 'AVAILABLE', 'WARD_DEFINED', 0, 0, 1, 'CRAFTS'),
-        (26, 'NQ-01',  4, 16.075800, 108.227300, 2.00, 3.00, 'AVAILABLE', 'WARD_DEFINED', 1, 0, 1, 'FOOD_BEVERAGE'),
-        (27, 'NQ-02',  4, 16.075940, 108.227460, 2.00, 3.00, 'AVAILABLE', 'WARD_DEFINED', 0, 1, 1, 'RETAIL');
+    -- A few slots in the other zones so every ward map has content, each anchored at a
+    -- geocoded point on its own real street (Hoàng Diệu, Điện Biên Phủ, Ngô Quyền).
+        (21, 'HD-01',  2, 16.059417, 108.217017, 2.00, 2.50, 'AVAILABLE', 'WARD_DEFINED', 0, 0, 1, 'FOOD_BEVERAGE'),
+        (22, 'HD-02',  2, 16.059537, 108.217157, 2.00, 2.50, 'AVAILABLE', 'WARD_DEFINED', 1, 0, 1, 'RETAIL'),
+        (23, 'HD-03',  2, 16.059657, 108.217297, 2.00, 2.50, 'AVAILABLE', 'WARD_DEFINED', 0, 1, 0, 'GENERAL'),
+        (24, 'DBP-01', 3, 16.066229, 108.205945, 2.00, 3.00, 'AVAILABLE', 'WARD_DEFINED', 1, 1, 1, 'FOOD_BEVERAGE'),
+        (25, 'DBP-02', 3, 16.066369, 108.206105, 2.00, 3.00, 'AVAILABLE', 'WARD_DEFINED', 0, 0, 1, 'CRAFTS'),
+        (26, 'NQ-01',  4, 16.080457, 108.234506, 2.00, 3.00, 'AVAILABLE', 'WARD_DEFINED', 1, 0, 1, 'FOOD_BEVERAGE'),
+        (27, 'NQ-02',  4, 16.080597, 108.234666, 2.00, 3.00, 'AVAILABLE', 'WARD_DEFINED', 0, 1, 1, 'RETAIL');
 
     SET IDENTITY_INSERT SidewalkSlots OFF;
 END;
@@ -319,7 +323,7 @@ BEGIN
     VALUES
         -- APPROVED, with a contract, permit, fees and a storefront underneath it.
         (1, 1, 'FIXED_STOREFRONT', N'Bánh mì & Xôi Cô Lan',
-            N'123 Nguyễn Văn Linh, Phường Hải Châu 1, Đà Nẵng', 16.047050, 108.214700, 10,
+            N'123 Nguyễn Văn Linh, Phường Hải Châu 1, Đà Nẵng', 16.060935, 108.217760, 10,
             'APPROVED', 0, 2, N'Hồ sơ đầy đủ, vị trí phù hợp quy hoạch vỉa hè.',
             DATEADD(DAY, -28, SYSUTCDATETIME()), DATEADD(DAY, -32, SYSUTCDATETIME())),
 
@@ -330,7 +334,7 @@ BEGIN
         -- SUBMITTED with NO evidence: BR-07 blocks approval, so the ward sees the
         -- blocker banner and only REVIEW/REJECT/REQUEST_INFO.
         (3, 3, 'FIXED_STOREFRONT', N'Quán chè Đỗ Mai',
-            N'88 Điện Biên Phủ, Phường Thanh Khê Đông, Đà Nẵng', 16.061200, 108.201400, 11,
+            N'88 Điện Biên Phủ, Phường Thanh Khê Đông, Đà Nẵng', 16.066229, 108.205945, 11,
             'SUBMITTED', 1, NULL, NULL, NULL, DATEADD(DAY, -1, SYSUTCDATETIME())),
 
         -- UNDER_REVIEW: an officer has claimed the case.
@@ -361,7 +365,7 @@ BEGIN
 
         -- A second APPROVED registration for vendor 1 (BR-06 allows several).
         (9, 1, 'FIXED_STOREFRONT', N'Bún chả Hải Châu',
-            N'45 Nguyễn Văn Linh, Phường Hải Châu 1, Đà Nẵng', 16.047141, 108.215680, 10,
+            N'45 Nguyễn Văn Linh, Phường Hải Châu 1, Đà Nẵng', 16.061026, 108.218740, 10,
             'APPROVED', 0, 2, N'Đủ điều kiện kinh doanh cố định trên vỉa hè.',
             DATEADD(DAY, -11, SYSUTCDATETIME()), DATEADD(DAY, -15, SYSUTCDATETIME()));
 
@@ -675,16 +679,16 @@ BEGIN
          slot_status, source, proposed_by_registration_id, proposal_review_status,
          proposal_photo_url, proposal_reviewed_by, proposal_review_reason, created_at)
     VALUES
-        (28, 'VP-1-20260101000000001', 1, 16.047310, 108.216400, 2.00, 2.50,
+        (28, 'VP-1-20260101000000001', 1, 16.061195, 108.219460, 2.00, 2.50,
             'AVAILABLE', 'VENDOR_PROPOSED', 1, 'PENDING',
             '/api/uploads/evidence/5/0000000000000000000000000000ab01.jpg', NULL, NULL,
             DATEADD(DAY, -1, SYSUTCDATETIME())),
-        (29, 'VP-1-20260101000000002', 1, 16.047330, 108.216550, 2.00, 2.50,
+        (29, 'VP-1-20260101000000002', 1, 16.061215, 108.219610, 2.00, 2.50,
             'AVAILABLE', 'VENDOR_PROPOSED', 10, 'APPROVED',
             '/api/uploads/evidence/6/0000000000000000000000000000ab04.jpg', 2,
             N'Vị trí phù hợp quy hoạch, đủ 1,5 m lối đi bộ.',
             DATEADD(DAY, -9, SYSUTCDATETIME())),
-        (30, 'VP-1-20260101000000003', 1, 16.047290, 108.214950, 2.00, 2.50,
+        (30, 'VP-1-20260101000000003', 1, 16.061175, 108.218010, 2.00, 2.50,
             'AVAILABLE', 'VENDOR_PROPOSED', 10, 'REJECTED',
             '/api/uploads/evidence/6/0000000000000000000000000000ab04.jpg', 2,
             N'Vị trí nằm trong hành lang an toàn của trạm biến áp.',
@@ -745,9 +749,9 @@ BEGIN
          released_contract_id, requested_new_slot_id, change_status, conflict_resolution_note,
          reviewed_by, reviewed_at, created_at)
     VALUES
-        (1, 1, N'200 Hoàng Diệu, Phường Hải Châu 1, Đà Nẵng', 16.069500, 108.222100,
+        (1, 1, N'200 Hoàng Diệu, Phường Hải Châu 1, Đà Nẵng', 16.059417, 108.217017,
             1, 21, 'PENDING', NULL, NULL, NULL, DATEADD(DAY, -2, SYSUTCDATETIME())),
-        (2, 9, N'204 Hoàng Diệu, Phường Hải Châu 1, Đà Nẵng', 16.069520, 108.222130,
+        (2, 9, N'204 Hoàng Diệu, Phường Hải Châu 1, Đà Nẵng', 16.059437, 108.217047,
             2, 21, 'UNDER_REVIEW', N'Xếp hàng chờ theo thứ tự nộp hồ sơ, ưu tiên hồ sơ nộp trước.',
             2, DATEADD(DAY, -1, SYSUTCDATETIME()), DATEADD(DAY, -1, SYSUTCDATETIME()));
     SET IDENTITY_INSERT AddressChangeRequests OFF;
@@ -785,17 +789,19 @@ GO
 IF NOT EXISTS (SELECT 1 FROM PermitScanLogs)
     INSERT INTO PermitScanLogs (permit_id, qr_payload, scanned_by, scan_context, scan_result, latitude, longitude, scanned_at)
     VALUES
-        (1, 'SEED-PERMIT-CONTRACT-1-DO-NOT-SCAN', 2,    'WARD_INSPECTION', 'VALID', 16.047052, 108.214703, DATEADD(DAY, -20, SYSUTCDATETIME())),
-        (1, 'SEED-PERMIT-CONTRACT-1-DO-NOT-SCAN', 2,    'WARD_INSPECTION', 'VALID', 16.047049, 108.214698, DATEADD(DAY,  -9, SYSUTCDATETIME())),
-        (1, 'SEED-PERMIT-CONTRACT-1-DO-NOT-SCAN', 2,    'WARD_INSPECTION', 'VALID', 16.047900, 108.214700, DATEADD(DAY,  -2, SYSUTCDATETIME())),
-        (2, 'SEED-PERMIT-CONTRACT-2-DO-NOT-SCAN', 2,    'WARD_INSPECTION', 'VALID', 16.047143, 108.215678, DATEADD(DAY,  -5, SYSUTCDATETIME())),
+        (1, 'SEED-PERMIT-CONTRACT-1-DO-NOT-SCAN', 2,    'WARD_INSPECTION', 'VALID', 16.060937, 108.217763, DATEADD(DAY, -20, SYSUTCDATETIME())),
+        (1, 'SEED-PERMIT-CONTRACT-1-DO-NOT-SCAN', 2,    'WARD_INSPECTION', 'VALID', 16.060934, 108.217758, DATEADD(DAY,  -9, SYSUTCDATETIME())),
+        (1, 'SEED-PERMIT-CONTRACT-1-DO-NOT-SCAN', 2,    'WARD_INSPECTION', 'VALID', 16.061785, 108.217760, DATEADD(DAY,  -2, SYSUTCDATETIME())),
+        (2, 'SEED-PERMIT-CONTRACT-2-DO-NOT-SCAN', 2,    'WARD_INSPECTION', 'VALID', 16.061028, 108.218738, DATEADD(DAY,  -5, SYSUTCDATETIME())),
         (2, 'SEED-PERMIT-CONTRACT-2-DO-NOT-SCAN', 9,    'PUBLIC_CHECK',    'VALID', NULL,      NULL,       DATEADD(DAY,  -1, SYSUTCDATETIME())),
         (NULL, 'FORGED-QR-DEMO-0001',             NULL, 'PUBLIC_CHECK',    'NOT_FOUND', NULL,  NULL,       DATEADD(DAY,  -1, SYSUTCDATETIME()));
 GO
 
--- WARD-12 violations. 1 awaits a sanction, 2 has an unpaid penalty, 3 and 4 have no identified
--- offender (a penalty cannot exist yet), 5 has a paid penalty.
+/* ============================================================
    8. VIOLATIONS, PENALTIES AND PAYMENTS (WARD-12, FEE-01/04/05, SYS-03/04/05)
+
+   1 has a paid penalty, 2 an unpaid one, 3 a waived one; 4 has no identified
+   offender, so it cannot have a penalty at all.
 
    Contracts 1 and 2 already carry a hand-written fee schedule, which makes them
    useful for reading screens but useless for exercising SYS-03: regenerating a
@@ -849,18 +855,6 @@ BEGIN
     SET IDENTITY_INSERT Violations ON;
     INSERT INTO Violations
         (violation_id, contract_id, slot_id, vendor_id, violation_type, description,
-         recorded_by, source, source_report_id, recorded_at)
-    VALUES
-        (1, 1,    1,  1,    'OUTSIDE_SLOT',     N'Bày bán vượt ra ngoài ô khoảng 1 m.',
-            2, 'ON_SITE',         NULL, DATEADD(DAY,  -4, SYSUTCDATETIME())),
-        (2, 2,    8,  1,    'BLOCK_PEDESTRIAN', N'Xe đẩy và bàn ghế chiếm hết lối đi bộ.',
-            2, 'ON_SITE',         NULL, DATEADD(DAY, -12, SYSUTCDATETIME())),
-        (3, NULL, 12, NULL, 'NO_PERMIT',        N'Có người bày bán tại ô NVL-12 khi ô chưa cho thuê.',
-            2, 'ON_SITE',         NULL, DATEADD(DAY,  -3, SYSUTCDATETIME())),
-        (4, NULL, 15, NULL, 'NO_PERMIT',        N'Xác minh theo phản ánh của người dân về ô NVL-15.',
-            2, 'CUSTOMER_REPORT', 2,    DATEADD(DAY,  -1, SYSUTCDATETIME())),
-        (5, 1,    1,  1,    'OUTSIDE_HOURS',    N'Bán ngoài khung giờ cho phép của khu vực.',
-            2, 'ON_SITE',         NULL, DATEADD(DAY, -35, SYSUTCDATETIME()));
          evidence_url, recorded_by, source, source_report_id, recorded_at)
     VALUES
         (1, 1, 1, 1, 'OUTSIDE_SLOT',
@@ -881,27 +875,6 @@ GO
 
 -- WARD-13 penalties. The amount is the ward's rate at the time, frozen on the row (BR-33);
 -- the signer comes from the officer's account, as the sanction workflow does.
-IF NOT EXISTS (SELECT 1 FROM Penalties)
-BEGIN
-    DECLARE @signer NVARCHAR(150) = (SELECT full_name FROM UserAccounts WHERE user_id = 2);
-    DECLARE @title  NVARCHAR(100) = (SELECT sanction_authority_title FROM UserAccounts WHERE user_id = 2);
-
-    SET IDENTITY_INSERT Penalties ON;
-    INSERT INTO Penalties
-        (penalty_id, violation_id, penalty_schedule_id, amount, penalty_status, created_at, paid_at,
-         decision_number, signer_name, signer_title)
-    SELECT 1, 2, s.penalty_schedule_id, s.penalty_amount, 'UNPAID', DATEADD(DAY, -11, SYSUTCDATETIME()), NULL,
-           N'QĐXP-2026/0001', @signer, @title
-    FROM PenaltyFeeSchedules s
-    WHERE s.ward_unit_id = 10 AND s.violation_type = 'BLOCK_PEDESTRIAN' AND s.effective_to IS NULL;
-
-    INSERT INTO Penalties
-        (penalty_id, violation_id, penalty_schedule_id, amount, penalty_status, created_at, paid_at,
-         decision_number, signer_name, signer_title)
-    SELECT 2, 5, s.penalty_schedule_id, s.penalty_amount, 'PAID', DATEADD(DAY, -34, SYSUTCDATETIME()),
-           DATEADD(DAY, -33, SYSUTCDATETIME()), N'QĐXP-2026/0002', @signer, @title
-    FROM PenaltyFeeSchedules s
-    WHERE s.ward_unit_id = 10 AND s.violation_type = 'OUTSIDE_HOURS' AND s.effective_to IS NULL;
 /* BR-33: the amount is looked up from the ward's open rate and then frozen, so a
    later rate change never rewrites an issued penalty. */
 IF NOT EXISTS (SELECT 1 FROM Penalties)
