@@ -80,4 +80,30 @@ public interface IFinanceRepository
 
     /// <summary>FEE-03: one invoice, or null when it does not exist or belongs to someone else.</summary>
     Task<InvoiceRow?> GetInvoiceAsync(long vendorId, long invoiceId, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// FEE-02/SYS-06, run on a schedule (see FeeReminderHostedService): moves every PENDING
+    /// instalment whose due date has passed to OVERDUE (one notification each, at the moment of
+    /// transition), and sends a reminder for every PENDING instalment due within
+    /// <see cref="ReminderWindowDays"/> days that has not already been reminded today. Idempotent
+    /// per day — safe to run more than once without re-notifying the same instalment twice in one
+    /// day — because the schema has no dedicated "reminder sent" flag to add without a reviewed
+    /// migration (see README's migration policy).
+    /// </summary>
+    Task<FeeReminderSweepResult> RunFeeReminderSweepAsync(DateOnly today, CancellationToken cancellationToken);
+
+    /// <summary>FinanceHome top card: outstanding fee/penalty totals, overdue count, next due date.</summary>
+    Task<FinanceSummaryRow> GetSummaryAsync(long vendorId, CancellationToken cancellationToken);
+
+    /// <summary>FinanceHome's "Phí thuê ô" tab: every instalment across the vendor's contracts (current schedule only), optionally filtered by status.</summary>
+    Task<IReadOnlyList<FeeItemListRow>> ListFeeItemsAsync(long vendorId, string? status, CancellationToken cancellationToken);
+
+    /// <summary>FinanceHome's "Biên bản phạt" tab: every penalty against the vendor, optionally filtered by status.</summary>
+    Task<IReadOnlyList<PenaltyListRow>> ListPenaltiesAsync(long vendorId, string? status, CancellationToken cancellationToken);
+
+    /// <summary>FEE-05: the vendor's payment attempts (fee and penalty purposes only — Orders keeps its own), most recent first.</summary>
+    Task<IReadOnlyList<PaymentTransactionRow>> ListPaymentTransactionsAsync(long vendorId, CancellationToken cancellationToken);
+
+    /// <summary>FEE-05: violations recorded against the vendor, most recent first.</summary>
+    Task<IReadOnlyList<VendorViolationRow>> ListVendorViolationsAsync(long vendorId, CancellationToken cancellationToken);
 }

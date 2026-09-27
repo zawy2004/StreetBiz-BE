@@ -8,8 +8,8 @@ namespace StreetBiz.Infrastructure.Persistence.Repositories;
 /// <summary>
 /// WARD-14/WARD-15. Every aggregate here is its own small, separately-executed query rather than
 /// one combined projection: an earlier attempt at combining several LEFT JOIN chains into one
-/// Select (see the FEE-03 invoice list) hit a query EF Core could not translate. Ten simple round
-/// trips are well inside PER-01/PER-03's pilot budget (50 concurrent users, sub-second reads) and
+/// Select (see the FEE-03 invoice list) hit a query EF Core could not translate. A dozen simple
+/// round trips are well inside PER-01/PER-03's pilot budget (50 concurrent users, sub-second reads) and
 /// SCA-05 does not ask this to scale past one ward's data.
 ///
 /// A violation is scoped to a ward through its slot (violation.slot.zone.ward_unit_id): every
@@ -22,24 +22,27 @@ public sealed class WardReportRepository(StreetBizDbContext db) : IWardReportRep
     public async Task<CollectionReportRow> GetCollectionReportAsync(
         int wardUnitId, DateOnly from, DateOnly to, CancellationToken cancellationToken)
     {
-        var fromUtc = from.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc);
-        var toUtc = to.ToDateTime(TimeOnly.MaxValue, DateTimeKind.Utc);
+        // The period is Vietnamese calendar days: [00:00 on `from`, 00:00 the day after `to`) in
+        // Đà Nẵng time, expressed in UTC to match paid_at/issued_at. UTC midnights would push a
+        // payment made at 03:00 on the 1st into the previous month.
+        var fromUtc = BusinessCalendar.StartOfDayUtc(from);
+        var toExclusiveUtc = BusinessCalendar.StartOfDayUtc(to.AddDays(1));
 
         var feeCollected = await db.FeeScheduleItems.AsNoTracking()
             .Where(item => item.item_status == FeeItemStatuses.Paid
-                && item.paid_at >= fromUtc && item.paid_at <= toUtc
+                && item.paid_at >= fromUtc && item.paid_at < toExclusiveUtc
                 && item.fee_schedule.contract.slot.zone.ward_unit_id == wardUnitId)
             .SumAsync(item => (decimal?)item.amount, cancellationToken) ?? 0m;
 
-        var feePending = await SlotScopedFeeItems(wardUnitId, FeeItemStatuses.Pending)
+        var feePending = await OwedFeeItems(wardUnitId, FeeItemStatuses.Pending)
             .SumAsync(item => (decimal?)item.amount, cancellationToken) ?? 0m;
 
-        var feeOverdue = await SlotScopedFeeItems(wardUnitId, FeeItemStatuses.Overdue)
+        var feeOverdue = await OwedFeeItems(wardUnitId, FeeItemStatuses.Overdue)
             .SumAsync(item => (decimal?)item.amount, cancellationToken) ?? 0m;
 
         var penaltyCollected = await db.Penalties.AsNoTracking()
             .Where(penalty => penalty.penalty_status == PenaltyStatuses.Paid
-                && penalty.paid_at >= fromUtc && penalty.paid_at <= toUtc
+                && penalty.paid_at >= fromUtc && penalty.paid_at < toExclusiveUtc
                 && penalty.violation.slot != null && penalty.violation.slot.zone.ward_unit_id == wardUnitId)
             .SumAsync(penalty => (decimal?)penalty.amount, cancellationToken) ?? 0m;
 
@@ -47,7 +50,7 @@ public sealed class WardReportRepository(StreetBizDbContext db) : IWardReportRep
             .SumAsync(penalty => (decimal?)penalty.amount, cancellationToken) ?? 0m;
 
         var invoiceCount = await db.Invoices.AsNoTracking()
-            .Where(invoice => invoice.issued_at >= fromUtc && invoice.issued_at <= toUtc)
+            .Where(invoice => invoice.issued_at >= fromUtc && invoice.issued_at < toExclusiveUtc)
             .Where(invoice =>
                 (invoice.fee_item != null && invoice.fee_item.fee_schedule.contract.slot.zone.ward_unit_id == wardUnitId)
                 || (invoice.penalty != null && invoice.penalty.violation.slot != null
@@ -97,15 +100,16 @@ public sealed class WardReportRepository(StreetBizDbContext db) : IWardReportRep
                 && contract.contract_status == ContractStatuses.Active,
                 cancellationToken);
 
-        var feeRevenue = await SlotScopedFeeItems(wardUnitId, FeeItemStatuses.Paid)
+        var feeRevenue = await WardFeeItems(wardUnitId)
+            .Where(item => item.item_status == FeeItemStatuses.Paid)
             .SumAsync(item => (decimal?)item.amount, cancellationToken) ?? 0m;
         var penaltyRevenue = await SlotScopedPenalties(wardUnitId, PenaltyStatuses.Paid)
             .SumAsync(penalty => (decimal?)penalty.amount, cancellationToken) ?? 0m;
 
-        var feeOutstanding = await db.FeeScheduleItems.AsNoTracking()
-            .Where(item => item.item_status == FeeItemStatuses.Pending || item.item_status == FeeItemStatuses.Overdue)
-            .Where(item => item.fee_schedule.contract.slot.zone.ward_unit_id == wardUnitId)
-            .SumAsync(item => (decimal?)item.amount, cancellationToken) ?? 0m;
+        var feeOutstanding = (await OwedFeeItems(wardUnitId, FeeItemStatuses.Pending)
+                .SumAsync(item => (decimal?)item.amount, cancellationToken) ?? 0m)
+            + (await OwedFeeItems(wardUnitId, FeeItemStatuses.Overdue)
+                .SumAsync(item => (decimal?)item.amount, cancellationToken) ?? 0m);
         var penaltyOutstanding = await SlotScopedPenalties(wardUnitId, PenaltyStatuses.Unpaid)
             .SumAsync(penalty => (decimal?)penalty.amount, cancellationToken) ?? 0m;
 
@@ -126,9 +130,18 @@ public sealed class WardReportRepository(StreetBizDbContext db) : IWardReportRep
             openViolations);
     }
 
-    private IQueryable<ScaffoldedModels.FeeScheduleItem> SlotScopedFeeItems(int wardUnitId, string status) =>
+    private IQueryable<ScaffoldedModels.FeeScheduleItem> WardFeeItems(int wardUnitId) =>
         db.FeeScheduleItems.AsNoTracking()
-            .Where(item => item.item_status == status && item.fee_schedule.contract.slot.zone.ward_unit_id == wardUnitId);
+            .Where(item => item.fee_schedule.contract.slot.zone.ward_unit_id == wardUnitId);
+
+    /// <summary>
+    /// Instalments still owed. A superseded revision keeps its items as PENDING/OVERDUE (the
+    /// CHECK constraint has no "superseded" status), so counting them would bill the vendor twice
+    /// for the same period. Paid items are never filtered this way: money received stays revenue.
+    /// </summary>
+    private IQueryable<ScaffoldedModels.FeeScheduleItem> OwedFeeItems(int wardUnitId, string status) =>
+        WardFeeItems(wardUnitId)
+            .Where(item => item.item_status == status && item.fee_schedule.superseded_at == null);
 
     private IQueryable<ScaffoldedModels.Penalty> SlotScopedPenalties(int wardUnitId, string status) =>
         db.Penalties.AsNoTracking()

@@ -166,6 +166,25 @@ public sealed class FeeScheduleGenerationTests
         await act.Should().ThrowAsync<DomainRuleException>();
     }
 
+    [Theory]
+    [InlineData("EXPIRED")]
+    [InlineData("CANCELLED")]
+    [InlineData("REVOKED")]
+    public async Task A_contract_that_is_no_longer_active_is_never_billed_again(string status)
+    {
+        var finance = new Mock<IFinanceRepository>();
+        finance.Setup(repository => repository.GetFeeScheduleContextAsync(7, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Context(termDays: 90) with { ContractStatus = status });
+
+        var act = () => new GenerateFeeScheduleCommandHandler(finance.Object)
+            .Handle(new GenerateFeeScheduleCommand(7, 42), CancellationToken.None);
+
+        await act.Should().ThrowAsync<DomainRuleException>().WithMessage(FinanceMessages.ContractNotActive);
+        finance.Verify(repository => repository.ReplaceFeeScheduleAsync(
+            It.IsAny<long>(), It.IsAny<long>(), It.IsAny<decimal>(),
+            It.IsAny<IReadOnlyList<FeeInstalment>>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
     private static FeeScheduleContextRow Context(int termDays) => new(
         ContractId: 7,
         SlotId: 1,

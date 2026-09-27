@@ -5,7 +5,12 @@ using StreetBiz.Application.Common.Security;
 using StreetBiz.Application.DTOs.Finance;
 using StreetBiz.Application.Features.Finance.ConfirmSandboxPayment;
 using StreetBiz.Application.Features.Finance.GetInvoice;
+using StreetBiz.Application.Features.Finance.GetSummary;
+using StreetBiz.Application.Features.Finance.ListFeeItems;
 using StreetBiz.Application.Features.Finance.ListInvoices;
+using StreetBiz.Application.Features.Finance.ListPayments;
+using StreetBiz.Application.Features.Finance.ListPenalties;
+using StreetBiz.Application.Features.Finance.ListViolations;
 using StreetBiz.Application.Features.Finance.PayFee;
 using StreetBiz.Application.Features.Finance.PayPenalty;
 
@@ -25,6 +30,35 @@ public sealed class FinanceController(
 {
     private bool SandboxEnabled =>
         environment.IsDevelopment() && configuration.GetValue<bool>("Payments:SandboxEnabled");
+
+    /// <summary>FinanceHome's top summary card.</summary>
+    [HttpGet("summary")]
+    public async Task<ActionResult<FinanceSummaryDto>> Summary(CancellationToken cancellationToken) =>
+        Ok(await sender.Send(new GetFinanceSummaryQuery(), cancellationToken));
+
+    /// <summary>FinanceHome's "Phí thuê ô" tab, optionally filtered by status (PENDING/OVERDUE/PAID).</summary>
+    [HttpGet("fees")]
+    public async Task<ActionResult<IReadOnlyList<FeeItemDto>>> ListFees(
+        [FromQuery] string? status, CancellationToken cancellationToken) =>
+        Ok(await sender.Send(new ListFeeItemsQuery(status), cancellationToken));
+
+    /// <summary>FinanceHome's "Biên bản phạt" tab, optionally filtered by status (UNPAID/PAID/WAIVED/CANCELLED).</summary>
+    [HttpGet("penalties")]
+    public async Task<ActionResult<IReadOnlyList<PenaltyListDto>>> ListPenalties(
+        [FromQuery] string? status, CancellationToken cancellationToken) =>
+        Ok(await sender.Send(new ListPenaltiesQuery(status), cancellationToken));
+
+    /// <summary>FEE-05: the caller's fee/penalty payment attempts, most recent first.</summary>
+    [HttpGet("payments")]
+    public async Task<ActionResult<IReadOnlyList<PaymentTransactionDto>>> ListPayments(
+        CancellationToken cancellationToken) =>
+        Ok(await sender.Send(new ListPaymentTransactionsQuery(), cancellationToken));
+
+    /// <summary>FEE-05: violations recorded against the caller, most recent first.</summary>
+    [HttpGet("violations")]
+    public async Task<ActionResult<IReadOnlyList<VendorViolationDto>>> ListViolations(
+        CancellationToken cancellationToken) =>
+        Ok(await sender.Send(new ListVendorViolationsQuery(), cancellationToken));
 
     /// <summary>FEE-01: open a checkout for one fee instalment.</summary>
     [HttpPost("fees/{feeItemId:long}/checkout")]
