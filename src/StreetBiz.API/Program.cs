@@ -116,6 +116,7 @@ app.UseRateLimiter();
 
 app.MapControllers();
 app.MapWardApi();
+app.MapFinanceDevApi();
 app.MapHub<OrderHub>("/hubs/orders");
 
 app.MapHealthChecks(

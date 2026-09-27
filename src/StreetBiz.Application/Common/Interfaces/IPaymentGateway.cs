@@ -1,8 +1,14 @@
 namespace StreetBiz.Application.Common.Interfaces;
 
+/// <summary>
+/// What the gateway needs to start a checkout, for any payment purpose (RENTAL_FEE, PENALTY or
+/// ORDER). <c>ReferenceId</c>/<c>ReferenceCode</c> identify the thing being paid for to the
+/// vendor/customer — an order id/code today, a fee item or penalty id in the finance module —
+/// and are only ever used to build a human-facing checkout URL, never to look anything up.
+/// </summary>
 public sealed record PaymentGatewayCheckoutRequest(
-    long OrderId,
-    string OrderCode,
+    long ReferenceId,
+    string ReferenceCode,
     long TransactionId,
     string IdempotencyKey,
     string Provider,
