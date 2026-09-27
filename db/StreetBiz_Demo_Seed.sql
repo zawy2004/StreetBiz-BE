@@ -797,9 +797,11 @@ IF NOT EXISTS (SELECT 1 FROM PermitScanLogs)
         (NULL, 'FORGED-QR-DEMO-0001',             NULL, 'PUBLIC_CHECK',    'NOT_FOUND', NULL,  NULL,       DATEADD(DAY,  -1, SYSUTCDATETIME()));
 GO
 
--- WARD-12 violations. 1 awaits a sanction, 2 has an unpaid penalty, 3 and 4 have no identified
--- offender (a penalty cannot exist yet), 5 has a paid penalty.
+/* ============================================================
    8. VIOLATIONS, PENALTIES AND PAYMENTS (WARD-12, FEE-01/04/05, SYS-03/04/05)
+
+   1 has a paid penalty, 2 an unpaid one, 3 a waived one; 4 has no identified
+   offender, so it cannot have a penalty at all.
 
    Contracts 1 and 2 already carry a hand-written fee schedule, which makes them
    useful for reading screens but useless for exercising SYS-03: regenerating a
@@ -853,18 +855,6 @@ BEGIN
     SET IDENTITY_INSERT Violations ON;
     INSERT INTO Violations
         (violation_id, contract_id, slot_id, vendor_id, violation_type, description,
-         recorded_by, source, source_report_id, recorded_at)
-    VALUES
-        (1, 1,    1,  1,    'OUTSIDE_SLOT',     N'Bày bán vượt ra ngoài ô khoảng 1 m.',
-            2, 'ON_SITE',         NULL, DATEADD(DAY,  -4, SYSUTCDATETIME())),
-        (2, 2,    8,  1,    'BLOCK_PEDESTRIAN', N'Xe đẩy và bàn ghế chiếm hết lối đi bộ.',
-            2, 'ON_SITE',         NULL, DATEADD(DAY, -12, SYSUTCDATETIME())),
-        (3, NULL, 12, NULL, 'NO_PERMIT',        N'Có người bày bán tại ô NVL-12 khi ô chưa cho thuê.',
-            2, 'ON_SITE',         NULL, DATEADD(DAY,  -3, SYSUTCDATETIME())),
-        (4, NULL, 15, NULL, 'NO_PERMIT',        N'Xác minh theo phản ánh của người dân về ô NVL-15.',
-            2, 'CUSTOMER_REPORT', 2,    DATEADD(DAY,  -1, SYSUTCDATETIME())),
-        (5, 1,    1,  1,    'OUTSIDE_HOURS',    N'Bán ngoài khung giờ cho phép của khu vực.',
-            2, 'ON_SITE',         NULL, DATEADD(DAY, -35, SYSUTCDATETIME()));
          evidence_url, recorded_by, source, source_report_id, recorded_at)
     VALUES
         (1, 1, 1, 1, 'OUTSIDE_SLOT',
@@ -885,27 +875,6 @@ GO
 
 -- WARD-13 penalties. The amount is the ward's rate at the time, frozen on the row (BR-33);
 -- the signer comes from the officer's account, as the sanction workflow does.
-IF NOT EXISTS (SELECT 1 FROM Penalties)
-BEGIN
-    DECLARE @signer NVARCHAR(150) = (SELECT full_name FROM UserAccounts WHERE user_id = 2);
-    DECLARE @title  NVARCHAR(100) = (SELECT sanction_authority_title FROM UserAccounts WHERE user_id = 2);
-
-    SET IDENTITY_INSERT Penalties ON;
-    INSERT INTO Penalties
-        (penalty_id, violation_id, penalty_schedule_id, amount, penalty_status, created_at, paid_at,
-         decision_number, signer_name, signer_title)
-    SELECT 1, 2, s.penalty_schedule_id, s.penalty_amount, 'UNPAID', DATEADD(DAY, -11, SYSUTCDATETIME()), NULL,
-           N'QĐXP-2026/0001', @signer, @title
-    FROM PenaltyFeeSchedules s
-    WHERE s.ward_unit_id = 10 AND s.violation_type = 'BLOCK_PEDESTRIAN' AND s.effective_to IS NULL;
-
-    INSERT INTO Penalties
-        (penalty_id, violation_id, penalty_schedule_id, amount, penalty_status, created_at, paid_at,
-         decision_number, signer_name, signer_title)
-    SELECT 2, 5, s.penalty_schedule_id, s.penalty_amount, 'PAID', DATEADD(DAY, -34, SYSUTCDATETIME()),
-           DATEADD(DAY, -33, SYSUTCDATETIME()), N'QĐXP-2026/0002', @signer, @title
-    FROM PenaltyFeeSchedules s
-    WHERE s.ward_unit_id = 10 AND s.violation_type = 'OUTSIDE_HOURS' AND s.effective_to IS NULL;
 /* BR-33: the amount is looked up from the ward's open rate and then frozen, so a
    later rate change never rewrites an issued penalty. */
 IF NOT EXISTS (SELECT 1 FROM Penalties)
