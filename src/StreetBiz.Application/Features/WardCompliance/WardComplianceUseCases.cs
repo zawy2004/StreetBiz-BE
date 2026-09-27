@@ -377,7 +377,9 @@ public sealed class ExecuteWardPermitActionCommandHandler(
 #endregion
 
 #region Violations & Sanctions Use Cases
-public sealed record ListWardPenaltySchedulesQuery : IRequest<IReadOnlyList<PenaltyScheduleItemDto>>;
+/// <summary>Rates in force on <paramref name="AsOf"/> (default: today, Vietnam time). Pass the violation
+/// date when sanctioning: the rate that applies is the one in force when the violation happened.</summary>
+public sealed record ListWardPenaltySchedulesQuery(DateOnly? AsOf = null) : IRequest<IReadOnlyList<PenaltyScheduleItemDto>>;
 
 public sealed class ListWardPenaltySchedulesQueryHandler(
     IWardActorContext actorContext,
@@ -389,7 +391,7 @@ public sealed class ListWardPenaltySchedulesQueryHandler(
         CancellationToken cancellationToken)
     {
         var actor = await actorContext.RequireAsync(cancellationToken);
-        return await complianceService.ListPenaltySchedulesAsync(actor, cancellationToken);
+        return await complianceService.ListPenaltySchedulesAsync(actor, request.AsOf, cancellationToken);
     }
 }
 

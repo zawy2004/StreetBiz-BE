@@ -116,8 +116,9 @@ public sealed class WardComplianceController(ISender sender) : ControllerBase
     #region Violations & Sanctions
     [HttpGet("penalty-schedules")]
     public async Task<ActionResult<IReadOnlyList<PenaltyScheduleItemDto>>> ListPenaltySchedules(
+        [FromQuery] DateOnly? asOf,
         CancellationToken ct) =>
-        Ok(await sender.Send(new ListWardPenaltySchedulesQuery(), ct));
+        Ok(await sender.Send(new ListWardPenaltySchedulesQuery(asOf), ct));
 
     [HttpGet("violations")]
     public async Task<ActionResult<IReadOnlyList<WardViolationListItemDto>>> ListViolations(

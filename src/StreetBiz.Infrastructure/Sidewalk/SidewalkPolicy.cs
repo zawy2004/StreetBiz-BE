@@ -19,6 +19,21 @@ public sealed class SidewalkSettings
 
     /// <summary>How many slots one registration may hold at the same time.</summary>
     public int MaxSlotHoldsPerRegistration { get; set; } = 3;
+
+    /// <summary>
+    /// WARD-01 clearance warnings between a slot and street features. Off by default: no
+    /// regulation fixing these distances for vendor stalls was found, so they are operational
+    /// values the ward confirms before enabling, never shown as a legal standard. Warnings only;
+    /// the hard block comes from StreetFeatures.blocks_business.
+    /// </summary>
+    public bool FeatureClearanceEnabled { get; set; }
+
+    public Dictionary<string, double> FeatureClearanceMeters { get; set; } = new()
+    {
+        ["HYDRANT"] = 5,
+        ["BUS_STOP"] = 5,
+        ["TRANSFORMER"] = 3,
+    };
 }
 
 public sealed class SidewalkPolicy(IOptions<SidewalkSettings> options) : ISidewalkPolicy

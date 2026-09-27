@@ -170,6 +170,13 @@ BEGIN
 END;
 GO
 
+-- WARD-03: two base types duplicate a type that carries a legal citation.
+-- NO_PERMIT -> UNAUTHORIZED_BUSINESS_USE (NĐ 168/2024 Đ12 k5), WASTE_DISPOSAL -> HYGIENE_LITTERING
+-- (NĐ 45/2022 Đ25). Retired, not deleted: past violations keep referencing them.
+UPDATE ViolationTypes SET is_active = 0
+WHERE violation_type_code IN ('NO_PERMIT', 'WASTE_DISPOSAL') AND is_active = 1;
+GO
+
 -- WARD-13: a sanction decision is signed by the ward chairman, so the officer's title is a
 -- fixed, admin-configured column (UserAccounts.sanction_authority_title), never typed on
 -- the form. The demo officers are given the title of their own ward.
