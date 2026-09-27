@@ -417,7 +417,7 @@ public interface IWardComplianceService
     Task<bool> ExecutePermitActionAsync(WardActor actor, long permitId, WardPermitActionRequest request, CancellationToken ct);
 
     // Violations & Sanctions
-    Task<IReadOnlyList<PenaltyScheduleItemDto>> ListPenaltySchedulesAsync(WardActor actor, CancellationToken ct);
+    Task<IReadOnlyList<PenaltyScheduleItemDto>> ListPenaltySchedulesAsync(WardActor actor, DateOnly? asOf, CancellationToken ct);
     Task<IReadOnlyList<WardViolationListItemDto>> ListViolationsAsync(WardActor actor, string? status, int page, CancellationToken ct);
     Task<WardViolationDetailDto> GetViolationDetailAsync(WardActor actor, long violationId, CancellationToken ct);
     Task<WardViolationDetailDto> RecordViolationAsync(WardActor actor, RecordWardViolationRequest request, CancellationToken ct);

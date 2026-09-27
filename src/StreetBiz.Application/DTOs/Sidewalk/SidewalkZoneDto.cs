@@ -57,4 +57,16 @@ public static class SlotHoldMapper
 /// <summary>One priced line of a quote. <c>Kind</c> is RENT (price_per_day x days) or FEE (a zone fee component).</summary>
 public sealed record FeeQuoteLineDto(string Kind, string? Label, string CalcBasis, decimal UnitAmount, int Quantity, decimal Amount);
 
-public sealed record FeeQuoteDto(long SlotId, int TermDays, IReadOnlyList<FeeQuoteLineDto> Lines, decimal Total);
+/// <summary>
+/// <c>BaseFee</c> (price_per_day x days) is what approval bills today (WARD-08/09). <c>ReferenceFees</c>
+/// are the zone fee components, shown for transparency but not yet charged on the contract, which
+/// <c>IsReferenceOnly</c> flags. <c>Total</c> keeps its original meaning: rent plus every component.
+/// </summary>
+public sealed record FeeQuoteDto(
+    long SlotId,
+    int TermDays,
+    IReadOnlyList<FeeQuoteLineDto> Lines,
+    decimal Total,
+    decimal BaseFee,
+    decimal ReferenceFees,
+    bool IsReferenceOnly);
