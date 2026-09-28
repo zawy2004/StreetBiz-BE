@@ -79,8 +79,25 @@ builder.Services.AddRateLimiter(options =>
                 Window = TimeSpan.FromMinutes(1),
                 QueueLimit = 0,
             }));
+
+    // CHAT-02: the only endpoint where one account writes rows straight into
+    // another account's inbox, so it is the one worth capping. The limit is set
+    // well above real typing - a person sends a handful of lines a minute, a
+    // script sends thousands.
+    options.AddPolicy("ChatSend", context =>
+        System.Threading.RateLimiting.RateLimitPartition.GetFixedWindowLimiter(
+            context.User.FindFirstValue("sub")
+            ?? context.Connection.RemoteIpAddress?.ToString()
+            ?? "anonymous",
+            _ => new System.Threading.RateLimiting.FixedWindowRateLimiterOptions
+            {
+                PermitLimit = 30,
+                Window = TimeSpan.FromMinutes(1),
+                QueueLimit = 0,
+            }));
 });
 builder.Services.AddSingleton<IOrderRealtimePublisher, OrderRealtimePublisher>();
+builder.Services.AddSingleton<IChatRealtimePublisher, ChatRealtimePublisher>();
 builder.Services
     .AddHealthChecks()
     .AddSqlServer(
@@ -118,6 +135,7 @@ app.MapControllers();
 app.MapWardApi();
 app.MapFinanceDevApi();
 app.MapHub<OrderHub>("/hubs/orders");
+app.MapHub<ChatHub>("/hubs/chat");
 
 app.MapHealthChecks(
     "/health",

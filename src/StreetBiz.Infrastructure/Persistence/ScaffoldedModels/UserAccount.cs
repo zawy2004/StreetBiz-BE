@@ -37,6 +37,10 @@ public partial class UserAccount
 
     public virtual ICollection<BusinessRegistration> BusinessRegistrations { get; set; } = new List<BusinessRegistration>();
 
+    public virtual ICollection<ChatConversation> ChatConversations { get; set; } = new List<ChatConversation>();
+
+    public virtual ICollection<ChatMessage> ChatMessages { get; set; } = new List<ChatMessage>();
+
     public virtual ICollection<Complaint> ComplaintUserAccounts { get; set; } = new List<Complaint>();
 
     public virtual ICollection<Complaint> Complaintcustomer_users { get; set; } = new List<Complaint>();

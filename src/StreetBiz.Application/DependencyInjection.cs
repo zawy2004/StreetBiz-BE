@@ -3,6 +3,7 @@ using MediatR;
 using Microsoft.Extensions.DependencyInjection;
 using StreetBiz.Application.Common.Behaviors;
 using StreetBiz.Application.Common.Security;
+using StreetBiz.Application.Features.Chat;
 using StreetBiz.Application.Features.WardSlots;
 
 namespace StreetBiz.Application;
@@ -22,6 +23,7 @@ public static class DependencyInjection
         services.AddScoped<IAuthTokenIssuer, AuthTokenIssuer>();
         services.AddScoped<IVendorContext, VendorContext>();
         services.AddScoped<ICustomerContext, CustomerContext>();
+        services.AddScoped<IChatParticipantResolver, ChatParticipantResolver>();
         services.AddScoped<IPlatformAdminContext, PlatformAdminContext>();
         services.AddScoped<IWardActorResolver, WardActorResolver>();
         services.AddScoped<IWardActorContext, WardActorContext>();

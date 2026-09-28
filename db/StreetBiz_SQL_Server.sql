@@ -88,6 +88,9 @@
    The API never runs schema changes (docs/database.md).
 
    CHANGE LOG (newest first)
+     2026-09-27  Buyer/seller chat: ChatConversations and ChatMessages in section 7,
+                 after Storefronts. One thread per (storefront, customer), so a buyer
+                 can ask about a stall before any order exists.
      2026-09-24  Indexes for the three UPDLOCK/HOLDLOCK triggers (RentalContracts.slot_id,
                  FeeScheduleItems.fee_schedule_id, RefundTransactions.payment_transaction_id)
                  so they lock rows instead of whole tables, plus hot foreign keys: ward queue
@@ -1687,6 +1690,57 @@ BEGIN
     END
 END;
 GO
+
+-- CHAT-01/02: direct messages between one customer and one storefront's seller.
+--
+-- The thread is keyed on (storefront, customer) rather than on an order: buyers
+-- ask whether a dish is still available before they order anything, so a thread
+-- has to exist with no order and outlive every order that follows it. A vendor
+-- can run several storefronts, and a buyer talking to two of them is holding two
+-- separate conversations, which is why this hangs off Storefronts and not Vendors.
+CREATE TABLE ChatConversations (
+    conversation_id        BIGINT IDENTITY(1,1)  PRIMARY KEY,
+    storefront_id          BIGINT                NOT NULL,
+    customer_user_id       BIGINT                NOT NULL,
+    created_at             DATETIME2             NOT NULL DEFAULT SYSUTCDATETIME(),
+    -- Denormalised from ChatMessages so both inboxes can be ordered without
+    -- touching the message table; NULL until the first message is sent.
+    last_message_at        DATETIME2             NULL,
+    CONSTRAINT UQ_ChatConversations_OnePerPair
+        UNIQUE (storefront_id, customer_user_id),
+    CONSTRAINT FK_ChatConversations_Storefront
+        FOREIGN KEY (storefront_id) REFERENCES Storefronts(storefront_id),
+    CONSTRAINT FK_ChatConversations_Customer
+        FOREIGN KEY (customer_user_id) REFERENCES UserAccounts(user_id)
+);
+CREATE INDEX IX_ChatConversations_Customer
+    ON ChatConversations(customer_user_id, last_message_at DESC);
+CREATE INDEX IX_ChatConversations_Storefront
+    ON ChatConversations(storefront_id, last_message_at DESC);
+
+CREATE TABLE ChatMessages (
+    message_id             BIGINT IDENTITY(1,1)  PRIMARY KEY,
+    conversation_id        BIGINT                NOT NULL,
+    sender_user_id         BIGINT                NOT NULL,
+    body                   NVARCHAR(2000)        NOT NULL,
+    sent_at                DATETIME2             NOT NULL DEFAULT SYSUTCDATETIME(),
+    -- A thread has exactly two participants, so every message has exactly one
+    -- recipient and one timestamp is enough to drive unread counts for both
+    -- sides: unread = messages the other party sent that still have NULL here.
+    read_at                DATETIME2             NULL,
+    CONSTRAINT CK_ChatMessages_BodyNotBlank
+        CHECK (LEN(LTRIM(RTRIM(body))) > 0),
+    CONSTRAINT FK_ChatMessages_Conversation
+        FOREIGN KEY (conversation_id) REFERENCES ChatConversations(conversation_id),
+    CONSTRAINT FK_ChatMessages_Sender
+        FOREIGN KEY (sender_user_id) REFERENCES UserAccounts(user_id)
+);
+-- Keyed on message_id, not sent_at: identity order is insertion order, and it is
+-- what both reading a page and paging backwards (WHERE message_id < @before)
+-- order by, so this index answers them without a sort.
+CREATE INDEX IX_ChatMessages_Thread ON ChatMessages(conversation_id, message_id);
+CREATE INDEX IX_ChatMessages_Unread
+    ON ChatMessages(conversation_id, read_at) INCLUDE (sender_user_id);
 
 -- REV-03 / ADM-03/04: content moderation queue for Phase 2 marketplace content
 CREATE TABLE ReportedContent (

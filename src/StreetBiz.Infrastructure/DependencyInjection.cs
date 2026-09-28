@@ -79,6 +79,7 @@ public static class DependencyInjection
         services.AddScoped<IAddressChangeRequestRepository, AddressChangeRequestRepository>();
         services.AddScoped<ISlotTransferRequestRepository, SlotTransferRequestRepository>();
         services.AddScoped<ICommunityVendorRepository, CommunityVendorRepository>();
+        services.AddScoped<IChatRepository, ChatRepository>();
         services.AddScoped<IPlatformAdministrationRepository, PlatformAdministrationRepository>();
         services.AddScoped<IFinanceRepository, FinanceRepository>();
         services.AddScoped<IWardReportRepository, WardReportRepository>();
