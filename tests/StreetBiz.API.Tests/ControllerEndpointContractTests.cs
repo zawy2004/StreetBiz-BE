@@ -132,6 +132,16 @@ public sealed class ControllerEndpointContractTests
         "POST /api/vendor/slot-transfers/{transferId}/decline",
         "POST /api/uploads/evidence",
         "GET /api/uploads/evidence/{ownerUserId}/{fileName}",
+        "POST /api/uploads/menu-images",
+        "GET /api/uploads/menu-images/{ownerUserId}/{fileName}",
+        "GET /api/vendor/food-safety",
+        "POST /api/vendor/food-safety",
+        "GET /api/vendor/food-safety/{id}",
+        "PUT /api/vendor/food-safety/{id}",
+        "POST /api/vendor/food-safety/{id}/withdraw",
+        "GET /api/ward/food-safety",
+        "GET /api/ward/food-safety/{id}",
+        "POST /api/ward/food-safety/{id}/decision",
         "POST /api/vendor/registrations",
         "GET /api/vendor/registrations",
         "GET /api/vendor/registrations/{registrationId}",
@@ -300,6 +310,15 @@ public sealed class ControllerEndpointContractTests
         (HttpMethod.Post, "/api/vendor/slot-transfers/1/decline"),
         (HttpMethod.Post, "/api/uploads/evidence"),
         (HttpMethod.Get, "/api/uploads/evidence/1/missing.pdf"),
+        (HttpMethod.Post, "/api/uploads/menu-images"),
+        (HttpMethod.Get, "/api/vendor/food-safety"),
+        (HttpMethod.Post, "/api/vendor/food-safety"),
+        (HttpMethod.Get, "/api/vendor/food-safety/1"),
+        (HttpMethod.Put, "/api/vendor/food-safety/1"),
+        (HttpMethod.Post, "/api/vendor/food-safety/1/withdraw"),
+        (HttpMethod.Get, "/api/ward/food-safety"),
+        (HttpMethod.Get, "/api/ward/food-safety/1"),
+        (HttpMethod.Post, "/api/ward/food-safety/1/decision"),
         (HttpMethod.Post, "/api/vendor/registrations"),
         (HttpMethod.Get, "/api/vendor/registrations"),
         (HttpMethod.Get, "/api/vendor/registrations/1"),
@@ -399,7 +418,7 @@ public sealed class ControllerEndpointContractTests
         foreach (var endpoint in ProtectedEndpoints)
         {
             using var request = new HttpRequestMessage(endpoint.Method, endpoint.Path);
-            if (endpoint.Path == "/api/uploads/evidence")
+            if (endpoint.Path is "/api/uploads/evidence" or "/api/uploads/menu-images")
             {
                 request.Content = new MultipartFormDataContent();
             }

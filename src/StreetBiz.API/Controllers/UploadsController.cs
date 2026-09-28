@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Mvc;
 using StreetBiz.Application.Common.Exceptions;
 using StreetBiz.Application.Common.Interfaces;
 using StreetBiz.Application.Common.Security;
+using StreetBiz.Application.Features.FoodSafety;
 using StreetBiz.Application.Features.WardSlots;
 
 namespace StreetBiz.API.Controllers;
@@ -18,7 +19,8 @@ public sealed class UploadsController(
     IFileStorage storage,
     ICurrentUser currentUser,
     IWardActorResolver wardActors,
-    IBusinessRegistrationRepository registrations) : ControllerBase
+    IBusinessRegistrationRepository registrations,
+    IFoodSafetyService foodSafety) : ControllerBase
 {
 
     /// <summary>Uploads one evidence file (JPG/PNG/WEBP/PDF, max 5 MB) and returns its URL.</summary>
@@ -110,9 +112,14 @@ public sealed class UploadsController(
         }
 
         var actor = await wardActors.ResolveAsync(userId, cancellationToken);
-        return actor is not null
-            && await registrations.EvidenceBelongsToWardAsync(
-                ownerUserId, EvidenceFiles.BuildUrl(ownerUserId, fileName), actor.WardId, cancellationToken);
+        if (actor is null)
+        {
+            return false;
+        }
+
+        var url = EvidenceFiles.BuildUrl(ownerUserId, fileName);
+        return await registrations.EvidenceBelongsToWardAsync(ownerUserId, url, actor.WardId, cancellationToken)
+            || await foodSafety.EvidenceBelongsToWardAsync(url, actor.WardId, cancellationToken);
     }
 
     private static ValidationAppException FileError(string message) =>

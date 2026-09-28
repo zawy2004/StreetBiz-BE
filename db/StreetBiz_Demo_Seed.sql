@@ -109,17 +109,18 @@ GO
 IF NOT EXISTS (SELECT 1 FROM FoodCategories)
 BEGIN
     SET IDENTITY_INSERT FoodCategories ON;
-    INSERT INTO FoodCategories (category_id, category_name, created_by) VALUES
-        ( 1, N'Món nước',        1),
-        ( 2, N'Cơm - Bún - Phở', 1),
-        ( 3, N'Bánh mì - Xôi',   1),
-        ( 4, N'Đồ uống',         1),
-        ( 5, N'Ăn vặt',          1),
-        ( 6, N'Chè - Tráng miệng', 1),
-        ( 7, N'Hải sản',         1),
-        ( 8, N'Đồ chay',         1),
-        ( 9, N'Trái cây',        1),
-        (10, N'Khác',            1);
+    -- requires_food_safety = 1: high-risk categories whose dishes need an ATTP certificate.
+    INSERT INTO FoodCategories (category_id, category_name, requires_food_safety, created_by) VALUES
+        ( 1, N'Món nước',          1, 1),
+        ( 2, N'Cơm - Bún - Phở',   1, 1),
+        ( 3, N'Bánh mì - Xôi',     1, 1),
+        ( 4, N'Đồ uống',           0, 1),
+        ( 5, N'Ăn vặt',            0, 1),
+        ( 6, N'Chè - Tráng miệng', 0, 1),
+        ( 7, N'Hải sản',           1, 1),
+        ( 8, N'Đồ chay',           0, 1),
+        ( 9, N'Trái cây',          0, 1),
+        (10, N'Khác',              0, 1);
     SET IDENTITY_INSERT FoodCategories OFF;
 END;
 GO
@@ -558,15 +559,61 @@ BEGIN
         ( 3, 1, 3, N'Xôi gà xé',          N'Xôi nếp dẻo, gà xé phay, hành phi.',           30000, 'AVAILABLE'),
         ( 4, 1, 3, N'Xôi xéo',            N'Xôi đậu xanh, mỡ hành, chà bông.',             25000, 'AVAILABLE'),
         ( 5, 1, 4, N'Sữa đậu nành',       N'Sữa đậu nành nóng, không đường.',              10000, 'AVAILABLE'),
-        ( 6, 1, 4, N'Cà phê sữa đá',      N'Cà phê phin truyền thống.',                    18000, 'SOLD_OUT'),
+        -- Archived: a stall sells at most 5 dishes (MenuRules.MaxActiveItemsPerStorefront).
+        ( 6, 1, 4, N'Cà phê sữa đá',      N'Cà phê phin truyền thống.',                    18000, 'ARCHIVED'),
 
         ( 7, 2, 2, N'Bún chả Hà Nội',     N'Chả miếng, chả viên nướng than, nước mắm chua ngọt.', 45000, 'AVAILABLE'),
         ( 8, 2, 2, N'Bún chả đặc biệt',   N'Thêm nem cua bể và chả viên.',                 65000, 'AVAILABLE'),
         ( 9, 2, 5, N'Nem cua bể',         N'Nem vuông nhân cua bể, chiên giòn (2 cái).',   30000, 'AVAILABLE'),
         (10, 2, 4, N'Trà đá',             N'Trà xanh đá, miễn phí khi ăn tại chỗ.',         3000, 'AVAILABLE'),
-        (11, 2, 4, N'Nước sâm',           N'Nước sâm lạnh nấu thủ công.',                 12000, 'AVAILABLE'),
+        (11, 2, 4, N'Nước sâm',           N'Nước sâm lạnh nấu thủ công.',                 12000, 'ARCHIVED'),
         (12, 2, 6, N'Chè đỗ đen',         N'Chè đỗ đen nước cốt dừa.',                     20000, 'AVAILABLE');
     SET IDENTITY_INSERT MenuItems OFF;
+END;
+GO
+
+-- ATTP certificates (ward 10, officer user 2). Dishes in high-risk categories are sold only
+-- while an APPROVED, unexpired application covers them:
+--   1: APPROVED  - Bún chả Hải Châu: bún chả, bún chả đặc biệt (on sale, "Đạt ATTP" badge)
+--   2: APPROVED  - Cô Lan: the two bánh mì (on sale)
+--   3: SUBMITTED - Cô Lan: the two xôi (in the ward queue; off sale until approved)
+IF NOT EXISTS (SELECT 1 FROM FoodSafetyApplications)
+BEGIN
+    SET IDENTITY_INSERT FoodSafetyApplications ON;
+    INSERT INTO FoodSafetyApplications
+        (application_id, storefront_id, vendor_id, application_status, vendor_note,
+         reviewed_by, review_reason, reviewed_at, forwarded_at, department_name,
+         certificate_number, issued_on, expires_on, result_reason, result_recorded_by, result_recorded_at,
+         submitted_at, created_at)
+    VALUES
+        (1, 2, 1, 'APPROVED', N'Bếp than hoa, nguyên liệu nhập chợ Hàn mỗi sáng.',
+            2, N'Hồ sơ đầy đủ, chuyển Chi cục kiểm tra.', DATEADD(DAY, -18, SYSUTCDATETIME()),
+            DATEADD(DAY, -18, SYSUTCDATETIME()), N'Chi cục An toàn vệ sinh thực phẩm Đà Nẵng',
+            N'ATTP-DN-2026-0142', DATEADD(DAY, -8, CAST(SYSUTCDATETIME() AS DATE)),
+            DATEADD(YEAR, 3, CAST(SYSUTCDATETIME() AS DATE)),
+            N'Đoàn kiểm tra kết luận cơ sở đạt điều kiện ATTP.', 2, DATEADD(DAY, -7, SYSUTCDATETIME()),
+            DATEADD(DAY, -20, SYSUTCDATETIME()), DATEADD(DAY, -20, SYSUTCDATETIME())),
+        (2, 1, 1, 'APPROVED', N'Bánh mì nướng tại chỗ, pate tự làm.',
+            2, N'Hồ sơ đầy đủ, chuyển Chi cục kiểm tra.', DATEADD(DAY, -25, SYSUTCDATETIME()),
+            DATEADD(DAY, -25, SYSUTCDATETIME()), N'Chi cục An toàn vệ sinh thực phẩm Đà Nẵng',
+            N'ATTP-DN-2026-0097', DATEADD(DAY, -15, CAST(SYSUTCDATETIME() AS DATE)),
+            DATEADD(YEAR, 3, CAST(SYSUTCDATETIME() AS DATE)),
+            N'Đạt điều kiện ATTP.', 2, DATEADD(DAY, -14, SYSUTCDATETIME()),
+            DATEADD(DAY, -27, SYSUTCDATETIME()), DATEADD(DAY, -27, SYSUTCDATETIME())),
+        (3, 1, 1, 'SUBMITTED', N'Xin cấp thêm cho hai món xôi mới.',
+            NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
+            DATEADD(HOUR, -5, SYSUTCDATETIME()), DATEADD(HOUR, -5, SYSUTCDATETIME()));
+    SET IDENTITY_INSERT FoodSafetyApplications OFF;
+
+    INSERT INTO FoodSafetyApplicationItems (application_id, menu_item_id) VALUES
+        (1, 7), (1, 8), (2, 1), (2, 2), (3, 3), (3, 4);
+
+    -- Files owned by vendor 1's account (user 5); setup-local-db.ps1 writes placeholders.
+    INSERT INTO FoodSafetyEvidence (application_id, evidence_type, file_url, uploaded_at) VALUES
+        (1, 'CERTIFICATE',    '/api/uploads/evidence/5/0000000000000000000000000000ab07.pdf', DATEADD(DAY, -20, SYSUTCDATETIME())),
+        (2, 'CERTIFICATE',    '/api/uploads/evidence/5/0000000000000000000000000000ab07.pdf', DATEADD(DAY, -27, SYSUTCDATETIME())),
+        (3, 'HEALTH_CHECK',   '/api/uploads/evidence/5/0000000000000000000000000000ab07.pdf', DATEADD(HOUR, -5, SYSUTCDATETIME())),
+        (3, 'PREMISES_PHOTO', '/api/uploads/evidence/5/0000000000000000000000000000ab08.jpg', DATEADD(HOUR, -5, SYSUTCDATETIME()));
 END;
 GO
 

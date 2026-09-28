@@ -168,7 +168,10 @@ trailer<</Root 1 0 R>>
         @{ User = 5; Name = '0000000000000000000000000000ab03.pdf'; Kind = 'pdf' },
         @{ User = 6; Name = '0000000000000000000000000000ab04.jpg'; Kind = 'jpg' },
         @{ User = 8; Name = '0000000000000000000000000000ab05.jpg'; Kind = 'jpg' },
-        @{ User = 8; Name = '0000000000000000000000000000ab06.jpg'; Kind = 'jpg' }
+        @{ User = 8; Name = '0000000000000000000000000000ab06.jpg'; Kind = 'jpg' },
+        # ATTP evidence (FoodSafetyEvidence).
+        @{ User = 5; Name = '0000000000000000000000000000ab07.pdf'; Kind = 'pdf' },
+        @{ User = 5; Name = '0000000000000000000000000000ab08.jpg'; Kind = 'jpg' }
     )
 
     foreach ($file in $evidenceFiles) {

@@ -544,7 +544,7 @@ internal static class CommerceMapping
     public static MarketplaceMenuItemDto ToDto(this MarketplaceMenuItemRow row) => new(
         row.MenuItemId, row.StorefrontId, row.StorefrontName, row.ItemName,
         row.Description, row.ImageUrl, row.UnitPrice, row.AvailabilityStatus,
-        row.CategoryId, row.CategoryName);
+        row.CategoryId, row.CategoryName, row.FoodSafetyCertified);
 
     public static CartDto ToDto(this CommerceCartRow row) => new(
         row.CartId,

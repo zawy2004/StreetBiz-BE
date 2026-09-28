@@ -9,6 +9,8 @@ public partial class FoodCategory
 
     public string category_name { get; set; } = null!;
 
+    public bool requires_food_safety { get; set; }
+
     public long created_by { get; set; }
 
     public string? creator_role { get; set; }

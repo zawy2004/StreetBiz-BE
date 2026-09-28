@@ -8,7 +8,9 @@ using System.Text;
 using StreetBiz.Application.Common.Exceptions;
 using StreetBiz.Application.Common.Models;
 using StreetBiz.Application.Common.Security;
+using StreetBiz.Application.Common.Interfaces;
 using StreetBiz.Application.Features.Commerce;
+using StreetBiz.Application.Features.FoodSafety;
 using StreetBiz.Infrastructure.Persistence;
 using StreetBiz.Infrastructure.Persistence.Repositories;
 using StreetBiz.Infrastructure.Persistence.ScaffoldedModels;
@@ -22,6 +24,9 @@ public sealed class CommerceManagementTests
     /// <summary>An unfiltered marketplace search: every optional narrowing left unset.</summary>
     private static readonly MarketplaceMenuFilter NoFilter =
         new(null, null, null, null, null, null, MarketplaceMenuSorts.Name);
+
+    /// <summary>A dish photo uploaded by vendor 1's account (user 1); the fake storage says it exists.</summary>
+    private const string Photo = "/api/uploads/menu-images/1/0123456789abcdef0123456789abcdef.jpg";
 
     [Fact]
     public async Task Seller_cannot_manage_another_vendors_store()
@@ -37,13 +42,86 @@ public sealed class CommerceManagementTests
     public async Task Menu_changes_reach_marketplace_and_archiving_preserves_history()
     {
         using var f = await Fixture.Create();
-        var added = await f.Service.SaveMenu(1, null, new(1, "Noodle", null, 30000, "AVAILABLE"), default);
+        var added = await f.Service.SaveMenu(1, null, new(1, "Noodle", null, 30000, "AVAILABLE", Photo), default);
+        Assert.Equal(Photo, added.ImageUrl);
         Assert.Equal("Noodle", (await f.Repository.GetMenuItemAsync(added.MenuItemId, default))!.ItemName);
         await f.Service.SaveMenu(1, added.MenuItemId, new(1, "Noodle updated", null, 35000, "SOLD_OUT"), default);
         Assert.Equal("SOLD_OUT", (await f.Repository.GetMenuItemAsync(added.MenuItemId, default))!.AvailabilityStatus);
         await f.Service.ArchiveMenu(1, added.MenuItemId, default);
         Assert.Null(await f.Repository.GetMenuItemAsync(added.MenuItemId, default));
         Assert.True(await f.Db.MenuItems.AnyAsync(x => x.menu_item_id == added.MenuItemId));
+    }
+
+    [Fact]
+    public async Task New_dish_needs_its_own_uploaded_photo()
+    {
+        using var f = await Fixture.Create();
+        await Assert.ThrowsAsync<DomainRuleException>(() =>
+            f.Service.SaveMenu(1, null, new(1, "No photo", null, 30000, "AVAILABLE"), default));
+        // Another user's photo, or a URL outside the menu-image channel, is refused.
+        await Assert.ThrowsAsync<DomainRuleException>(() => f.Service.SaveMenu(1, null,
+            new(1, "Stolen", null, 30000, "AVAILABLE", "/api/uploads/menu-images/2/0123456789abcdef0123456789abcdef.jpg"), default));
+        await Assert.ThrowsAsync<DomainRuleException>(() => f.Service.SaveMenu(1, null,
+            new(1, "Evidence", null, 30000, "AVAILABLE", "/api/uploads/evidence/1/0123456789abcdef0123456789abcdef.jpg"), default));
+        // Editing an existing dish may keep its current photo.
+        var edited = await f.Service.SaveMenu(1, 1, new(1, "Meal", "Now with notes", 25000, "AVAILABLE"), default);
+        Assert.Equal("Now with notes", edited.Description);
+    }
+
+    [Fact]
+    public async Task Stall_sells_at_most_five_dishes()
+    {
+        using var f = await Fixture.Create();
+        for (var i = 2; i <= MenuRules.MaxActiveItemsPerStorefront; i++)
+            await f.Service.SaveMenu(1, null, new(1, $"Dish {i}", null, 20000, "AVAILABLE", Photo), default);
+        var menu = await f.Service.Menu(1, default);
+        Assert.Equal(MenuRules.MaxActiveItemsPerStorefront, menu.Items.Count);
+        Assert.Equal(MenuRules.MaxActiveItemsPerStorefront, menu.MaxItems);
+        await Assert.ThrowsAsync<ConflictException>(() =>
+            f.Service.SaveMenu(1, null, new(1, "One too many", null, 20000, "AVAILABLE", Photo), default));
+        // Archiving frees a place.
+        await f.Service.ArchiveMenu(1, 1, default);
+        await f.Service.SaveMenu(1, null, new(1, "Replacement", null, 20000, "AVAILABLE", Photo), default);
+    }
+
+    [Fact]
+    public async Task High_risk_dish_is_off_sale_until_an_approved_certificate_covers_it()
+    {
+        using var f = await Fixture.Create();
+        (await f.Db.FoodCategories.FindAsync(1))!.requires_food_safety = true;
+        await f.Db.SaveChangesAsync();
+        f.Db.ChangeTracker.Clear();
+        Assert.Equal("MISSING", (await f.Service.Menu(1, default)).Items.Single().FoodSafetyStatus);
+        Assert.Empty(await f.Repository.SearchMenuItemsAsync(NoFilter, 50, default));
+        Assert.Equal(CartMutationOutcome.MenuItemUnavailable, (await f.Repository.AddCartItemAsync(2, 1, 1, null, default)).Outcome);
+
+        var application = new FoodSafetyApplication { storefront_id = 1, vendor_id = 1, application_status = "FORWARDED" };
+        application.FoodSafetyApplicationItems.Add(new FoodSafetyApplicationItem { menu_item_id = 1 });
+        f.Db.FoodSafetyApplications.Add(application);
+        await f.Db.SaveChangesAsync();
+        f.Db.ChangeTracker.Clear();
+        Assert.Equal("PENDING", (await f.Service.Menu(1, default)).Items.Single().FoodSafetyStatus);
+        Assert.Empty(await f.Repository.SearchMenuItemsAsync(NoFilter, 50, default));
+
+        var row = (await f.Db.FoodSafetyApplications.FindAsync(application.application_id))!;
+        row.application_status = "APPROVED";
+        row.certificate_number = "ATTP-1";
+        row.issued_on = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(-10));
+        row.expires_on = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(30));
+        await f.Db.SaveChangesAsync();
+        f.Db.ChangeTracker.Clear();
+        Assert.Equal("APPROVED", (await f.Service.Menu(1, default)).Items.Single().FoodSafetyStatus);
+        Assert.True(Assert.Single(await f.Repository.SearchMenuItemsAsync(NoFilter, 50, default)).FoodSafetyCertified);
+        // A certified dish cannot be renamed into another dish.
+        await Assert.ThrowsAsync<ConflictException>(() =>
+            f.Service.SaveMenu(1, 1, new(1, "Different dish", null, 25000, "AVAILABLE"), default));
+
+        (await f.Db.FoodSafetyApplications.FindAsync(application.application_id))!.expires_on =
+            DateOnly.FromDateTime(DateTime.UtcNow.AddDays(-2));
+        await f.Db.SaveChangesAsync();
+        f.Db.ChangeTracker.Clear();
+        Assert.Equal("MISSING", (await f.Service.Menu(1, default)).Items.Single().FoodSafetyStatus);
+        Assert.Empty(await f.Repository.SearchMenuItemsAsync(NoFilter, 50, default));
     }
 
     [Fact]
@@ -432,6 +510,7 @@ public sealed class CommerceManagementTests
         public TestContext Db { get; private set; } = null!;
         public Mock<IVendorContext> Vendor { get; } = new();
         public Mock<ICustomerContext> Customer { get; } = new();
+        public Mock<IFileStorage> Storage { get; } = new();
         public CommerceManagement Service { get; private set; } = null!;
         public OrderPaymentTesting Payments { get; private set; } = null!;
         public CommerceRepository Repository { get; private set; } = null!;
@@ -443,7 +522,8 @@ public sealed class CommerceManagementTests
             await f.Db.Database.EnsureCreatedAsync();
             f.Vendor.Setup(x => x.RequireVendorIdAsync(default)).ReturnsAsync(1);
             f.Customer.Setup(x => x.RequireCustomerUserIdAsync(default)).ReturnsAsync(2);
-            f.Service = new(f.Db, f.Vendor.Object, f.Customer.Object, TimeProvider.System);
+            f.Storage.Setup(x => x.ExistsAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(true);
+            f.Service = new(f.Db, f.Vendor.Object, f.Customer.Object, f.Storage.Object, TimeProvider.System);
             f.Payments = new(f.Db, f.Customer.Object, TimeProvider.System);
             f.Repository = new(f.Db, TimeProvider.System);
             f.Db.Roles.AddRange(new Role { role_code = "VENDOR", role_name = "Vendor" }, new Role { role_code = "CUSTOMER", role_name = "Customer" });

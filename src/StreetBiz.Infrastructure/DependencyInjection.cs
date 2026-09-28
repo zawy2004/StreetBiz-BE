@@ -87,6 +87,7 @@ public static class DependencyInjection
         services.AddHostedService<FeeReminderHostedService>();
         services.AddScoped<ICommerceRepository, CommerceRepository>();
         services.AddScoped<StreetBiz.Application.Features.Commerce.ICommerceManagement, CommerceManagement>();
+        services.AddScoped<StreetBiz.Application.Features.FoodSafety.IFoodSafetyService, FoodSafetyService>();
         services.AddScoped<StreetBiz.Application.Features.Commerce.IOrderPaymentTesting, OrderPaymentTesting>();
 
         services.Configure<PermitSettings>(configuration.GetSection(PermitSettings.SectionName));

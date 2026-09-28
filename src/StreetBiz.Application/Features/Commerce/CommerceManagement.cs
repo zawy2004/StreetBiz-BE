@@ -4,11 +4,17 @@ public sealed record StorefrontDto(long StorefrontId, long RegistrationId, long 
     string Name, string? Description, string AvailabilityStatus);
 public sealed record StorefrontInput(long RegistrationId, long ContractId, string Name,
     string? Description, string AvailabilityStatus);
+/// <param name="FoodSafetyStatus">One of <c>DishFoodSafetyStatuses</c>: whether this dish needs
+/// an ATTP certificate and where it stands. MISSING/PENDING dishes are off sale.</param>
 public sealed record SellerMenuItemDto(long MenuItemId, long StorefrontId, int CategoryId,
-    string Name, string? Description, decimal UnitPrice, string AvailabilityStatus);
+    string Name, string? Description, decimal UnitPrice, string AvailabilityStatus,
+    string? ImageUrl = null, string CategoryName = "", bool RequiresFoodSafety = false,
+    string FoodSafetyStatus = "NOT_REQUIRED", DateOnly? FoodSafetyExpiresOn = null);
+public sealed record SellerMenuDto(IReadOnlyList<SellerMenuItemDto> Items, int MaxItems);
+/// <param name="ImageUrl">A URL returned by POST /api/uploads/menu-images; required for a new dish.</param>
 public sealed record SellerMenuInput(int CategoryId, string Name, string? Description,
-    decimal UnitPrice, string AvailabilityStatus);
-public sealed record SellerCategoryDto(int CategoryId, string Name);
+    decimal UnitPrice, string AvailabilityStatus, string? ImageUrl = null);
+public sealed record SellerCategoryDto(int CategoryId, string Name, bool RequiresFoodSafety = false);
 public sealed record CustomerComplaintDto(long ComplaintId, long OrderId, string ComplaintType,
     string Description, decimal? RequestedRefundAmount, string Status, string? ResolutionNotes, DateTime CreatedAt);
 public sealed record CustomerComplaintInput(string ComplaintType, string Description, decimal? RequestedRefundAmount);
@@ -20,7 +26,7 @@ public interface ICommerceManagement
     Task<IReadOnlyList<StorefrontDto>> Stores(CancellationToken ct);
     Task<StorefrontDto> SaveStore(long? id, StorefrontInput input, CancellationToken ct);
     Task<IReadOnlyList<SellerCategoryDto>> Categories(CancellationToken ct);
-    Task<IReadOnlyList<SellerMenuItemDto>> Menu(long storeId, CancellationToken ct);
+    Task<SellerMenuDto> Menu(long storeId, CancellationToken ct);
     Task<SellerMenuItemDto> SaveMenu(long storeId, long? itemId, SellerMenuInput input, CancellationToken ct);
     Task ArchiveMenu(long storeId, long itemId, CancellationToken ct);
     Task<IReadOnlyList<CustomerComplaintDto>> Complaints(long orderId, CancellationToken ct);

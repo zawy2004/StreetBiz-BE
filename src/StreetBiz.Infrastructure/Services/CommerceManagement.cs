@@ -4,13 +4,14 @@ using StreetBiz.Application.Common.Exceptions;
 using StreetBiz.Application.Common.Interfaces;
 using StreetBiz.Application.Common.Security;
 using StreetBiz.Application.Features.Commerce;
+using StreetBiz.Application.Features.FoodSafety;
 using StreetBiz.Infrastructure.Persistence;
 using StreetBiz.Infrastructure.Persistence.ScaffoldedModels;
 
 namespace StreetBiz.Infrastructure.Services;
 
 public sealed class CommerceManagement(StreetBizDbContext db, IVendorContext vendors,
-    ICustomerContext customers, TimeProvider clock) : ICommerceManagement
+    ICustomerContext customers, IFileStorage storage, TimeProvider clock) : ICommerceManagement
 {
     private DateTime Now => clock.GetUtcNow().UtcDateTime;
     private DateOnly Today => DateOnly.FromDateTime(Now.AddHours(7));
@@ -69,15 +70,33 @@ public sealed class CommerceManagement(StreetBizDbContext db, IVendorContext ven
     {
         await vendors.RequireVendorIdAsync(ct);
         return await db.FoodCategories.AsNoTracking().OrderBy(x => x.category_name)
-            .Select(x => new SellerCategoryDto(x.category_id, x.category_name)).ToListAsync(ct);
+            .Select(x => new SellerCategoryDto(x.category_id, x.category_name, x.requires_food_safety)).ToListAsync(ct);
     }
 
-    public async Task<IReadOnlyList<SellerMenuItemDto>> Menu(long storeId, CancellationToken ct)
+    public async Task<SellerMenuDto> Menu(long storeId, CancellationToken ct)
     {
         await OwnedStore(storeId, await vendors.RequireVendorIdAsync(ct), ct);
-        return await db.MenuItems.AsNoTracking().Where(x => x.storefront_id == storeId && x.availability_status != "ARCHIVED")
-            .OrderBy(x => x.menu_item_id).Select(x => new SellerMenuItemDto(x.menu_item_id, x.storefront_id,
-                x.category_id, x.item_name, x.description, x.unit_price, x.availability_status)).ToListAsync(ct);
+        var rows = await db.MenuItems.AsNoTracking().Where(x => x.storefront_id == storeId && x.availability_status != "ARCHIVED")
+            .OrderBy(x => x.menu_item_id).Select(x => new
+            {
+                x.menu_item_id, x.storefront_id, x.category_id, x.category.category_name, x.category.requires_food_safety,
+                x.item_name, x.description, x.unit_price, x.availability_status, x.image_url,
+                Applications = x.FoodSafetyApplicationItems
+                    .Select(a => new { a.application.application_status, a.application.expires_on }).ToList(),
+            }).ToListAsync(ct);
+        var items = rows.Select(x =>
+        {
+            var expiresOn = x.Applications
+                .Where(a => a.application_status == FoodSafetyStatuses.Approved && a.expires_on >= Today)
+                .Max(a => a.expires_on);
+            var status = expiresOn is not null ? DishFoodSafetyStatuses.Approved
+                : !x.requires_food_safety ? DishFoodSafetyStatuses.NotRequired
+                : x.Applications.Any(a => FoodSafetyStatuses.Open.Contains(a.application_status)) ? DishFoodSafetyStatuses.Pending
+                : DishFoodSafetyStatuses.Missing;
+            return new SellerMenuItemDto(x.menu_item_id, x.storefront_id, x.category_id, x.item_name, x.description,
+                x.unit_price, x.availability_status, x.image_url, x.category_name, x.requires_food_safety, status, expiresOn);
+        }).ToList();
+        return new SellerMenuDto(items, MenuRules.MaxActiveItemsPerStorefront);
     }
 
     public async Task<SellerMenuItemDto> SaveMenu(long storeId, long? itemId, SellerMenuInput input, CancellationToken ct)
@@ -89,15 +108,35 @@ public sealed class CommerceManagement(StreetBizDbContext db, IVendorContext ven
             throw new DomainRuleException("Giá món phải là số nguyên VND từ 1 đến 50.000.000.");
         if (input.AvailabilityStatus is not ("AVAILABLE" or "SOLD_OUT"))
             throw new DomainRuleException("Trạng thái món không hợp lệ.");
-        return await Write(async () =>
+        var imageUrl = string.IsNullOrWhiteSpace(input.ImageUrl) ? null : input.ImageUrl.Trim();
+        if (imageUrl is null && !itemId.HasValue) throw new DomainRuleException(MenuImageFiles.Required);
+        if (imageUrl is not null)
+        {
+            var ownerUserId = await db.Vendors.Where(x => x.vendor_id == vendor).Select(x => x.user_id).SingleAsync(ct);
+            if (!MenuImageFiles.TryParseUrl(imageUrl, out var owner, out var fileName) || owner != ownerUserId ||
+                !await storage.ExistsAsync(MenuImageFiles.StoragePath(owner, fileName), ct))
+                throw new DomainRuleException(MenuImageFiles.InvalidUrl);
+        }
+        long savedId = 0;
+        await Write(async () =>
         {
             await OwnedStore(storeId, vendor, ct);
+            if (!itemId.HasValue && await db.MenuItems.CountAsync(x => x.storefront_id == storeId &&
+                    x.availability_status != "ARCHIVED", ct) >= MenuRules.MaxActiveItemsPerStorefront)
+                throw new ConflictException($"Mỗi gian hàng chỉ bán tối đa {MenuRules.MaxActiveItemsPerStorefront} món chủ lực. Gỡ bớt món để thêm món mới.");
             if (!await db.FoodCategories.AnyAsync(x => x.category_id == input.CategoryId, ct))
                 throw new NotFoundException("Không tìm thấy danh mục món.");
             var item = itemId.HasValue ? await db.MenuItems.SingleOrDefaultAsync(x =>
                 x.menu_item_id == itemId && x.storefront_id == storeId, ct) ?? throw new NotFoundException("Không tìm thấy món.") : new MenuItem();
             if (itemId.HasValue && item.availability_status is "HIDDEN" or "ARCHIVED")
                 throw new ConflictException("Món đã bị ẩn hoặc gỡ; không thể tự khôi phục.");
+            // A certificate covers a named dish: renaming or recategorising it would carry the
+            // approval over to a dish nobody inspected.
+            if (itemId.HasValue && (item.item_name != input.Name.Trim() || item.category_id != input.CategoryId) &&
+                await db.FoodSafetyApplicationItems.AnyAsync(x => x.menu_item_id == item.menu_item_id &&
+                    (FoodSafetyStatuses.Open.Contains(x.application.application_status) ||
+                     (x.application.application_status == FoodSafetyStatuses.Approved && x.application.expires_on >= Today)), ct))
+                throw new ConflictException("Món đang có hồ sơ hoặc giấy ATTP; không thể đổi tên hay danh mục. Hãy thêm món mới.");
             if (!itemId.HasValue)
             {
                 item.storefront_id = storeId;
@@ -109,11 +148,13 @@ public sealed class CommerceManagement(StreetBizDbContext db, IVendorContext ven
             item.category_id = input.CategoryId;
             item.unit_price = input.UnitPrice;
             item.availability_status = input.AvailabilityStatus;
+            if (imageUrl is not null) item.image_url = imageUrl;
             item.updated_at = Now;
             await db.SaveChangesAsync(ct);
-            return new SellerMenuItemDto(item.menu_item_id, storeId, item.category_id, item.item_name,
-                item.description, item.unit_price, item.availability_status);
+            savedId = item.menu_item_id;
+            return true;
         }, ct);
+        return (await Menu(storeId, ct)).Items.Single(x => x.MenuItemId == savedId);
     }
 
     public async Task ArchiveMenu(long storeId, long itemId, CancellationToken ct)
