@@ -28,6 +28,12 @@ public partial class StreetBizDbContext : DbContext
     // Schema: see db/StreetBiz_SQL_Server.sql.
     public virtual DbSet<KycVerificationResult> KycVerificationResults { get; set; }
 
+    // Schema: see db/StreetBiz_SQL_Server.sql.
+    public virtual DbSet<ChatConversation> ChatConversations { get; set; }
+
+    // Schema: see db/StreetBiz_SQL_Server.sql.
+    public virtual DbSet<ChatMessage> ChatMessages { get; set; }
+
     public virtual DbSet<Complaint> Complaints { get; set; }
 
     public virtual DbSet<DigitalPermit> DigitalPermits { get; set; }
@@ -250,6 +256,51 @@ public partial class StreetBizDbContext : DbContext
                 .HasPrincipalKey(p => new { p.unit_id, p.unit_type })
                 .HasForeignKey(d => new { d.ward_unit_id, d.ward_unit_type })
                 .HasConstraintName("FK_BusinessRegistrations_Ward");
+        });
+
+        modelBuilder.Entity<ChatConversation>(entity =>
+        {
+            entity.HasKey(e => e.conversation_id);
+
+            entity.HasIndex(e => new { e.storefront_id, e.customer_user_id },
+                "UQ_ChatConversations_OnePerPair").IsUnique();
+            entity.HasIndex(e => new { e.customer_user_id, e.last_message_at },
+                "IX_ChatConversations_Customer");
+            entity.HasIndex(e => new { e.storefront_id, e.last_message_at },
+                "IX_ChatConversations_Storefront");
+
+            entity.Property(e => e.created_at).HasDefaultValueSql("(sysutcdatetime())");
+
+            entity.HasOne(d => d.customer_user).WithMany(p => p.ChatConversations)
+                .HasForeignKey(d => d.customer_user_id)
+                .OnDelete(DeleteBehavior.ClientSetNull)
+                .HasConstraintName("FK_ChatConversations_Customer");
+
+            entity.HasOne(d => d.storefront).WithMany(p => p.ChatConversations)
+                .HasForeignKey(d => d.storefront_id)
+                .OnDelete(DeleteBehavior.ClientSetNull)
+                .HasConstraintName("FK_ChatConversations_Storefront");
+        });
+
+        modelBuilder.Entity<ChatMessage>(entity =>
+        {
+            entity.HasKey(e => e.message_id);
+
+            entity.HasIndex(e => new { e.conversation_id, e.message_id }, "IX_ChatMessages_Thread");
+            entity.HasIndex(e => new { e.conversation_id, e.read_at }, "IX_ChatMessages_Unread");
+
+            entity.Property(e => e.body).HasMaxLength(2000);
+            entity.Property(e => e.sent_at).HasDefaultValueSql("(sysutcdatetime())");
+
+            entity.HasOne(d => d.conversation).WithMany(p => p.ChatMessages)
+                .HasForeignKey(d => d.conversation_id)
+                .OnDelete(DeleteBehavior.ClientSetNull)
+                .HasConstraintName("FK_ChatMessages_Conversation");
+
+            entity.HasOne(d => d.sender_user).WithMany(p => p.ChatMessages)
+                .HasForeignKey(d => d.sender_user_id)
+                .OnDelete(DeleteBehavior.ClientSetNull)
+                .HasConstraintName("FK_ChatMessages_Sender");
         });
 
         modelBuilder.Entity<Complaint>(entity =>

@@ -48,11 +48,13 @@ public static class AuthenticationSetup
                 {
                     OnMessageReceived = context =>
                     {
-                        // Browsers cannot set Authorization headers for WebSocket upgrades.
-                        // SignalR sends this value only for the authenticated hub endpoint.
+                        // Browsers cannot set Authorization headers for WebSocket upgrades,
+                        // so SignalR passes the token in the query string instead. This
+                        // covers every hub under /hubs: naming them one by one meant a new
+                        // hub authenticated over long-polling but not over WebSockets.
                         var accessToken = context.Request.Query["access_token"].FirstOrDefault();
                         if (!string.IsNullOrWhiteSpace(accessToken)
-                            && context.HttpContext.Request.Path.StartsWithSegments("/hubs/orders"))
+                            && context.HttpContext.Request.Path.StartsWithSegments("/hubs"))
                         {
                             context.Token = accessToken;
                         }
