@@ -95,12 +95,6 @@ public interface ICommerceRepository
         string expectedStatus,
         CancellationToken cancellationToken);
 
-    Task<OrderMutationResult> ConfirmCustomerPickupAsync(
-        long customerUserId,
-        long orderId,
-        string expectedStatus,
-        CancellationToken cancellationToken);
-
     Task<IReadOnlyList<CommerceOrderRow>> ListSellerOrdersAsync(
         long vendorId,
         string? status,
@@ -128,11 +122,17 @@ public interface ICommerceRepository
         string expectedStatus,
         CancellationToken cancellationToken);
 
+    /// <summary>
+    /// Completes an order. <paramref name="note"/> lands in the order's status
+    /// history and is shown to both sides, so every handover says how it was
+    /// proved - a scan, a typed code, or a seller's written reason for neither.
+    /// </summary>
     Task<OrderMutationResult> ConfirmSellerHandoverAsync(
         long vendorId,
         long actorUserId,
         long orderId,
         string expectedStatus,
+        string note,
         CancellationToken cancellationToken);
 
     Task<CommerceSalesSummaryRow> GetSalesSummaryAsync(

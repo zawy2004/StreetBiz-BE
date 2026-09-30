@@ -311,36 +311,6 @@ public sealed class CancelCustomerOrderCommandHandler(
     }
 }
 
-public sealed record ConfirmCustomerPickupCommand(long OrderId, string ExpectedStatus)
-    : IRequest<OrderDto>;
-
-public sealed class ConfirmCustomerPickupCommandValidator
-    : AbstractValidator<ConfirmCustomerPickupCommand>
-{
-    public ConfirmCustomerPickupCommandValidator()
-    {
-        RuleFor(x => x.OrderId).GreaterThan(0);
-        RuleFor(x => x.ExpectedStatus).Equal(OrderStatuses.ReadyForPickup);
-    }
-}
-
-public sealed class ConfirmCustomerPickupCommandHandler(
-    ICustomerContext customerContext,
-    ICommerceRepository repository) : IRequestHandler<ConfirmCustomerPickupCommand, OrderDto>
-{
-    public async Task<OrderDto> Handle(
-        ConfirmCustomerPickupCommand request,
-        CancellationToken cancellationToken)
-    {
-        var customerId = await customerContext.RequireCustomerUserIdAsync(cancellationToken);
-        return (await repository.ConfirmCustomerPickupAsync(
-            customerId,
-            request.OrderId,
-            request.ExpectedStatus,
-            cancellationToken)).RequireOrder();
-    }
-}
-
 public sealed record ListSellerOrdersQuery(string? Status) : IRequest<IReadOnlyList<OrderDto>>;
 
 public sealed class ListSellerOrdersQueryValidator : AbstractValidator<ListSellerOrdersQuery>
@@ -470,39 +440,6 @@ public sealed class UpdateSellerOrderStatusCommandHandler(
             actorUserId,
             request.OrderId,
             request.TargetStatus,
-            request.ExpectedStatus,
-            cancellationToken)).RequireOrder();
-    }
-}
-
-public sealed record ConfirmSellerHandoverCommand(long OrderId, string ExpectedStatus)
-    : IRequest<OrderDto>;
-
-public sealed class ConfirmSellerHandoverCommandValidator
-    : AbstractValidator<ConfirmSellerHandoverCommand>
-{
-    public ConfirmSellerHandoverCommandValidator()
-    {
-        RuleFor(x => x.OrderId).GreaterThan(0);
-        RuleFor(x => x.ExpectedStatus).Equal(OrderStatuses.ReadyForPickup);
-    }
-}
-
-public sealed class ConfirmSellerHandoverCommandHandler(
-    IVendorContext vendorContext,
-    ICurrentUser currentUser,
-    ICommerceRepository repository) : IRequestHandler<ConfirmSellerHandoverCommand, OrderDto>
-{
-    public async Task<OrderDto> Handle(
-        ConfirmSellerHandoverCommand request,
-        CancellationToken cancellationToken)
-    {
-        var vendorId = await vendorContext.RequireVendorIdAsync(cancellationToken);
-        var actorUserId = currentUser.UserId ?? throw new AuthenticationException(AppMessages.SessionExpired);
-        return (await repository.ConfirmSellerHandoverAsync(
-            vendorId,
-            actorUserId,
-            request.OrderId,
             request.ExpectedStatus,
             cancellationToken)).RequireOrder();
     }

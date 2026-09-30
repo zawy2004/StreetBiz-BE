@@ -150,3 +150,14 @@ public sealed record SalesSummaryDto(
     decimal RefundedAmount,
     decimal NetSales,
     IReadOnlyList<OrderDto> Orders);
+
+/// <summary>ORD-06: what the customer shows at the stall to collect an order.</summary>
+public sealed record OrderPickupCodeDto(
+    long OrderId,
+    string OrderCode,
+    string OrderStatus,
+    string StorefrontName,
+    // The signed payload the client renders as a QR image.
+    string Token,
+    // The same proof, short enough to read out when a camera is not an option.
+    string ShortCode);

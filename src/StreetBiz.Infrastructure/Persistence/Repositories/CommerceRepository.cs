@@ -779,13 +779,6 @@ public sealed partial class CommerceRepository(
             : new OrderMutationResult(result, null);
     }
 
-    public Task<OrderMutationResult> ConfirmCustomerPickupAsync(
-        long customerUserId,
-        long orderId,
-        string expectedStatus,
-        CancellationToken cancellationToken) =>
-        CompleteOrderAsync(customerUserId, null, orderId, expectedStatus, false, cancellationToken);
-
     public async Task<IReadOnlyList<CommerceOrderRow>> ListSellerOrdersAsync(
         long vendorId,
         string? status,
@@ -915,8 +908,9 @@ public sealed partial class CommerceRepository(
         long actorUserId,
         long orderId,
         string expectedStatus,
+        string note,
         CancellationToken cancellationToken) =>
-        CompleteOrderAsync(actorUserId, vendorId, orderId, expectedStatus, true, cancellationToken);
+        CompleteOrderAsync(actorUserId, vendorId, orderId, expectedStatus, note, cancellationToken);
 
     public async Task<CommerceSalesSummaryRow> GetSalesSummaryAsync(
         long vendorId,
@@ -1205,12 +1199,14 @@ public sealed partial class CommerceRepository(
         });
     }
 
+    // Only the seller completes an order: the buyer's own "picked up" button
+    // went with ORD-06, since it let an order close without any proof.
     private async Task<OrderMutationResult> CompleteOrderAsync(
         long actorUserId,
-        long? vendorId,
+        long vendorId,
         long orderId,
         string expectedStatus,
-        bool sellerAction,
+        string note,
         CancellationToken cancellationToken)
     {
         var strategy = db.Database.CreateExecutionStrategy();
@@ -1219,10 +1215,7 @@ public sealed partial class CommerceRepository(
             db.ChangeTracker.Clear();
             await using var transaction = await db.Database.BeginTransactionAsync(
                 IsolationLevel.Serializable, cancellationToken);
-            var order = sellerAction
-                ? await OwnedSellerOrderAsync(vendorId!.Value, orderId, cancellationToken)
-                : await db.Orders.SingleOrDefaultAsync(row => row.order_id == orderId
-                    && row.customer_user_id == actorUserId, cancellationToken);
+            var order = await OwnedSellerOrderAsync(vendorId, orderId, cancellationToken);
             if (order is null)
             {
                 return OrderMutationOutcome.NotFound;
@@ -1235,33 +1228,21 @@ public sealed partial class CommerceRepository(
             }
 
             var now = Now;
-            Transition(order, OrderStatuses.Completed, actorUserId,
-                sellerAction ? "Handover confirmed by seller." : "Pickup confirmed by customer.", now);
+            // The caller decides what the history says: how the handover was
+            // proved is the one fact this row exists to keep.
+            Transition(order, OrderStatuses.Completed, actorUserId, note, now);
             order.completed_at = now;
-            if (sellerAction)
-            {
-                Notify(order.customer_user_id, "ORDER", "Đơn hàng hoàn tất",
-                    $"Người bán đã xác nhận bàn giao đơn {order.order_code}.", "ORDER", orderId);
-            }
-            else
-            {
-                var vendorUserId = await StorefrontVendorUserIdAsync(
-                    order.storefront_id, cancellationToken);
-                Notify(vendorUserId, "ORDER", "Đơn hàng hoàn tất",
-                    $"Khách hàng đã xác nhận nhận đơn {order.order_code}.", "ORDER", orderId);
-            }
+            Notify(order.customer_user_id, "ORDER", "Đơn hàng hoàn tất",
+                $"Người bán đã xác nhận bàn giao đơn {order.order_code}.", "ORDER", orderId);
 
-            Audit(actorUserId, sellerAction ? "SORD_HANDOVER" : "ORD_PICKUP", "Order", orderId,
-                new { expectedStatus });
+            Audit(actorUserId, "SORD_HANDOVER", "Order", orderId, new { expectedStatus });
             await db.SaveChangesAsync(cancellationToken);
             await transaction.CommitAsync(cancellationToken);
             return OrderMutationOutcome.Updated;
         });
 
         var orderRow = outcome == OrderMutationOutcome.Updated
-            ? sellerAction
-                ? await GetSellerOrderAsync(vendorId!.Value, orderId, cancellationToken)
-                : await GetCustomerOrderAsync(actorUserId, orderId, cancellationToken)
+            ? await GetSellerOrderAsync(vendorId, orderId, cancellationToken)
             : null;
         return new OrderMutationResult(outcome, orderRow);
     }
