@@ -72,6 +72,10 @@ public sealed class ControllerEndpointContractTests
         "GET /api/chat/conversations/{conversationId}/messages",
         "POST /api/chat/conversations/{conversationId}/messages",
         "GET /api/chat/unread-count",
+        "GET /api/notifications",
+        "GET /api/notifications/unread-count",
+        "POST /api/notifications/{notificationId}/read",
+        "POST /api/notifications/read-all",
         "GET /api/vendor/orders",
         "GET /api/vendor/orders/{orderId}",
         "POST /api/vendor/orders/{orderId}/accept",
@@ -220,6 +224,10 @@ public sealed class ControllerEndpointContractTests
     private static readonly (HttpMethod Method, string Path)[] ProtectedEndpoints =
     [
         (HttpMethod.Post, "/hubs/orders/negotiate?negotiateVersion=1"),
+        (HttpMethod.Get, "/api/notifications"),
+        (HttpMethod.Get, "/api/notifications/unread-count"),
+        (HttpMethod.Post, "/api/notifications/1/read"),
+        (HttpMethod.Post, "/api/notifications/read-all"),
         (HttpMethod.Get, "/api/seller/storefronts"),
         (HttpMethod.Post, "/api/seller/storefronts"),
         (HttpMethod.Put, "/api/seller/storefronts/1"),
