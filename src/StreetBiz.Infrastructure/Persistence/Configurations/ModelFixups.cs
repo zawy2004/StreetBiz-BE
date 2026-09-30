@@ -34,17 +34,13 @@ public partial class StreetBizDbContext
         modelBuilder.Entity<RentalContract>()
             .ToTable("RentalContracts", table => table.UseSqlOutputClause(false));
 
-        // The scaffolded singular navigations (RentalContract.DigitalPermit,
-        // RentalContract.RenewalRequest, BusinessRegistration.AddressChangeRequest,
-        // RentalContract.FeeSchedule) were generated to match the one-to-one Fluent config
-        // below and cannot coexist with a one-to-many relationship on the same foreign key —
-        // EF refuses to flip the multiplicity while a singular reference nav is still paired
-        // to it. They are unmapped here; a repository queries the *current* row directly
-        // (e.g. the live permit) rather than through contract.DigitalPermit.
-        modelBuilder.Entity<RentalContract>().Ignore(e => e.DigitalPermit);
-        modelBuilder.Entity<RentalContract>().Ignore(e => e.RenewalRequest);
-        modelBuilder.Entity<RentalContract>().Ignore(e => e.FeeSchedule);
-        modelBuilder.Entity<BusinessRegistration>().Ignore(e => e.AddressChangeRequest);
+        // DigitalPermits, RenewalRequests, FeeSchedules and AddressChangeRequests are
+        // one-to-many (configured below), so RentalContract/BusinessRegistration carry no
+        // singular navigation to them; a repository queries the *current* row directly
+        // (e.g. the live permit). The scaffolder generates those navigations plus a
+        // WithOne(...) mapping from the filtered unique indexes — if the DbContext is ever
+        // re-scaffolded, delete them again and keep WithMany() in StreetBizDbContext.cs,
+        // or EF logs "navigation ... was first mapped explicitly and then ignored" on startup.
 
         // Schema: see db/StreetBiz_SQL_Server.sql.
         modelBuilder.Entity<BusinessRegistration>()

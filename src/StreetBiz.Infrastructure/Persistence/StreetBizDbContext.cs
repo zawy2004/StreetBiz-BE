@@ -168,8 +168,8 @@ public partial class StreetBizDbContext : DbContext
                 .HasMaxLength(30)
                 .HasComputedColumnSql("(CONVERT([nvarchar](30),N'WARD_AUTHORITY'))", true);
 
-            entity.HasOne(d => d.registration).WithOne(p => p.AddressChangeRequest)
-                .HasForeignKey<AddressChangeRequest>(d => d.registration_id)
+            entity.HasOne(d => d.registration).WithMany()
+                .HasForeignKey(d => d.registration_id)
                 .OnDelete(DeleteBehavior.ClientSetNull)
                 .HasConstraintName("FK_AddressChangeRequests_Registration");
 
@@ -361,8 +361,8 @@ public partial class StreetBizDbContext : DbContext
             entity.Property(e => e.revocation_reason).HasMaxLength(500);
             entity.Property(e => e.suspension_reason).HasMaxLength(500);
 
-            entity.HasOne(d => d.contract).WithOne(p => p.DigitalPermit)
-                .HasForeignKey<DigitalPermit>(d => d.contract_id)
+            entity.HasOne(d => d.contract).WithMany()
+                .HasForeignKey(d => d.contract_id)
                 .OnDelete(DeleteBehavior.ClientSetNull)
                 .HasConstraintName("FK_DigitalPermits_Contract");
         });
@@ -381,8 +381,8 @@ public partial class StreetBizDbContext : DbContext
             entity.Property(e => e.revision).HasDefaultValue(1);
             entity.Property(e => e.total_amount).HasColumnType("decimal(18, 0)");
 
-            entity.HasOne(d => d.contract).WithOne(p => p.FeeSchedule)
-                .HasForeignKey<FeeSchedule>(d => d.contract_id)
+            entity.HasOne(d => d.contract).WithMany()
+                .HasForeignKey(d => d.contract_id)
                 .OnDelete(DeleteBehavior.ClientSetNull)
                 .HasConstraintName("FK_FeeSchedules_Contract");
         });
@@ -907,8 +907,8 @@ public partial class StreetBizDbContext : DbContext
                 .HasMaxLength(30)
                 .HasComputedColumnSql("(CONVERT([nvarchar](30),N'WARD_AUTHORITY'))", true);
 
-            entity.HasOne(d => d.contract).WithOne(p => p.RenewalRequest)
-                .HasForeignKey<RenewalRequest>(d => d.contract_id)
+            entity.HasOne(d => d.contract).WithMany()
+                .HasForeignKey(d => d.contract_id)
                 .OnDelete(DeleteBehavior.ClientSetNull)
                 .HasConstraintName("FK_RenewalRequests_Contract");
 
