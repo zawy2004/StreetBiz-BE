@@ -61,6 +61,34 @@ public sealed class NotificationRepositoryTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Orders_by_sent_time_even_when_ids_are_not_chronological()
+    {
+        // A back-dated row inserted last (id 7, the oldest), and one sharing id 4's time.
+        db.Notifications.Add(Notification(7, Alice, isRead: false, sentAtMinute: 0));
+        db.Notifications.Add(Notification(8, Alice, isRead: false, sentAtMinute: 4));
+        await db.SaveChangesAsync();
+        db.ChangeTracker.Clear();
+        var repository = new NotificationRepository(db);
+
+        var first = await repository.ListAsync(Alice, null, 3, CancellationToken.None);
+        var rest = await repository.ListAsync(
+            Alice, first.Items[^1].NotificationId, 10, CancellationToken.None);
+
+        Assert.Equal(new long[] { 5, 8, 4 }, first.Items.Select(x => x.NotificationId));
+        Assert.Equal(new long[] { 3, 2, 1, 7 }, rest.Items.Select(x => x.NotificationId));
+        Assert.False(rest.HasMore);
+    }
+
+    [Fact]
+    public async Task A_cursor_from_another_user_ends_the_listing()
+    {
+        var page = await new NotificationRepository(db).ListAsync(Alice, 6, 10, CancellationToken.None);
+
+        Assert.Empty(page.Items);
+        Assert.False(page.HasMore);
+    }
+
+    [Fact]
     public async Task Nobody_can_read_or_mark_another_users_notification()
     {
         var repository = new NotificationRepository(db);
@@ -96,7 +124,7 @@ public sealed class NotificationRepositoryTests : IAsyncLifetime
         account_status = "ACTIVE",
     };
 
-    private static Notification Notification(long id, long userId, bool isRead) => new()
+    private static Notification Notification(long id, long userId, bool isRead, int? sentAtMinute = null) => new()
     {
         notification_id = id,
         user_id = userId,
@@ -106,7 +134,7 @@ public sealed class NotificationRepositoryTests : IAsyncLifetime
         related_entity_type = "ORDER",
         related_entity_id = id,
         is_read = isRead,
-        sent_at = new DateTime(2026, 9, 30, 10, 0, 0).AddMinutes(id),
+        sent_at = new DateTime(2026, 9, 30, 10, 0, 0).AddMinutes(sentAtMinute ?? id),
     };
 
     private sealed class TestContext(DbContextOptions<StreetBizDbContext> options)

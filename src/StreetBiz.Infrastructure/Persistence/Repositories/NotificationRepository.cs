@@ -18,13 +18,28 @@ public sealed class NotificationRepository(StreetBizDbContext dbContext) : INoti
 
         if (beforeNotificationId is { } before)
         {
-            query = query.Where(n => n.notification_id < before);
+            // The cursor is the last notification of the previous page. It has to be
+            // the caller's own: an unknown cursor ends the listing instead of leaking
+            // where somebody else's notification sits in time.
+            var anchor = await query
+                .Where(n => n.notification_id == before)
+                .Select(n => new { n.sent_at, n.notification_id })
+                .FirstOrDefaultAsync(cancellationToken);
+            if (anchor is null)
+            {
+                return new NotificationPage([], false);
+            }
+
+            query = query.Where(n => n.sent_at < anchor.sent_at
+                || (n.sent_at == anchor.sent_at && n.notification_id < anchor.notification_id));
         }
 
-        // Identity order is insertion order, so ordering by id is "newest first" and
-        // gives a stable keyset for the next page even when two rows share sent_at.
+        // Newest first by when it was sent, not by id: some writers (seed data, the
+        // fee-reminder sweep) insert rows stamped earlier than rows already stored.
+        // The id breaks ties so the keyset above never skips or repeats a row.
         var rows = await query
-            .OrderByDescending(n => n.notification_id)
+            .OrderByDescending(n => n.sent_at)
+            .ThenByDescending(n => n.notification_id)
             .Take(take + 1)
             .Select(n => new NotificationRow(
                 n.notification_id,

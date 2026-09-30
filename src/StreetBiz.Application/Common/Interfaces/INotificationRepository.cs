@@ -10,8 +10,9 @@ namespace StreetBiz.Application.Common.Interfaces;
 public interface INotificationRepository
 {
     /// <summary>
-    /// Newest first. `beforeNotificationId` null starts at the newest notification,
-    /// otherwise the page ends just before that id.
+    /// Newest first by sent time. `beforeNotificationId` null starts at the newest
+    /// notification, otherwise the page continues after that notification (the last
+    /// one of the previous page).
     /// </summary>
     Task<NotificationPage> ListAsync(
         long userId,
