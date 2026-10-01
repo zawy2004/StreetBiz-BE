@@ -88,6 +88,9 @@
    The API never runs schema changes (docs/database.md).
 
    CHANGE LOG (newest first)
+     2026-09-28  Food-safety (ATTP) certificates: FoodCategories.requires_food_safety, new tables
+                 FoodSafetyApplications, FoodSafetyApplicationItems, FoodSafetyEvidence
+                 (vendor -> ward -> department result recorded by the ward).
      2026-09-27  Buyer/seller chat: ChatConversations and ChatMessages in section 7,
                  after Storefronts. One thread per (storefront, customer), so a buyer
                  can ask about a stall before any order exists.
@@ -1254,6 +1257,9 @@ CREATE INDEX IX_PaymentCallbackEvents_Reference
 CREATE TABLE FoodCategories (
     category_id     INT IDENTITY(1,1)  PRIMARY KEY,
     category_name   NVARCHAR(100)      NOT NULL UNIQUE,
+    -- High-risk categories: a dish here is sold only while an APPROVED, unexpired
+    -- FoodSafetyApplications row covers it (derived in the application layer).
+    requires_food_safety BIT          NOT NULL DEFAULT 0,
     created_by       BIGINT             NOT NULL,
     creator_role          AS CAST(N'PLATFORM_ADMIN' AS NVARCHAR(30)) PERSISTED,
     CONSTRAINT FK_FoodCategories_CreatedBy
@@ -1461,6 +1467,80 @@ CREATE TABLE MenuItems (
 );
 CREATE INDEX IX_MenuItems_Storefront ON MenuItems(storefront_id);
 CREATE INDEX IX_MenuItems_Category ON MenuItems(category_id);
+
+-- Food-safety (ATTP) certificate for some dishes of one storefront. Workflow:
+--   SUBMITTED -> (ward) MORE_INFORMATION_REQUIRED -> SUBMITTED again
+--   SUBMITTED -> (ward) REJECTED | FORWARDED to the department (Chi cuc ATTP, outside the system)
+--   FORWARDED -> (ward records the department's result) APPROVED | REJECTED
+--   SUBMITTED -> (vendor) WITHDRAWN
+-- The ward is the storefront registration's ward (no copy kept here). Reviewer columns
+-- must be WARD_AUTHORITY accounts; checked in the application layer. Expiry is not a
+-- status: an APPROVED row with expires_on < today simply stops covering its dishes.
+CREATE TABLE FoodSafetyApplications (
+    application_id        BIGINT IDENTITY(1,1)  PRIMARY KEY,
+    storefront_id         BIGINT                NOT NULL,
+    vendor_id             BIGINT                NOT NULL,
+    application_status    NVARCHAR(30)          NOT NULL DEFAULT 'SUBMITTED',
+    vendor_note           NVARCHAR(500)         NULL,
+    reviewed_by           BIGINT                NULL,
+    review_reason         NVARCHAR(500)         NULL,
+    reviewed_at           DATETIME2             NULL,
+    forwarded_at          DATETIME2             NULL,
+    department_name       NVARCHAR(200)         NULL,
+    certificate_number    NVARCHAR(60)          NULL,
+    issued_on             DATE                  NULL,
+    expires_on            DATE                  NULL,
+    result_reason         NVARCHAR(500)         NULL,
+    result_recorded_by    BIGINT                NULL,
+    result_recorded_at    DATETIME2             NULL,
+    submitted_at          DATETIME2             NOT NULL DEFAULT SYSUTCDATETIME(),
+    created_at            DATETIME2             NOT NULL DEFAULT SYSUTCDATETIME(),
+    updated_at            DATETIME2             NULL,
+    CONSTRAINT CK_FoodSafetyApplications_Status
+        CHECK (application_status IN
+            ('SUBMITTED','MORE_INFORMATION_REQUIRED','FORWARDED','APPROVED','REJECTED','WITHDRAWN')),
+    CONSTRAINT CK_FoodSafetyApplications_ApprovedHasCertificate
+        CHECK (application_status <> 'APPROVED' OR
+            (certificate_number IS NOT NULL AND issued_on IS NOT NULL AND expires_on IS NOT NULL)),
+    CONSTRAINT CK_FoodSafetyApplications_Validity
+        CHECK (expires_on IS NULL OR issued_on IS NULL OR expires_on > issued_on),
+    CONSTRAINT FK_FoodSafetyApplications_Storefront
+        FOREIGN KEY (storefront_id) REFERENCES Storefronts(storefront_id),
+    CONSTRAINT FK_FoodSafetyApplications_Vendor
+        FOREIGN KEY (vendor_id) REFERENCES Vendors(vendor_id),
+    CONSTRAINT FK_FoodSafetyApplications_ReviewedBy
+        FOREIGN KEY (reviewed_by) REFERENCES UserAccounts(user_id),
+    CONSTRAINT FK_FoodSafetyApplications_ResultRecordedBy
+        FOREIGN KEY (result_recorded_by) REFERENCES UserAccounts(user_id)
+);
+CREATE INDEX IX_FoodSafetyApplications_Storefront ON FoodSafetyApplications(storefront_id);
+CREATE INDEX IX_FoodSafetyApplications_Status ON FoodSafetyApplications(application_status);
+
+-- The dishes one application covers.
+CREATE TABLE FoodSafetyApplicationItems (
+    application_id  BIGINT  NOT NULL,
+    menu_item_id    BIGINT  NOT NULL,
+    CONSTRAINT PK_FoodSafetyApplicationItems PRIMARY KEY (application_id, menu_item_id),
+    CONSTRAINT FK_FoodSafetyApplicationItems_Application
+        FOREIGN KEY (application_id) REFERENCES FoodSafetyApplications(application_id) ON DELETE CASCADE,
+    CONSTRAINT FK_FoodSafetyApplicationItems_MenuItem
+        FOREIGN KEY (menu_item_id) REFERENCES MenuItems(menu_item_id)
+);
+CREATE INDEX IX_FoodSafetyApplicationItems_MenuItem ON FoodSafetyApplicationItems(menu_item_id);
+
+-- Private evidence files (same /api/uploads/evidence channel as REG-02).
+CREATE TABLE FoodSafetyEvidence (
+    evidence_id      BIGINT IDENTITY(1,1)  PRIMARY KEY,
+    application_id   BIGINT                NOT NULL,
+    evidence_type    NVARCHAR(30)          NOT NULL,
+    file_url         NVARCHAR(500)         NOT NULL,
+    uploaded_at      DATETIME2             NOT NULL DEFAULT SYSUTCDATETIME(),
+    CONSTRAINT CK_FoodSafetyEvidence_Type
+        CHECK (evidence_type IN ('CERTIFICATE','HEALTH_CHECK','TRAINING','PREMISES_PHOTO','OTHER')),
+    CONSTRAINT FK_FoodSafetyEvidence_Application
+        FOREIGN KEY (application_id) REFERENCES FoodSafetyApplications(application_id) ON DELETE CASCADE
+);
+CREATE INDEX IX_FoodSafetyEvidence_Application ON FoodSafetyEvidence(application_id);
 
 -- BR-52: a cart holds items from exactly one storefront (enforced by storefront_id here)
 CREATE TABLE ShoppingCarts (

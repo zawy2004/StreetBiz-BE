@@ -31,12 +31,6 @@ public partial class RentalContract
 
     public virtual ICollection<AddressChangeRequest> AddressChangeRequests { get; set; } = new List<AddressChangeRequest>();
 
-    public virtual DigitalPermit? DigitalPermit { get; set; }
-
-    public virtual FeeSchedule? FeeSchedule { get; set; }
-
-    public virtual RenewalRequest? RenewalRequest { get; set; }
-
     public virtual ICollection<SlotTransferRequest> SlotTransferRequests { get; set; } = new List<SlotTransferRequest>();
 
     public virtual Storefront? Storefront { get; set; }

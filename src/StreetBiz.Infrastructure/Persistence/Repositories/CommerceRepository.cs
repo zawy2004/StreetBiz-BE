@@ -5,6 +5,7 @@ using StreetBiz.Application.Common.Exceptions;
 using StreetBiz.Application.Common.Interfaces;
 using StreetBiz.Application.Common.Models;
 using StreetBiz.Application.Common.Security;
+using StreetBiz.Application.Features.FoodSafety;
 using StreetBiz.Infrastructure.Persistence.ScaffoldedModels;
 
 namespace StreetBiz.Infrastructure.Persistence.Repositories;
@@ -134,7 +135,9 @@ public sealed partial class CommerceRepository(
                 return (CartMutationOutcome.NotFound, (long?)null);
             }
 
-            if (menuItem.availability_status != MenuAvailable)
+            if (menuItem.availability_status != MenuAvailable
+                || !await db.MenuItems.Where(item => item.menu_item_id == menuItemId)
+                    .Where(FoodSafetyCoverage.Sellable(Today)).AnyAsync(cancellationToken))
             {
                 return (CartMutationOutcome.MenuItemUnavailable, (long?)null);
             }
@@ -407,6 +410,17 @@ public sealed partial class CommerceRepository(
             if (cart.ShoppingCartItems.Any(item =>
                     item.menu_item.storefront_id != cart.storefront_id
                     || item.menu_item.availability_status != MenuAvailable))
+            {
+                return (OrderMutationOutcome.MenuItemUnavailable, (long?)null);
+            }
+
+            // A dish whose ATTP certificate lapsed after it went into the cart is off sale.
+            var cartItemIds = cart.ShoppingCartItems.Select(item => item.menu_item_id).Distinct().ToArray();
+            var sellableCount = await db.MenuItems
+                .Where(item => cartItemIds.Contains(item.menu_item_id))
+                .Where(FoodSafetyCoverage.Sellable(Today))
+                .CountAsync(cancellationToken);
+            if (sellableCount != cartItemIds.Length)
             {
                 return (OrderMutationOutcome.MenuItemUnavailable, (long?)null);
             }
@@ -961,11 +975,14 @@ public sealed partial class CommerceRepository(
         PublicStorefronts()
             .SelectMany(storefront => storefront.MenuItems)
             .Where(item => item.availability_status == MenuAvailable
-                || item.availability_status == MenuSoldOut);
+                || item.availability_status == MenuSoldOut)
+            .Where(FoodSafetyCoverage.Sellable(Today));
 
-    private static IQueryable<MarketplaceMenuItemRow> ProjectMarketplaceMenuItems(
-        IQueryable<MenuItem> items) =>
-        items.Select(item => new MarketplaceMenuItemRow(
+    private IQueryable<MarketplaceMenuItemRow> ProjectMarketplaceMenuItems(
+        IQueryable<MenuItem> items)
+    {
+        var today = Today;
+        return items.Select(item => new MarketplaceMenuItemRow(
                 item.menu_item_id,
                 item.storefront_id,
                 item.storefront.storefront_name,
@@ -975,7 +992,11 @@ public sealed partial class CommerceRepository(
                 item.unit_price,
                 item.availability_status,
                 item.category_id,
-                item.category.category_name));
+                item.category.category_name,
+                item.FoodSafetyApplicationItems.Any(covered =>
+                    covered.application.application_status == FoodSafetyStatuses.Approved
+                    && covered.application.expires_on >= today)));
+    }
 
     private async Task<CommerceCartRow?> BuildCartAsync(
         long cartId,

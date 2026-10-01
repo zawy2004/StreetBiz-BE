@@ -5,6 +5,7 @@ using StreetBiz.API.Controllers;
 using StreetBiz.Application.Common.Exceptions;
 using StreetBiz.Application.Common.Interfaces;
 using StreetBiz.Application.Common.Security;
+using StreetBiz.Application.Features.FoodSafety;
 using StreetBiz.Application.Features.WardSlots;
 
 namespace StreetBiz.API.Tests;
@@ -21,7 +22,8 @@ public sealed class UploadsControllerTests
         new(storage ?? Mock.Of<IFileStorage>(),
             currentUser,
             wardActors ?? Mock.Of<IWardActorResolver>(),
-            registrations ?? Mock.Of<IBusinessRegistrationRepository>());
+            registrations ?? Mock.Of<IBusinessRegistrationRepository>(),
+            Mock.Of<IFoodSafetyService>());
 
     private static Mock<ICurrentUser> User(long userId, string roleCode)
     {

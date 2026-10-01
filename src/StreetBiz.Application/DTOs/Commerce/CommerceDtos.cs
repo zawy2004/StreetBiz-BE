@@ -10,7 +10,8 @@ public sealed record MarketplaceMenuItemDto(
     decimal UnitPrice,
     string AvailabilityStatus,
     int CategoryId,
-    string CategoryName);
+    string CategoryName,
+    bool FoodSafetyCertified = false);
 
 public sealed record CartItemDto(
     long CartItemId,

@@ -44,6 +44,12 @@ public partial class StreetBizDbContext : DbContext
 
     public virtual DbSet<FoodCategory> FoodCategories { get; set; }
 
+    public virtual DbSet<FoodSafetyApplication> FoodSafetyApplications { get; set; }
+
+    public virtual DbSet<FoodSafetyApplicationItem> FoodSafetyApplicationItems { get; set; }
+
+    public virtual DbSet<FoodSafetyEvidence> FoodSafetyEvidences { get; set; }
+
     public virtual DbSet<Invoice> Invoices { get; set; }
 
     public virtual DbSet<MenuItem> MenuItems { get; set; }
@@ -162,8 +168,8 @@ public partial class StreetBizDbContext : DbContext
                 .HasMaxLength(30)
                 .HasComputedColumnSql("(CONVERT([nvarchar](30),N'WARD_AUTHORITY'))", true);
 
-            entity.HasOne(d => d.registration).WithOne(p => p.AddressChangeRequest)
-                .HasForeignKey<AddressChangeRequest>(d => d.registration_id)
+            entity.HasOne(d => d.registration).WithMany()
+                .HasForeignKey(d => d.registration_id)
                 .OnDelete(DeleteBehavior.ClientSetNull)
                 .HasConstraintName("FK_AddressChangeRequests_Registration");
 
@@ -355,8 +361,8 @@ public partial class StreetBizDbContext : DbContext
             entity.Property(e => e.revocation_reason).HasMaxLength(500);
             entity.Property(e => e.suspension_reason).HasMaxLength(500);
 
-            entity.HasOne(d => d.contract).WithOne(p => p.DigitalPermit)
-                .HasForeignKey<DigitalPermit>(d => d.contract_id)
+            entity.HasOne(d => d.contract).WithMany()
+                .HasForeignKey(d => d.contract_id)
                 .OnDelete(DeleteBehavior.ClientSetNull)
                 .HasConstraintName("FK_DigitalPermits_Contract");
         });
@@ -375,8 +381,8 @@ public partial class StreetBizDbContext : DbContext
             entity.Property(e => e.revision).HasDefaultValue(1);
             entity.Property(e => e.total_amount).HasColumnType("decimal(18, 0)");
 
-            entity.HasOne(d => d.contract).WithOne(p => p.FeeSchedule)
-                .HasForeignKey<FeeSchedule>(d => d.contract_id)
+            entity.HasOne(d => d.contract).WithMany()
+                .HasForeignKey(d => d.contract_id)
                 .OnDelete(DeleteBehavior.ClientSetNull)
                 .HasConstraintName("FK_FeeSchedules_Contract");
         });
@@ -415,6 +421,79 @@ public partial class StreetBizDbContext : DbContext
                 .HasPrincipalKey(p => new { p.user_id, p.role_code })
                 .HasForeignKey(d => new { d.created_by, d.creator_role })
                 .HasConstraintName("FK_FoodCategories_CreatedBy");
+        });
+
+        modelBuilder.Entity<FoodSafetyApplication>(entity =>
+        {
+            entity.HasKey(e => e.application_id).HasName("PK_FoodSafetyApplications");
+
+            entity.HasIndex(e => e.storefront_id, "IX_FoodSafetyApplications_Storefront");
+
+            entity.HasIndex(e => e.application_status, "IX_FoodSafetyApplications_Status");
+
+            entity.Property(e => e.application_status)
+                .HasMaxLength(30)
+                .HasDefaultValue("SUBMITTED");
+            entity.Property(e => e.certificate_number).HasMaxLength(60);
+            entity.Property(e => e.created_at).HasDefaultValueSql("(sysutcdatetime())");
+            entity.Property(e => e.department_name).HasMaxLength(200);
+            entity.Property(e => e.result_reason).HasMaxLength(500);
+            entity.Property(e => e.review_reason).HasMaxLength(500);
+            entity.Property(e => e.submitted_at).HasDefaultValueSql("(sysutcdatetime())");
+            entity.Property(e => e.vendor_note).HasMaxLength(500);
+
+            entity.HasOne(d => d.storefront).WithMany()
+                .HasForeignKey(d => d.storefront_id)
+                .OnDelete(DeleteBehavior.ClientSetNull)
+                .HasConstraintName("FK_FoodSafetyApplications_Storefront");
+
+            entity.HasOne(d => d.vendor).WithMany()
+                .HasForeignKey(d => d.vendor_id)
+                .OnDelete(DeleteBehavior.ClientSetNull)
+                .HasConstraintName("FK_FoodSafetyApplications_Vendor");
+
+            entity.HasOne<UserAccount>().WithMany()
+                .HasForeignKey(d => d.reviewed_by)
+                .HasConstraintName("FK_FoodSafetyApplications_ReviewedBy");
+
+            entity.HasOne<UserAccount>().WithMany()
+                .HasForeignKey(d => d.result_recorded_by)
+                .HasConstraintName("FK_FoodSafetyApplications_ResultRecordedBy");
+        });
+
+        modelBuilder.Entity<FoodSafetyApplicationItem>(entity =>
+        {
+            entity.HasKey(e => new { e.application_id, e.menu_item_id }).HasName("PK_FoodSafetyApplicationItems");
+
+            entity.HasIndex(e => e.menu_item_id, "IX_FoodSafetyApplicationItems_MenuItem");
+
+            entity.HasOne(d => d.application).WithMany(p => p.FoodSafetyApplicationItems)
+                .HasForeignKey(d => d.application_id)
+                .OnDelete(DeleteBehavior.Cascade)
+                .HasConstraintName("FK_FoodSafetyApplicationItems_Application");
+
+            entity.HasOne(d => d.menu_item).WithMany(p => p.FoodSafetyApplicationItems)
+                .HasForeignKey(d => d.menu_item_id)
+                .OnDelete(DeleteBehavior.ClientSetNull)
+                .HasConstraintName("FK_FoodSafetyApplicationItems_MenuItem");
+        });
+
+        modelBuilder.Entity<FoodSafetyEvidence>(entity =>
+        {
+            entity.HasKey(e => e.evidence_id).HasName("PK_FoodSafetyEvidence");
+
+            entity.ToTable("FoodSafetyEvidence");
+
+            entity.HasIndex(e => e.application_id, "IX_FoodSafetyEvidence_Application");
+
+            entity.Property(e => e.evidence_type).HasMaxLength(30);
+            entity.Property(e => e.file_url).HasMaxLength(500);
+            entity.Property(e => e.uploaded_at).HasDefaultValueSql("(sysutcdatetime())");
+
+            entity.HasOne(d => d.application).WithMany(p => p.FoodSafetyEvidences)
+                .HasForeignKey(d => d.application_id)
+                .OnDelete(DeleteBehavior.Cascade)
+                .HasConstraintName("FK_FoodSafetyEvidence_Application");
         });
 
         modelBuilder.Entity<Invoice>(entity =>
@@ -828,8 +907,8 @@ public partial class StreetBizDbContext : DbContext
                 .HasMaxLength(30)
                 .HasComputedColumnSql("(CONVERT([nvarchar](30),N'WARD_AUTHORITY'))", true);
 
-            entity.HasOne(d => d.contract).WithOne(p => p.RenewalRequest)
-                .HasForeignKey<RenewalRequest>(d => d.contract_id)
+            entity.HasOne(d => d.contract).WithMany()
+                .HasForeignKey(d => d.contract_id)
                 .OnDelete(DeleteBehavior.ClientSetNull)
                 .HasConstraintName("FK_RenewalRequests_Contract");
 

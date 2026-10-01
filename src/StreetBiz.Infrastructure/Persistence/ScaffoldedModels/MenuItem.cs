@@ -25,6 +25,8 @@ public partial class MenuItem
 
     public DateTime? updated_at { get; set; }
 
+    public virtual ICollection<FoodSafetyApplicationItem> FoodSafetyApplicationItems { get; set; } = new List<FoodSafetyApplicationItem>();
+
     public virtual ICollection<OrderItem> OrderItems { get; set; } = new List<OrderItem>();
 
     public virtual ICollection<ShoppingCartItem> ShoppingCartItems { get; set; } = new List<ShoppingCartItem>();

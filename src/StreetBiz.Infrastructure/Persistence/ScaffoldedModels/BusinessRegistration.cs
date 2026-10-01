@@ -89,8 +89,6 @@ public partial class BusinessRegistration
 
     public DateTime? updated_at { get; set; }
 
-    public virtual AddressChangeRequest? AddressChangeRequest { get; set; }
-
     public virtual AdministrativeUnit? AdministrativeUnit { get; set; }
 
     // Schema: see db/StreetBiz_SQL_Server.sql.
