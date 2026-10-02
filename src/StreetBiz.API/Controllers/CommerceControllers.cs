@@ -321,9 +321,11 @@ public sealed class VendorOrdersController(
         [FromQuery] string sort = "createdAt_desc",
         CancellationToken cancellationToken = default)
     {
-        var orders = await sender.Send(new ListSellerOrdersQuery(status), cancellationToken);
+        // One status is filtered in the database; a list is filtered while paging.
+        var single = status is null || status.Contains(',') ? null : status;
+        var orders = await sender.Send(new ListSellerOrdersQuery(single), cancellationToken);
         return Ok(OrderApiPaging.Filter(
-            orders, null, page, pageSize, fromDate, toDate, sort));
+            orders, single is null ? status : null, page, pageSize, fromDate, toDate, sort));
     }
 
     [HttpGet("{orderId:long}")]
@@ -479,7 +481,7 @@ public sealed class VendorOrdersController(
     }
 }
 
-internal static class OrderApiPaging
+public static class OrderApiPaging
 {
     public static PagedResultDto<OrderDto> Filter(
         IReadOnlyList<OrderDto> source,
@@ -502,15 +504,21 @@ internal static class OrderApiPaging
         IEnumerable<OrderDto> query = source;
         if (!string.IsNullOrWhiteSpace(status))
         {
-            var normalized = status.Trim().ToUpperInvariant();
-            if (!OrderStatuses.IsValid(normalized))
+            // A comma list ("REJECTED,CANCELLED") serves a tab that groups
+            // statuses. Filtering it here, before paging, is what keeps the page
+            // count about that tab rather than about every order.
+            var wanted = status
+                .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .Select(value => value.ToUpperInvariant())
+                .ToHashSet();
+            if (wanted.Count == 0 || wanted.Any(value => !OrderStatuses.IsValid(value)))
             {
                 throw new ValidationAppException(new Dictionary<string, string[]>
                 {
                     ["status"] = ["Unsupported order status."]
                 });
             }
-            query = query.Where(order => order.OrderStatus == normalized);
+            query = query.Where(order => wanted.Contains(order.OrderStatus));
         }
         if (fromDate.HasValue)
         {
