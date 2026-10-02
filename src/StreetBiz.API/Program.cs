@@ -80,6 +80,21 @@ builder.Services.AddRateLimiter(options =>
                 QueueLimit = 0,
             }));
 
+    // ORD-06: the typed fallback is the one pickup path where the caller supplies
+    // a short secret rather than a signed one. 40 bits is far too wide to guess,
+    // but a cap turns "far too wide" into "not worth attempting".
+    options.AddPolicy("PickupCode", context =>
+        System.Threading.RateLimiting.RateLimitPartition.GetFixedWindowLimiter(
+            context.User.FindFirstValue("sub")
+            ?? context.Connection.RemoteIpAddress?.ToString()
+            ?? "anonymous",
+            _ => new System.Threading.RateLimiting.FixedWindowRateLimiterOptions
+            {
+                PermitLimit = 20,
+                Window = TimeSpan.FromMinutes(1),
+                QueueLimit = 0,
+            }));
+
     // CHAT-02: the only endpoint where one account writes rows straight into
     // another account's inbox, so it is the one worth capping. The limit is set
     // well above real typing - a person sends a handful of lines a minute, a

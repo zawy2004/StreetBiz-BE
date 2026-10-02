@@ -1,6 +1,7 @@
 using MediatR;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 using StreetBiz.Application.DTOs.Commerce;
 using StreetBiz.Application.Common.Exceptions;
 using StreetBiz.Application.Common.Security;
@@ -180,17 +181,12 @@ public sealed class OrdersController(
         return Ok(result);
     }
 
-    [HttpPost("{orderId:long}/confirm-pickup")]
-    public async Task<ActionResult<OrderDto>> ConfirmPickup(
+    /// <summary>ORD-06: the signed code the buyer shows at the stall to collect.</summary>
+    [HttpGet("{orderId:long}/pickup-code")]
+    public async Task<ActionResult<OrderPickupCodeDto>> PickupCode(
         long orderId,
-        ExpectedOrderStatusRequest? request,
-        CancellationToken cancellationToken)
-    {
-        var result = await sender.Send(new ConfirmCustomerPickupCommand(
-            orderId, request?.ExpectedStatus ?? OrderStatuses.ReadyForPickup), cancellationToken);
-        await realtime.PublishAsync(result, cancellationToken);
-        return Ok(result);
-    }
+        CancellationToken cancellationToken) =>
+        Ok(await sender.Send(new GetOrderPickupCodeQuery(orderId), cancellationToken));
 
     /// <summary>
     /// Called when the buyer returns from the payment page: the backend asks the provider
@@ -301,18 +297,6 @@ public sealed class SellerOrdersController(
         return Ok(result);
     }
 
-    [HttpPost("{orderId:long}/handover")]
-    public async Task<ActionResult<OrderDto>> ConfirmHandover(
-        long orderId,
-        ExpectedOrderStatusRequest request,
-        CancellationToken cancellationToken)
-    {
-        var result = await sender.Send(new ConfirmSellerHandoverCommand(
-            orderId, request.ExpectedStatus), cancellationToken);
-        await realtime.PublishAsync(result, cancellationToken);
-        return Ok(result);
-    }
-
     [HttpGet("sales-summary")]
     public async Task<ActionResult<SalesSummaryDto>> SalesSummary(
         [FromQuery] string period = "DAY",
@@ -337,9 +321,11 @@ public sealed class VendorOrdersController(
         [FromQuery] string sort = "createdAt_desc",
         CancellationToken cancellationToken = default)
     {
-        var orders = await sender.Send(new ListSellerOrdersQuery(status), cancellationToken);
+        // One status is filtered in the database; a list is filtered while paging.
+        var single = status is null || status.Contains(',') ? null : status;
+        var orders = await sender.Send(new ListSellerOrdersQuery(single), cancellationToken);
         return Ok(OrderApiPaging.Filter(
-            orders, null, page, pageSize, fromDate, toDate, sort));
+            orders, single is null ? status : null, page, pageSize, fromDate, toDate, sort));
     }
 
     [HttpGet("{orderId:long}")]
@@ -393,13 +379,48 @@ public sealed class VendorOrdersController(
         return Ok(result);
     }
 
-    [HttpPost("{orderId:long}/confirm-handover")]
-    public async Task<ActionResult<OrderDto>> ConfirmHandover(
-        long orderId,
+    /// <summary>
+    /// ORD-06: hand the order over by scanning the buyer's code. The order is
+    /// identified by the code itself, so there is no order id in the route - a
+    /// seller scanning somebody else's code gets a refusal, not another order.
+    /// </summary>
+    [HttpPost("pickup-scan")]
+    public async Task<ActionResult<OrderDto>> PickupScan(
+        ScanOrderPickupRequest request,
         CancellationToken cancellationToken)
     {
-        var result = await sender.Send(new ConfirmSellerHandoverCommand(
-            orderId, OrderStatuses.ReadyForPickup), cancellationToken);
+        var result = await sender.Send(new ScanOrderPickupCommand(request.Token), cancellationToken);
+        await realtime.PublishAsync(result, cancellationToken);
+        return Ok(result);
+    }
+
+    /// <summary>ORD-06 fallback: hand over using the code the buyer reads out.</summary>
+    [EnableRateLimiting("PickupCode")]
+    [HttpPost("pickup-confirm")]
+    public async Task<ActionResult<OrderDto>> PickupConfirm(
+        ConfirmPickupByCodeRequest request,
+        CancellationToken cancellationToken)
+    {
+        var result = await sender.Send(
+            new ConfirmPickupByCodeCommand(request.Code), cancellationToken);
+        await realtime.PublishAsync(result, cancellationToken);
+        return Ok(result);
+    }
+
+    /// <summary>
+    /// ORD-06 last resort: hand over with no code at all. The reason is
+    /// mandatory and is written into the order's status history, which the
+    /// buyer sees - that record is the whole price of skipping the code.
+    /// </summary>
+    [EnableRateLimiting("PickupCode")]
+    [HttpPost("{orderId:long}/handover-without-code")]
+    public async Task<ActionResult<OrderDto>> HandoverWithoutCode(
+        long orderId,
+        HandoverWithoutCodeRequest request,
+        CancellationToken cancellationToken)
+    {
+        var result = await sender.Send(
+            new ConfirmHandoverWithoutCodeCommand(orderId, request.Reason), cancellationToken);
         await realtime.PublishAsync(result, cancellationToken);
         return Ok(result);
     }
@@ -460,7 +481,7 @@ public sealed class VendorOrdersController(
     }
 }
 
-internal static class OrderApiPaging
+public static class OrderApiPaging
 {
     public static PagedResultDto<OrderDto> Filter(
         IReadOnlyList<OrderDto> source,
@@ -483,15 +504,21 @@ internal static class OrderApiPaging
         IEnumerable<OrderDto> query = source;
         if (!string.IsNullOrWhiteSpace(status))
         {
-            var normalized = status.Trim().ToUpperInvariant();
-            if (!OrderStatuses.IsValid(normalized))
+            // A comma list ("REJECTED,CANCELLED") serves a tab that groups
+            // statuses. Filtering it here, before paging, is what keeps the page
+            // count about that tab rather than about every order.
+            var wanted = status
+                .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .Select(value => value.ToUpperInvariant())
+                .ToHashSet();
+            if (wanted.Count == 0 || wanted.Any(value => !OrderStatuses.IsValid(value)))
             {
                 throw new ValidationAppException(new Dictionary<string, string[]>
                 {
                     ["status"] = ["Unsupported order status."]
                 });
             }
-            query = query.Where(order => order.OrderStatus == normalized);
+            query = query.Where(order => wanted.Contains(order.OrderStatus));
         }
         if (fromDate.HasValue)
         {
@@ -528,6 +555,9 @@ public sealed record UpdateCartItemRequest(int Quantity, string? Note);
 public sealed record PlaceOrderRequest(string Provider, string IdempotencyKey);
 public sealed record CheckoutOrderRequest(long CartId, string Provider);
 public sealed record ExpectedOrderStatusRequest(string ExpectedStatus);
+public sealed record ScanOrderPickupRequest(string Token);
+public sealed record ConfirmPickupByCodeRequest(string Code);
+public sealed record HandoverWithoutCodeRequest(string Reason);
 public sealed record SellerOrderDecisionRequest(string Decision, string? Reason, string ExpectedStatus);
 public sealed record SellerOrderStatusRequest(string TargetStatus, string ExpectedStatus);
 public sealed record VendorRejectOrderRequest(string Reason);

@@ -23,6 +23,14 @@ public static class OrderStatuses
 
     public static bool IsSellerVisible(string value) =>
         value != PendingPayment && IsValid(value);
+
+    /// <summary>
+    /// The order is paid and still waiting to change hands, so a pickup code is
+    /// worth showing. An unpaid order has nothing to collect; a finished, rejected
+    /// or cancelled one has nothing left to prove.
+    /// </summary>
+    public static bool IsCollectable(string value) =>
+        value is Placed or Accepted or Preparing or ReadyForPickup;
 }
 
 public static class SellerOrderDecisions

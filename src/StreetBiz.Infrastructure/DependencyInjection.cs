@@ -93,6 +93,9 @@ public static class DependencyInjection
 
         services.Configure<PermitSettings>(configuration.GetSection(PermitSettings.SectionName));
         services.AddSingleton<IPermitTokenService, PermitTokenService>();
+        services.Configure<OrderPickupSettings>(
+            configuration.GetSection(OrderPickupSettings.SectionName));
+        services.AddSingleton<IOrderPickupTokenService, OrderPickupTokenService>();
 
         services.Configure<Sidewalk.SidewalkSettings>(configuration.GetSection(Sidewalk.SidewalkSettings.SectionName));
         services.AddSingleton<ISidewalkPolicy, Sidewalk.SidewalkPolicy>();

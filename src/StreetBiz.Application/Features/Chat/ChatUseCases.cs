@@ -40,11 +40,11 @@ public sealed class ChatParticipantResolver(ICurrentUser currentUser) : IChatPar
 
 public static class ChatMessagesText
 {
-    public const string SignInRequired = "Sign in to use chat.";
-    public const string RoleNotAllowed = "Only customers and vendors can use chat.";
-    public const string ConversationNotFound = "The conversation was not found.";
-    public const string StorefrontNotFound = "The storefront was not found or is not open to messages.";
-    public const string CustomerOnlyStart = "Only a customer can start a conversation with a storefront.";
+    public const string SignInRequired = "Hãy đăng nhập để nhắn tin.";
+    public const string RoleNotAllowed = "Chỉ người mua và người bán mới dùng được tin nhắn.";
+    public const string ConversationNotFound = "Không tìm thấy cuộc trò chuyện.";
+    public const string StorefrontNotFound = "Không tìm thấy gian hàng hoặc gian hàng không nhận tin nhắn.";
+    public const string CustomerOnlyStart = "Chỉ người mua mới bắt đầu được cuộc trò chuyện với gian hàng.";
 }
 
 public sealed record ListChatConversationsQuery : IRequest<IReadOnlyList<ChatConversationDto>>;
