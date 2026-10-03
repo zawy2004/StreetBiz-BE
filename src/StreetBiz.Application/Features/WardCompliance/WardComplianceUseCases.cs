@@ -1,6 +1,7 @@
 using FluentValidation;
 using MediatR;
 using StreetBiz.Application.Common.Security;
+using StreetBiz.Application.Features.AiAssistance;
 using StreetBiz.Application.Features.WardSlots;
 
 namespace StreetBiz.Application.Features.WardCompliance;
@@ -529,16 +530,38 @@ public sealed class GetAiDocumentExtractQueryHandler(
     }
 }
 
+/// <summary>
+/// An earlier draft had no ward-actor check at all, so any authenticated account -- not just a
+/// ward officer -- could spend AI credits here and have the server fetch an arbitrary http(s)
+/// URL on their behalf. SlotId is optional: when given, the slot's own stored width/length are
+/// used (SlotWidth/SlotLength from the client are ignored) and the result is logged against that
+/// slot; without it the client-supplied dimensions are used as before and the log is against the
+/// ward itself.
+/// </summary>
 public sealed record GetAiEncroachmentCheckQuery(
     string PhotoUrl,
     double? SlotWidth,
-    double? SlotLength) : IRequest<AiEncroachmentResult>;
+    double? SlotLength,
+    long? SlotId = null) : IRequest<AiEncroachmentResult>;
+
+public sealed class GetAiEncroachmentCheckQueryValidator : AbstractValidator<GetAiEncroachmentCheckQuery>
+{
+    public GetAiEncroachmentCheckQueryValidator()
+    {
+        RuleFor(x => x.PhotoUrl).NotEmpty().MaximumLength(2000);
+    }
+}
 
 public sealed class GetAiEncroachmentCheckQueryHandler(
-    IAiComplianceService aiService) : IRequestHandler<GetAiEncroachmentCheckQuery, AiEncroachmentResult>
+    IWardActorContext actorContext,
+    IWardAiInsights insights) : IRequestHandler<GetAiEncroachmentCheckQuery, AiEncroachmentResult>
 {
-    public Task<AiEncroachmentResult> Handle(GetAiEncroachmentCheckQuery request, CancellationToken cancellationToken) =>
-        aiService.AnalyzeInspectionPhotoAsync(request.PhotoUrl, request.SlotWidth, request.SlotLength, cancellationToken);
+    public async Task<AiEncroachmentResult> Handle(GetAiEncroachmentCheckQuery request, CancellationToken cancellationToken)
+    {
+        var actor = await actorContext.RequireAsync(cancellationToken);
+        return await insights.CheckEncroachmentAsync(
+            actor, request.PhotoUrl, request.SlotWidth, request.SlotLength, request.SlotId, cancellationToken);
+    }
 }
 #endregion
 

@@ -4,8 +4,10 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
+using StreetBiz.Application.Common.Geo;
 using StreetBiz.Application.Common.Interfaces;
 using StreetBiz.Application.Common.Security;
+using StreetBiz.Application.Features.AiAssistance;
 using StreetBiz.Application.Features.WardCompliance;
 
 namespace StreetBiz.Infrastructure.Services;
@@ -19,12 +21,15 @@ public sealed class AiComplianceService : IAiComplianceService
 {
     private const int LowConfidenceThreshold = 85;
 
+    private const int MinUsableProposalPhotoBytes = 2048;
+
     private readonly HttpClient _httpClient;
     private readonly IConfiguration _configuration;
     private readonly ILogger<AiComplianceService> _logger;
     private readonly IFileStorage? _fileStorage;
     private readonly GeminiVisionClient _geminiVision;
     private readonly ApiKeyPool _groqKeyPool;
+    private readonly ApiKeyPool _geminiKeyPool;
 
     public AiComplianceService(
         HttpClient httpClient,
@@ -43,6 +48,7 @@ public sealed class AiComplianceService : IAiComplianceService
         // keyPools is a Singleton (see AiKeyPools' remarks) so the round-robin counter
         // survives across requests -- this service itself is Transient (AddHttpClient).
         _groqKeyPool = keyPools.Groq;
+        _geminiKeyPool = keyPools.Gemini;
     }
 
     #region Hybrid KYC: FPT.AI (Primary) + Gemini Vision (Fallback)
@@ -354,6 +360,296 @@ public sealed class AiComplianceService : IAiComplianceService
         }
 
         return FallbackEncroachment();
+    }
+    #endregion
+
+    #region Gemini Vision: Proposed-Slot Feasibility (AIC-04)
+    public async Task<AiProposalAssessment> AssessProposalSiteAsync(AiProposalSiteInput input, CancellationToken ct)
+    {
+        var images = new List<(byte[] Bytes, string MimeType)>();
+        var usedSatellite = false;
+        var usedPhoto = false;
+
+        // Fetching a crop nobody will look at (no key configured at all) is a wasted round trip.
+        if (_geminiKeyPool.HasKeys)
+        {
+            var satellite = await TryFetchSatelliteCropAsync(input.Latitude, input.Longitude, ct);
+            if (satellite is not null)
+            {
+                images.Add(satellite.Value);
+                usedSatellite = true;
+            }
+        }
+
+        if (!string.IsNullOrWhiteSpace(input.ProposalPhotoUrl))
+        {
+            var photo = await TryFetchImageAsync(input.ProposalPhotoUrl, ct);
+            // The seeded demo proposal photo is a 1x1 placeholder JPEG -- a vision model asked to
+            // describe it would either refuse or hallucinate, neither of which is useful.
+            if (photo is not null && photo.Value.Bytes.Length >= MinUsableProposalPhotoBytes)
+            {
+                images.Add(photo.Value);
+                usedPhoto = true;
+            }
+        }
+
+        if (images.Count == 0)
+        {
+            return AiInsightRules.FallbackProposalAssessment(input);
+        }
+
+        var prompt = BuildProposalPrompt(input, usedSatellite, usedPhoto);
+        var (success, json) = await _geminiVision.CallAsync(prompt, images, ct);
+        if (!success || string.IsNullOrWhiteSpace(json))
+        {
+            return AiInsightRules.FallbackProposalAssessment(input);
+        }
+
+        try
+        {
+            var doc = JsonNode.Parse(json);
+            if (doc is null)
+            {
+                return AiInsightRules.FallbackProposalAssessment(input);
+            }
+
+            var widthRaw = doc["estimatedSidewalkWidthMeters"]?.GetValue<double>();
+            var width = widthRaw.HasValue ? (decimal)widthRaw.Value : (decimal?)null;
+            var obstruction = doc["obstructionLevel"]?.GetValue<string>();
+            var confidence = doc["confidence"]?.GetValue<int>() ?? 0;
+            var reasons = doc["reasons"]?.AsArray()
+                .Select(x => x?.ToString() ?? "")
+                .Where(x => !string.IsNullOrWhiteSpace(x))
+                .ToList() ?? new List<string>();
+
+            return AiInsightRules.MergeProposal(input, width, obstruction, confidence, reasons, usedSatellite, usedPhoto);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to parse Gemini Vision response for AssessProposalSiteAsync.");
+            return AiInsightRules.FallbackProposalAssessment(input);
+        }
+    }
+
+    private static string BuildProposalPrompt(AiProposalSiteInput input, bool usedSatellite, bool usedPhoto)
+    {
+        var ruleSummary = input.RuleChecks.Count == 0
+            ? "Không có cảnh báo nào từ hệ thống."
+            : string.Join("; ", input.RuleChecks.Select(i => $"[{i.Severity}] {i.Message}"));
+
+        var imageNote = (usedSatellite, usedPhoto) switch
+        {
+            (true, true) => "Ảnh 1 là ảnh vệ tinh (nhìn từ trên xuống, hướng Bắc ở trên, vùng chụp khoảng " +
+                "80m x 80m quanh điểm đề xuất ở chính giữa ảnh). Ảnh 2 do hộ kinh doanh tự chụp tại vị trí đề xuất.",
+            (true, false) => "Ảnh đính kèm là ảnh vệ tinh (nhìn từ trên xuống, hướng Bắc ở trên, vùng chụp " +
+                "khoảng 80m x 80m quanh điểm đề xuất ở chính giữa ảnh).",
+            _ => "Ảnh đính kèm do hộ kinh doanh tự chụp tại vị trí đề xuất.",
+        };
+
+        return $$"""
+            Bạn là trợ lý khảo sát vỉa hè cho cán bộ Phường, hỗ trợ đánh giá SƠ BỘ một vị trí ô vỉa
+            hè do hộ kinh doanh đề xuất, trước khi cán bộ khảo sát thực địa. Bạn KHÔNG quyết định
+            duyệt hay từ chối đề xuất -- chỉ đưa ra nhận định tham khảo (BR-41).
+
+            Căn cứ Luật Đường bộ 2024 và Nghị định 165/2024/NĐ-CP: phải chừa lối đi bộ thông thoáng
+            tối thiểu 1,5 mét trên vỉa hè.
+
+            {{imageNote}}
+            Ảnh có thể không rõ nét hoặc bị cây xanh che khuất; nếu không quan sát được vỉa hè rõ
+            ràng, hãy để estimatedSidewalkWidthMeters là null thay vì đoán bừa.
+
+            Thông tin ô đề xuất: kích thước {{input.WidthMeters?.ToString() ?? "chưa rõ"}}m (rộng)
+            x {{input.LengthMeters?.ToString() ?? "chưa rõ"}}m (dài), thuộc tuyến "{{input.ZoneName}}".
+
+            Hệ thống đã tự kiểm tra các quy tắc đặt ô và cho kết quả sau (KHÔNG được mâu thuẫn với
+            các cảnh báo trong nhận định của bạn): {{ruleSummary}}
+
+            Trả về ĐÚNG định dạng JSON sau (không kèm markdown), không tự thêm trường "recommendation"
+            -- hệ thống tự quyết định khuyến nghị cuối cùng từ bề rộng và các cảnh báo trên:
+            {
+              "estimatedSidewalkWidthMeters": số mét ước tính hoặc null nếu không quan sát được,
+              "obstructionLevel": "LOW" hoặc "MEDIUM" hoặc "HIGH",
+              "confidence": số từ 0 đến 100,
+              "reasons": ["lý do cụ thể quan sát được trong ảnh, mỗi lý do một câu ngắn"]
+            }
+            """;
+    }
+
+    /// <summary>Esri World Imagery is free and keyless, the same provider already used
+    /// elsewhere for satellite tiles -- no new external dependency for this crop.</summary>
+    private async Task<(byte[] Bytes, string MimeType)?> TryFetchSatelliteCropAsync(double lat, double lon, CancellationToken ct)
+    {
+        var baseUrl = _configuration["AiCompliance:SatelliteImagery:ExportUrl"]?.Trim();
+        if (string.IsNullOrWhiteSpace(baseUrl))
+        {
+            baseUrl = "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/export";
+        }
+
+        var box = GeoMath.BoundingBox(lat, lon, 40); // ~80m x 80m crop centered on the proposed point
+        var url = FormattableString.Invariant(
+            $"{baseUrl}?bbox={box.MinLon},{box.MinLat},{box.MaxLon},{box.MaxLat}&bboxSR=4326&imageSR=4326&size=640,640&format=jpg&f=image");
+
+        try
+        {
+            using var response = await _httpClient.GetAsync(url, ct);
+            if (!response.IsSuccessStatusCode)
+            {
+                return null;
+            }
+
+            var mimeType = response.Content.Headers.ContentType?.MediaType;
+            if (mimeType is null || !mimeType.StartsWith("image/", StringComparison.OrdinalIgnoreCase))
+            {
+                // Esri returns a JSON/HTML error body, not an image, on a bad request or outage.
+                return null;
+            }
+
+            var bytes = await response.Content.ReadAsByteArrayAsync(ct);
+            return (bytes, mimeType);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to fetch satellite crop for proposal assessment at {Lat},{Lon}", lat, lon);
+            return null;
+        }
+    }
+    #endregion
+
+    #region Groq LLM: Geofence Drift Narrative (AIC-06)
+    public async Task<IReadOnlyDictionary<long, string>?> ExplainGeofenceDriftAsync(
+        IReadOnlyList<GeofenceDriftFacts> items, CancellationToken ct)
+    {
+        if (items.Count == 0 || !_groqKeyPool.HasKeys)
+        {
+            return null;
+        }
+
+        var factsJson = JsonSerializer.Serialize(items.Select(i => new
+        {
+            i.PermitId,
+            i.SlotCode,
+            i.ZoneName,
+            i.ScanCount,
+            i.OffSiteCount,
+            i.MaxDistanceMeters,
+            i.MeanOffsetMeters,
+            i.MeanOffsetBearingDegrees,
+            i.Pattern
+        }));
+
+        var systemPrompt = $$"""
+            Bạn là trợ lý tuần tra trật tự vỉa hè. Với mỗi giấy phép dưới đây, các lượt quét QR thực
+            tế đã lệch khỏi toạ độ ô được cấp phép quá mức cho phép nhiều lần. CHỈ dùng đúng các số
+            liệu đã cho -- không suy đoán nguyên nhân cụ thể, không kết luận vi phạm, chỉ gợi ý cán
+            bộ nên kiểm tra thực địa. Mỗi giải thích là một câu tiếng Việt ngắn gọn.
+            Trả về JSON duy nhất:
+            { "items": [ { "permitId": số, "explanation": "câu giải thích ngắn gọn" } ] }
+
+            Dữ liệu các giấy phép:
+            {{factsJson}}
+            """;
+
+        var (success, response) = await CallGroqChatAsync(systemPrompt, "Hãy giải thích.", ct, jsonMode: true);
+        if (!success || string.IsNullOrWhiteSpace(response))
+        {
+            return null;
+        }
+
+        try
+        {
+            var array = JsonNode.Parse(response)?["items"]?.AsArray();
+            if (array is null)
+            {
+                return null;
+            }
+
+            var result = new Dictionary<long, string>();
+            foreach (var entry in array)
+            {
+                var permitId = entry?["permitId"]?.GetValue<long?>();
+                var explanation = entry?["explanation"]?.GetValue<string>();
+                if (permitId.HasValue && !string.IsNullOrWhiteSpace(explanation))
+                {
+                    result[permitId.Value] = explanation;
+                }
+            }
+
+            return result.Count > 0 ? result : null;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to parse Groq response for ExplainGeofenceDriftAsync.");
+            return null;
+        }
+    }
+    #endregion
+
+    #region Groq LLM: Zone Price Suggestion (AIC-07)
+    public async Task<AiPriceAdvice?> AdviseZonePriceAsync(ZonePriceFacts facts, CancellationToken ct)
+    {
+        if (!_groqKeyPool.HasKeys)
+        {
+            return null;
+        }
+
+        var factsJson = JsonSerializer.Serialize(new
+        {
+            facts.ZoneName,
+            facts.CurrentPricePerDay,
+            facts.WindowDays,
+            facts.SlotCount,
+            facts.OccupiedSlotDays,
+            facts.AvailableSlotDays,
+            facts.OccupancyPercent,
+            facts.ApplicationsInWindow,
+            facts.RejectedApplications,
+            facts.PendingApplications,
+            facts.ActiveHolds,
+            facts.Direction,
+            facts.BaselinePricePerDay,
+            facts.MinAllowedPricePerDay,
+            facts.MaxAllowedPricePerDay,
+            AvailableFrom = facts.AvailableFrom?.ToString("HH:mm"),
+            AvailableTo = facts.AvailableTo?.ToString("HH:mm"),
+        });
+
+        var systemPrompt = $$"""
+            Bạn là trợ lý tư vấn giá thuê vỉa hè cho cán bộ Phường. Hệ thống đã tự tính tỉ lệ lấp
+            đầy và một mức giá cơ sở theo quy tắc cố định. Nhiệm vụ của bạn: đề xuất MỘT mức giá
+            mỗi ngày nằm TRONG khoảng [minAllowedPricePerDay, maxAllowedPricePerDay] cho sẵn (tuyệt
+            đối không được ra ngoài khoảng này), và viết một đoạn giải thích ngắn gọn cho cán bộ.
+            Hợp đồng thuê tính theo NGÀY -- tuyệt đối không bịa số liệu lấp đầy theo giờ. Đây chỉ là
+            gợi ý tham khảo, quyết định cuối cùng thuộc cán bộ Phường (BR-41).
+            Trả về JSON duy nhất:
+            { "proposedPricePerDay": số tiền VND, "explanation": "đoạn giải thích ngắn gọn" }
+
+            Dữ liệu tuyến:
+            {{factsJson}}
+            """;
+
+        var (success, response) = await CallGroqChatAsync(systemPrompt, "Hãy đề xuất giá.", ct, jsonMode: true);
+        if (!success || string.IsNullOrWhiteSpace(response))
+        {
+            return null;
+        }
+
+        try
+        {
+            var doc = JsonNode.Parse(response);
+            var price = doc?["proposedPricePerDay"]?.GetValue<decimal>();
+            var explanation = doc?["explanation"]?.GetValue<string>();
+            if (string.IsNullOrWhiteSpace(explanation))
+            {
+                return null;
+            }
+
+            return new AiPriceAdvice(price, explanation);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to parse Groq response for AdviseZonePriceAsync.");
+            return null;
+        }
     }
     #endregion
 

@@ -88,6 +88,9 @@
    The API never runs schema changes (docs/database.md).
 
    CHANGE LOG (newest first)
+     2026-10-03  AIAssistanceLogs: reviewed_at, review-coherence/feature-code/confidence
+                 checks, IX_AIAssistanceLogs_Entity (AIC-01..07 suggestion log + officer
+                 accept/reject feedback, BR-41).
      2026-09-28  Food-safety (ATTP) certificates: FoodCategories.requires_food_safety, new tables
                  FoodSafetyApplications, FoodSafetyApplicationItems, FoodSafetyEvidence
                  (vendor -> ward -> department result recorded by the ward).
@@ -1298,6 +1301,9 @@ CREATE INDEX IX_AuditLogs_Entity ON AuditLogs(entity_type, entity_id);
 
 -- BR-41/BR-42: every AI Core Extension / AI Marketplace suggestion is logged
 -- and labelled; acceptance/override is recorded but never auto-applied.
+-- ai_output holds a {"inputKey","output"} envelope (see AiAssistanceLogs.cs): inputKey
+-- is a hash of whatever the suggestion was computed from, so the same log row also
+-- serves as the cache that stops a page reload from re-billing the AI provider.
 CREATE TABLE AIAssistanceLogs (
     ai_log_id      BIGINT IDENTITY(1,1)  PRIMARY KEY,
     feature_code   NVARCHAR(20)          NOT NULL,  -- e.g. AIC-01, AIB-01, AIP-02
@@ -1307,10 +1313,21 @@ CREATE TABLE AIAssistanceLogs (
     confidence     DECIMAL(5,2)          NULL,
     reviewed_by    BIGINT                NULL,
     accepted       BIT                   NULL,
+    reviewed_at    DATETIME2             NULL,
     created_at      DATETIME2             NOT NULL DEFAULT SYSUTCDATETIME(),
     CONSTRAINT FK_AIAssistanceLogs_Reviewer
-        FOREIGN KEY (reviewed_by) REFERENCES UserAccounts(user_id)
+        FOREIGN KEY (reviewed_by) REFERENCES UserAccounts(user_id),
+    -- all three review columns are filled together or not at all
+    CONSTRAINT CK_AIAssistanceLogs_ReviewCoherent
+        CHECK ((reviewed_by IS NULL AND accepted IS NULL AND reviewed_at IS NULL)
+            OR (reviewed_by IS NOT NULL AND accepted IS NOT NULL AND reviewed_at IS NOT NULL)),
+    -- a shape check, not a fixed list: new AIC/AIB/AIP feature codes need no DDL change
+    CONSTRAINT CK_AIAssistanceLogs_FeatureCode
+        CHECK (feature_code LIKE 'AI[A-Z]-[0-9][0-9]'),
+    CONSTRAINT CK_AIAssistanceLogs_Confidence
+        CHECK (confidence IS NULL OR confidence BETWEEN 0 AND 100)
 );
+CREATE INDEX IX_AIAssistanceLogs_Entity ON AIAssistanceLogs(entity_type, entity_id, created_at);
 
 -- ADM-07, and the download side of WARD-14 / WARD-15 / ADM-06. An export is
 -- generated in the background and collected later, so the request needs a row
@@ -2055,7 +2072,11 @@ GO
    TOTAL: 51 tables (plus __EFMigrationsHistory), 5 triggers, 2 views
 
    Use-case coverage: the 70 Core and 31 Phase 2 use cases of the actor
-   specification. AIAssistanceLogs, RegistrationEvidence.ocr_extracted_data
-   and VendorReports.ai_extracted_location have no matching use case in that
-   list and are left in place pending a decision on the AI scope.
+   specification. AIAssistanceLogs backs AIC-01 (document check), AIC-02
+   (inspection-photo encroachment), AIC-03 (penalty-schedule suggestion),
+   AIC-04 (proposed-slot feasibility), AIC-06 (geofence drift) and AIC-07
+   (zone price suggestion) -- all outside that use-case list, since it only
+   covers Core/Phase 2, not the AI Core Extension. RegistrationEvidence.
+   ocr_extracted_data and VendorReports.ai_extracted_location are also part
+   of that AI extension and have no separate use case of their own.
    ============================================================ */

@@ -1,8 +1,11 @@
+using System.Globalization;
 using System.Net;
 using FluentAssertions;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
+using StreetBiz.Application.Features.AiAssistance;
 using StreetBiz.Application.Features.WardCompliance;
+using StreetBiz.Application.Features.WardConfiguration;
 using StreetBiz.Infrastructure.Services;
 
 namespace StreetBiz.Infrastructure.Tests;
@@ -334,5 +337,209 @@ public sealed class AiComplianceServiceTests
         result.IdNumber.Should().Be("048095000999");
         result.FullName.Should().Be("TRAN VAN B");
         result.ConfidencePercent.Should().Be(94);
+    }
+
+    private static AiProposalSiteInput ProposalInput(string? photoUrl = null, IReadOnlyList<PlacementIssue>? ruleChecks = null) =>
+        new(SlotId: 28, Latitude: 16.06, Longitude: 108.22, WidthMeters: 2m, LengthMeters: 3m,
+            ZoneName: "Đường Nguyễn Văn Linh", AvailableFrom: null, AvailableTo: null,
+            ProposalPhotoUrl: photoUrl, BoundaryVerified: true, RuleChecks: ruleChecks ?? []);
+
+    [Fact]
+    public async Task Proposal_assessment_with_no_gemini_key_is_a_rule_only_fallback_with_no_http_call()
+    {
+        var handler = new StubHandler(_ => throw new InvalidOperationException("No Gemini key configured -- must not fetch a satellite crop or call Gemini"));
+        var service = BuildService(handler, geminiKey: null);
+
+        var result = await service.AssessProposalSiteAsync(ProposalInput(), default);
+
+        result.IsAiGenerated.Should().BeFalse();
+        result.UsedSatelliteImage.Should().BeFalse();
+        result.Recommendation.Should().Be(ProposalRecommendations.NeedsSurvey);
+    }
+
+    [Fact]
+    public async Task Proposal_assessment_builds_the_satellite_crop_url_with_invariant_culture_decimals()
+    {
+        var originalCulture = CultureInfo.CurrentCulture;
+        CultureInfo.CurrentCulture = CultureInfo.GetCultureInfo("vi-VN"); // uses ',' as the decimal separator
+        try
+        {
+            var handler = new StubHandler(req =>
+            {
+                if (req.RequestUri!.Host.Contains("arcgisonline"))
+                {
+                    return new HttpResponseMessage(HttpStatusCode.NotFound); // fail fast, this test only inspects the URL
+                }
+                throw new InvalidOperationException("Unexpected call: " + req.RequestUri);
+            });
+            var service = BuildService(handler);
+
+            await service.AssessProposalSiteAsync(ProposalInput(), default);
+
+            handler.LastRequest.Should().NotBeNull();
+            var url = handler.LastRequest!.RequestUri!.ToString();
+            url.Should().Contain("bboxSR=4326").And.Contain("size=640,640");
+            // The bbox is 4 period-decimal numbers separated by commas: lon,lat,lon,lat. Under
+            // vi-VN, FormattableString.Invariant's absence would turn each "108.xxxxxx" into
+            // "108,xxxxxx", which this pattern would not match.
+            url.Should().MatchRegex(@"bbox=10[78]\.\d+,1[56]\.\d+,10[78]\.\d+,1[56]\.\d+&",
+                "coordinates must use '.' as the decimal separator regardless of the thread's current culture");
+        }
+        finally
+        {
+            CultureInfo.CurrentCulture = originalCulture;
+        }
+    }
+
+    [Fact]
+    public async Task Proposal_assessment_skips_a_placeholder_photo_under_2kb_but_still_sends_the_satellite_crop()
+    {
+        var satelliteBytes = new byte[] { 0xFF, 0xD8, 0xFF, 0xE0 };
+        var tinyPhotoBytes = new byte[] { 0xFF, 0xD8 }; // well under the 2 KB floor -- the seed's 1x1 placeholder
+
+        var handler = new StubHandler(req =>
+        {
+            if (req.RequestUri!.Host.Contains("arcgisonline"))
+            {
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new ByteArrayContent(satelliteBytes) { Headers = { ContentType = new("image/jpeg") } }
+                };
+            }
+            if (req.RequestUri!.ToString().Contains("files.test"))
+            {
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new ByteArrayContent(tinyPhotoBytes) { Headers = { ContentType = new("image/jpeg") } }
+                };
+            }
+            // The Gemini Vision call itself.
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("""
+                    {"candidates":[{"content":{"parts":[{"text":"{\"estimatedSidewalkWidthMeters\":4.0,\"obstructionLevel\":\"LOW\",\"confidence\":80,\"reasons\":[\"Vỉa hè thông thoáng\"]}"}]}}]}
+                    """)
+            };
+        });
+        var service = BuildService(handler);
+
+        var result = await service.AssessProposalSiteAsync(ProposalInput(photoUrl: "https://files.test/tiny.jpg"), default);
+
+        result.UsedSatelliteImage.Should().BeTrue();
+        result.UsedProposalPhoto.Should().BeFalse("the placeholder photo is under the usable-size floor");
+        handler.LastRequestBody.Should().NotBeNull();
+        CountOccurrences(handler.LastRequestBody!, "inline_data").Should().Be(1, "only the satellite crop should have been attached, not the tiny photo");
+        result.IsAiGenerated.Should().BeTrue();
+        result.Recommendation.Should().Be(ProposalRecommendations.LikelyFeasible);
+    }
+
+    private static int CountOccurrences(string haystack, string needle)
+    {
+        var count = 0;
+        var index = 0;
+        while ((index = haystack.IndexOf(needle, index, StringComparison.Ordinal)) >= 0)
+        {
+            count++;
+            index += needle.Length;
+        }
+        return count;
+    }
+
+    private static AiComplianceService BuildGroqOnlyService(StubHandler handler, string? groqKey = "test-groq-key")
+    {
+        var config = new ConfigurationBuilder()
+            .AddInMemoryCollection(groqKey is null
+                ? []
+                : new Dictionary<string, string?> { ["AiCompliance:Groq:ApiKey"] = groqKey })
+            .Build();
+        var keyPools = new AiKeyPools(config);
+        var client = new HttpClient(handler);
+        return new AiComplianceService(
+            client, config, NullLogger<AiComplianceService>.Instance, keyPools,
+            new GeminiVisionClient(client, config, NullLogger<GeminiVisionClient>.Instance, keyPools));
+    }
+
+    [Fact]
+    public async Task Explain_geofence_drift_with_no_groq_key_returns_null_not_a_guess()
+    {
+        var handler = new StubHandler(_ => throw new InvalidOperationException("No Groq key -- must not call out"));
+        var service = BuildGroqOnlyService(handler, groqKey: null);
+
+        var items = new[] { new GeofenceDriftFacts(1, "NVL-01", "Đường Nguyễn Văn Linh", 6, 4, 95, 95, 0, DriftPatterns.ConsistentDirection) };
+
+        (await service.ExplainGeofenceDriftAsync(items, default)).Should().BeNull();
+    }
+
+    [Fact]
+    public async Task Explain_geofence_drift_batches_every_permit_into_one_call_and_keys_the_result_by_permit_id()
+    {
+        var handler = new StubHandler(req =>
+        {
+            if (req.RequestUri!.Host.Contains("groq.com"))
+            {
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent("""
+                        {"choices":[{"message":{"content":"{\"items\":[{\"permitId\":1,\"explanation\":\"Có thể đã dời về phía Bắc.\"},{\"permitId\":2,\"explanation\":\"Các lần quét rải rác, có thể do GPS.\"}]}"}}]}
+                        """)
+                };
+            }
+            throw new InvalidOperationException("Unexpected call: " + req.RequestUri);
+        });
+        var service = BuildGroqOnlyService(handler);
+
+        var items = new[]
+        {
+            new GeofenceDriftFacts(1, "NVL-01", "Đường Nguyễn Văn Linh", 6, 4, 95, 95, 0, DriftPatterns.ConsistentDirection),
+            new GeofenceDriftFacts(2, "NVL-08", "Đường Nguyễn Văn Linh", 3, 3, 30, null, null, DriftPatterns.Scattered),
+        };
+
+        var result = await service.ExplainGeofenceDriftAsync(items, default);
+
+        result.Should().NotBeNull();
+        result!.Should().ContainKey(1).WhoseValue.Should().Contain("Bắc");
+        result.Should().ContainKey(2).WhoseValue.Should().Contain("rải rác");
+    }
+
+    [Fact]
+    public async Task Advise_zone_price_without_groq_key_returns_null_so_the_caller_falls_back_to_the_baseline()
+    {
+        var handler = new StubHandler(_ => throw new InvalidOperationException("No Groq key -- must not call out"));
+        var service = BuildGroqOnlyService(handler, groqKey: null);
+
+        var facts = new ZonePriceFacts(
+            2, "Đường Hoàng Diệu", 25000, 90, 3, 261, 270, 96.7, 5, 0, 1, 0,
+            PriceDirections.Raise, 28000, 20000, 30000, null, null);
+
+        (await service.AdviseZonePriceAsync(facts, default)).Should().BeNull();
+    }
+
+    [Fact]
+    public async Task Advise_zone_price_parses_the_proposed_price_and_explanation()
+    {
+        var handler = new StubHandler(req =>
+        {
+            if (req.RequestUri!.Host.Contains("groq.com"))
+            {
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent("""
+                        {"choices":[{"message":{"content":"{\"proposedPricePerDay\":29000,\"explanation\":\"Tỉ lệ lấp đầy cao, đề nghị tăng nhẹ.\"}"}}]}
+                        """)
+                };
+            }
+            throw new InvalidOperationException("Unexpected call: " + req.RequestUri);
+        });
+        var service = BuildGroqOnlyService(handler);
+
+        var facts = new ZonePriceFacts(
+            2, "Đường Hoàng Diệu", 25000, 90, 3, 261, 270, 96.7, 5, 0, 1, 0,
+            PriceDirections.Raise, 28000, 20000, 30000, null, null);
+
+        var advice = await service.AdviseZonePriceAsync(facts, default);
+
+        advice.Should().NotBeNull();
+        advice!.ProposedPricePerDay.Should().Be(29000);
+        advice.Explanation.Should().Contain("lấp đầy");
     }
 }

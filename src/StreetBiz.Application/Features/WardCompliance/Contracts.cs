@@ -1,3 +1,4 @@
+using StreetBiz.Application.Features.AiAssistance;
 using StreetBiz.Application.Features.VendorKyc;
 using StreetBiz.Application.Features.WardSlots;
 
@@ -252,14 +253,16 @@ public sealed record AiDocumentCheckResult(
     bool NeedsManualVerification,
     string Summary,
     IReadOnlyList<string> Discrepancies,
-    bool IsAiGenerated);
+    bool IsAiGenerated,
+    long? AiLogId = null);
 
 public sealed record AiEncroachmentResult(
     bool DetectedEncroachment,
     double EncroachmentDistanceCm,
     string Analysis,
     IReadOnlyList<string> VisualCues,
-    bool IsAiGenerated);
+    bool IsAiGenerated,
+    long? AiLogId = null);
 
 /// <summary>
 /// Fields mirror Mau MBB01 (Nghi dinh 118/2021/ND-CP) instead of one free-form paragraph, so
@@ -274,7 +277,8 @@ public sealed record AiLegalSuggestion(
     decimal? SuggestedPenaltyAmount,
     string HanhViViPham,
     string BienPhapKhacPhuc,
-    bool IsAiGenerated);
+    bool IsAiGenerated,
+    long? AiLogId = null);
 
 public sealed record AiIdExtractionResult(
     string? IdNumber,
@@ -452,5 +456,22 @@ public interface IAiComplianceService
     /// Answers vendor or officer regulatory inquiries about Road Law 2024, Decree 165/2024/ND-CP,
     /// sidewalk usage permits, and compliance guidelines using fast Groq LLM reasoning.
     Task<string> AnswerVendorAssistantAsync(string question, string? context, CancellationToken ct);
+
+    /// <summary>AIC-04: multimodal assessment of a proposed slot's feasibility from a satellite
+    /// crop and/or the vendor's own proposal photo, merged with the system's own rule checks.
+    /// Advisory only -- the model never decides; WardAiInsights.AssessProposalAsync (via
+    /// AiInsightRules.MergeProposal) is what turns this into a recommendation (BR-41).</summary>
+    Task<AiProposalAssessment> AssessProposalSiteAsync(AiProposalSiteInput input, CancellationToken ct);
+
+    /// <summary>AIC-06: writes one short Vietnamese explanation per drifting permit. The numbers
+    /// (distance, bearing, pattern) are already decided by AiInsightRules -- this only puts them
+    /// into words and suggests a patrol check, never a violation finding.</summary>
+    Task<IReadOnlyDictionary<long, string>?> ExplainGeofenceDriftAsync(
+        IReadOnlyList<GeofenceDriftFacts> items, CancellationToken ct);
+
+    /// <summary>AIC-07: proposes a price within [MinAllowedPricePerDay, MaxAllowedPricePerDay]
+    /// (already computed by AiInsightRules.PriceBaseline) and explains it. Null means no
+    /// provider was available; the caller falls back to the baseline price.</summary>
+    Task<AiPriceAdvice?> AdviseZonePriceAsync(ZonePriceFacts facts, CancellationToken ct);
 }
 #endregion

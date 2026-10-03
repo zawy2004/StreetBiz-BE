@@ -3,6 +3,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Metadata;
 using Microsoft.Extensions.Options;
 using StreetBiz.Application.Common.Exceptions;
+using StreetBiz.Application.Features.AiAssistance;
 using StreetBiz.Application.Features.WardCompliance;
 using StreetBiz.Application.Features.WardSlots;
 using StreetBiz.Infrastructure.Common;
@@ -922,6 +923,7 @@ public sealed class WardComplianceServiceTests
                 new PermitTokenService(Options.Create(new PermitSettings { SigningKey = "test-only-signing-key-0123456789" })),
                 ai ?? new NoOpAiComplianceService(),
                 new KycResultRepository(db, new DateTimeProvider()),
+                new AiAssistanceLogs(db, TimeProvider.System),
                 TimeProvider.System);
         }
 
@@ -946,6 +948,15 @@ public sealed class WardComplianceServiceTests
 
         public Task<string> AnswerVendorAssistantAsync(string question, string? context, CancellationToken ct) =>
             Task.FromResult("[test] Trợ lý StreetBiz sẵn sàng hỗ trợ.");
+
+        public Task<AiProposalAssessment> AssessProposalSiteAsync(AiProposalSiteInput input, CancellationToken ct) =>
+            Task.FromResult(AiInsightRules.FallbackProposalAssessment(input));
+
+        public Task<IReadOnlyDictionary<long, string>?> ExplainGeofenceDriftAsync(IReadOnlyList<GeofenceDriftFacts> items, CancellationToken ct) =>
+            Task.FromResult<IReadOnlyDictionary<long, string>?>(null);
+
+        public Task<AiPriceAdvice?> AdviseZonePriceAsync(ZonePriceFacts facts, CancellationToken ct) =>
+            Task.FromResult<AiPriceAdvice?>(null);
     }
 
     /// Counts provider calls; `ProviderDown` makes it answer like the real service does
@@ -978,6 +989,15 @@ public sealed class WardComplianceServiceTests
 
         public Task<string> AnswerVendorAssistantAsync(string question, string? context, CancellationToken ct) =>
             inner.AnswerVendorAssistantAsync(question, context, ct);
+
+        public Task<AiProposalAssessment> AssessProposalSiteAsync(AiProposalSiteInput input, CancellationToken ct) =>
+            inner.AssessProposalSiteAsync(input, ct);
+
+        public Task<IReadOnlyDictionary<long, string>?> ExplainGeofenceDriftAsync(IReadOnlyList<GeofenceDriftFacts> items, CancellationToken ct) =>
+            inner.ExplainGeofenceDriftAsync(items, ct);
+
+        public Task<AiPriceAdvice?> AdviseZonePriceAsync(ZonePriceFacts facts, CancellationToken ct) =>
+            inner.AdviseZonePriceAsync(facts, ct);
     }
 
     private sealed class TestContext(DbContextOptions<StreetBizDbContext> options) : StreetBizDbContext(options)

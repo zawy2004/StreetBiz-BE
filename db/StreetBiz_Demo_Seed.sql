@@ -474,6 +474,72 @@ BEGIN
 END;
 GO
 
+/* AIC-07 occupancy history: zone 1 (NVL, 30 000 đ) stays mostly empty over its own
+   90-day pricing window (1 of 20 slots let, ~5%) while zone 2 (HD, 25 000 đ) runs
+   almost full (an EXPIRED + a CANCELLED + the one ACTIVE contract across its 3
+   slots, ~98%) -- GetZonePriceSuggestionAsync should read these as LOWER→27 000
+   and RAISE→28 000 respectively. The two REJECTED applications on zone 2 show why:
+   both targeted a slot that already had a contract. */
+IF NOT EXISTS (SELECT 1 FROM RentalApplications WHERE application_id = 10)
+BEGIN
+    SET IDENTITY_INSERT RentalApplications ON;
+    INSERT INTO RentalApplications
+        (application_id, registration_id, slot_id, application_method, requested_term_days,
+         application_status, reviewed_by, review_decision_reason, reviewed_at,
+         created_at, commitments_accepted_at)
+    VALUES
+        (10, 1, 2,  'MANUAL_SELECTED', 365, 'APPROVED', 2,
+            N'Duyệt để minh hoạ tuyến còn trống (AIC-07).',
+            DATEADD(DAY, -88, SYSUTCDATETIME()), DATEADD(DAY, -89, SYSUTCDATETIME()), DATEADD(DAY, -89, SYSUTCDATETIME())),
+        (11, 1, 21, 'MANUAL_SELECTED',  90, 'APPROVED', 2,
+            N'Duyệt để minh hoạ tuyến lấp đầy cao (AIC-07).',
+            DATEADD(DAY, -88, SYSUTCDATETIME()), DATEADD(DAY, -89, SYSUTCDATETIME()), DATEADD(DAY, -89, SYSUTCDATETIME())),
+        (12, 1, 22, 'MANUAL_SELECTED', 120, 'APPROVED', 2,
+            N'Duyệt để minh hoạ tuyến lấp đầy cao (AIC-07).',
+            DATEADD(DAY, -88, SYSUTCDATETIME()), DATEADD(DAY, -89, SYSUTCDATETIME()), DATEADD(DAY, -89, SYSUTCDATETIME())),
+        (13, 10, 23, 'MANUAL_SELECTED', 180, 'APPROVED', 2,
+            N'Duyệt để minh hoạ tuyến lấp đầy cao (AIC-07).',
+            DATEADD(DAY, -88, SYSUTCDATETIME()), DATEADD(DAY, -89, SYSUTCDATETIME()), DATEADD(DAY, -89, SYSUTCDATETIME())),
+        -- Both arrived after their slot already had a contract (dates above).
+        (14, 10, 21, 'MANUAL_SELECTED', 60, 'REJECTED', 2,
+            N'Ô đã có hợp đồng khác trong thời gian yêu cầu.',
+            DATEADD(DAY, -45, SYSUTCDATETIME()), DATEADD(DAY, -46, SYSUTCDATETIME()), NULL),
+        (15, 10, 23, 'MANUAL_SELECTED', 60, 'REJECTED', 2,
+            N'Ô đang có hợp đồng hiệu lực, không thể duyệt thêm.',
+            DATEADD(DAY, -20, SYSUTCDATETIME()), DATEADD(DAY, -21, SYSUTCDATETIME()), NULL);
+    SET IDENTITY_INSERT RentalApplications OFF;
+END;
+GO
+
+IF NOT EXISTS (SELECT 1 FROM RentalContracts WHERE contract_id = 10)
+BEGIN
+    SET IDENTITY_INSERT RentalContracts ON;
+    INSERT INTO RentalContracts
+        (contract_id, application_id, slot_id, vendor_id, start_date, end_date, contract_status,
+         cancelled_by, cancellation_reason, cancelled_at, created_at)
+    VALUES
+        -- Zone 1 / NVL-02: the one occupied slot out of twenty (~5% of the window).
+        (10, 10, 2,  1, DATEADD(DAY, -90, CAST(SYSUTCDATETIME() AS DATE)),
+                        DATEADD(DAY, 275, CAST(SYSUTCDATETIME() AS DATE)), 'ACTIVE',
+            NULL, NULL, NULL, DATEADD(DAY, -90, SYSUTCDATETIME())),
+        -- Zone 2 / HD-01: ran the full 90-day window and has already expired.
+        (11, 11, 21, 1, DATEADD(DAY, -90, CAST(SYSUTCDATETIME() AS DATE)),
+                        DATEADD(DAY,  -1, CAST(SYSUTCDATETIME() AS DATE)), 'EXPIRED',
+            NULL, NULL, NULL, DATEADD(DAY, -90, SYSUTCDATETIME())),
+        -- Zone 2 / HD-02: returned early -- occupancy is truncated at cancelled_at, not end_date.
+        (12, 12, 22, 1, DATEADD(DAY, -90, CAST(SYSUTCDATETIME() AS DATE)),
+                        DATEADD(DAY,  30, CAST(SYSUTCDATETIME() AS DATE)), 'CANCELLED',
+            5, N'Chủ hộ trả lại ô trước hạn.', DATEADD(DAY, -5, SYSUTCDATETIME()), DATEADD(DAY, -90, SYSUTCDATETIME())),
+        -- Zone 2 / HD-03: still active today.
+        (13, 13, 23, 2, DATEADD(DAY, -90, CAST(SYSUTCDATETIME() AS DATE)),
+                        DATEADD(DAY,  90, CAST(SYSUTCDATETIME() AS DATE)), 'ACTIVE',
+            NULL, NULL, NULL, DATEADD(DAY, -90, SYSUTCDATETIME()));
+    SET IDENTITY_INSERT RentalContracts OFF;
+
+    UPDATE SidewalkSlots SET slot_status = 'ACTIVE' WHERE slot_id IN (2, 23);
+END;
+GO
+
 
 /* ============================================================
    6. FEES AND INVOICES (FEE-01..03)
@@ -726,7 +792,9 @@ BEGIN
          slot_status, source, proposed_by_registration_id, proposal_review_status,
          proposal_photo_url, proposal_reviewed_by, proposal_review_reason, created_at)
     VALUES
-        (28, 'VP-1-20260101000000001', 1, 16.061195, 108.219460, 2.00, 2.50,
+        -- Latitude sits on the near-carriageway sidewalk (continuing the NVL-01..10 run past
+        -- NVL-10), not the gap between 16.061052 and 16.061277 where the road itself runs.
+        (28, 'VP-1-20260101000000001', 1, 16.061091, 108.219460, 2.00, 2.50,
             'AVAILABLE', 'VENDOR_PROPOSED', 1, 'PENDING',
             '/api/uploads/evidence/5/0000000000000000000000000000ab01.jpg', NULL, NULL,
             DATEADD(DAY, -1, SYSUTCDATETIME())),
@@ -833,6 +901,9 @@ GO
 
 -- WARD-11 / BUY-02 scan history. Scan 3 was taken about 95 m from the slot it belongs to,
 -- the sort of drift AIC-06 is meant to flag. Scan 6 is a forged code that matched nothing.
+-- Permit 1's scans 7-8 repeat that same ~95 m-north spot (AIC-06: 3 off-tolerance scans in
+-- one direction reads as CONSISTENT_DIRECTION -- "may have moved"); permit 2's scans 9-11 sit
+-- ~30 m off in three different directions that cancel out (SCATTERED -- GPS noise, not a move).
 IF NOT EXISTS (SELECT 1 FROM PermitScanLogs)
     INSERT INTO PermitScanLogs (permit_id, qr_payload, scanned_by, scan_context, scan_result, latitude, longitude, scanned_at)
     VALUES
@@ -841,7 +912,12 @@ IF NOT EXISTS (SELECT 1 FROM PermitScanLogs)
         (1, 'SEED-PERMIT-CONTRACT-1-DO-NOT-SCAN', 2,    'WARD_INSPECTION', 'VALID', 16.061785, 108.217760, DATEADD(DAY,  -2, SYSUTCDATETIME())),
         (2, 'SEED-PERMIT-CONTRACT-2-DO-NOT-SCAN', 2,    'WARD_INSPECTION', 'VALID', 16.061028, 108.218738, DATEADD(DAY,  -5, SYSUTCDATETIME())),
         (2, 'SEED-PERMIT-CONTRACT-2-DO-NOT-SCAN', 9,    'PUBLIC_CHECK',    'VALID', NULL,      NULL,       DATEADD(DAY,  -1, SYSUTCDATETIME())),
-        (NULL, 'FORGED-QR-DEMO-0001',             NULL, 'PUBLIC_CHECK',    'NOT_FOUND', NULL,  NULL,       DATEADD(DAY,  -1, SYSUTCDATETIME()));
+        (NULL, 'FORGED-QR-DEMO-0001',             NULL, 'PUBLIC_CHECK',    'NOT_FOUND', NULL,  NULL,       DATEADD(DAY,  -1, SYSUTCDATETIME())),
+        (1, 'SEED-PERMIT-CONTRACT-1-DO-NOT-SCAN', 2,    'WARD_INSPECTION', 'VALID', 16.061788, 108.217765, DATEADD(DAY,  -6, SYSUTCDATETIME())),
+        (1, 'SEED-PERMIT-CONTRACT-1-DO-NOT-SCAN', 2,    'WARD_INSPECTION', 'VALID', 16.061780, 108.217755, DATEADD(DAY,  -1, SYSUTCDATETIME())),
+        (2, 'SEED-PERMIT-CONTRACT-2-DO-NOT-SCAN', 2,    'WARD_INSPECTION', 'VALID', 16.061296, 108.218740, DATEADD(DAY,  -7, SYSUTCDATETIME())),
+        (2, 'SEED-PERMIT-CONTRACT-2-DO-NOT-SCAN', 2,    'WARD_INSPECTION', 'VALID', 16.060891, 108.218983, DATEADD(DAY,  -4, SYSUTCDATETIME())),
+        (2, 'SEED-PERMIT-CONTRACT-2-DO-NOT-SCAN', 9,    'PUBLIC_CHECK',    'VALID', 16.060891, 108.218497, DATEADD(DAY,  -2, SYSUTCDATETIME()));
 GO
 
 /* ============================================================
@@ -1186,6 +1262,12 @@ IF NOT EXISTS (SELECT 1 FROM Notifications)
 GO
 
 -- BR-41: AI output is only ever a suggestion; nothing here has been accepted or overridden yet.
+-- The AIC-01 row predates the {"inputKey","output"} envelope (AiAssistanceLogs.cs) and is kept
+-- that way on purpose: FindLatestAsync treats an unparseable legacy row as a cache miss, not a
+-- crash. The AIC-04 row below HAS been rewritten into the envelope shape, but with an inputKey
+-- that cannot match a freshly-computed one -- so GetProposalAssessmentAsync shows it as a stale
+-- prior assessment on slot 28 (SidewalkSlots.proposal_review_status = PENDING there), letting the
+-- "Chạy đánh giá AI" flow be demonstrated end-to-end against a real previous answer.
 IF NOT EXISTS (SELECT 1 FROM AIAssistanceLogs)
     INSERT INTO AIAssistanceLogs (feature_code, entity_type, entity_id, ai_output, confidence, reviewed_by, accepted, created_at)
     VALUES
@@ -1193,8 +1275,10 @@ IF NOT EXISTS (SELECT 1 FROM AIAssistanceLogs)
             N'{"seed":true,"idNumber":"048079000002","fullName":"Hoàng Văn Tám","dateOfBirth":"1979-11-02"}',
             92.00, NULL, NULL, DATEADD(DAY, -3, SYSUTCDATETIME())),
         ('AIC-04', 'SidewalkSlot', 28,
-            N'{"seed":true,"estimatedSidewalkWidthMeters":2.4,"obstructionLevel":"LOW","note":"Cần khảo sát thực địa trước khi duyệt."}',
-            71.50, NULL, NULL, DATEADD(DAY, -1, SYSUTCDATETIME()));
+            N'{"inputKey":"SEED-LEGACY-KEY-DO-NOT-MATCH","output":{"estimatedSidewalkWidthMeters":2.4,"remainingPedestrianWidthMeters":0.4,"obstructionLevel":"HIGH","recommendation":"NEEDS_SURVEY","confidence":58,"reasons":["[Hệ thống] Ô cách trạm biến áp 12 m, trong ngưỡng cảnh báo.","[AI] Vỉa hè rộng khoảng 2,4 m, có xe máy đỗ một phần, lối đi còn lại hẹp."],"ruleChecks":[{"severity":"WARN","code":"NEAR_FEATURE","message":"Ô cách trạm biến áp 12 m, trong ngưỡng cảnh báo.","featureId":1,"slotId":null,"distanceMeters":12.0}],"usedSatelliteImage":true,"usedProposalPhoto":true,"isAiGenerated":true}}',
+            58.00, NULL, NULL, DATEADD(DAY, -1, SYSUTCDATETIME()));
+GO
+
 -- SYS-05: the paid penalty gets its invoice too. CK_Invoices_ExactlyOneSource
 -- means penalty invoices carry penalty_id and leave fee_item_id null.
 IF NOT EXISTS (SELECT 1 FROM Invoices WHERE penalty_id IS NOT NULL)

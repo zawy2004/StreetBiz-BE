@@ -143,6 +143,8 @@ public partial class StreetBizDbContext : DbContext
             entity.Property(e => e.entity_type).HasMaxLength(50);
             entity.Property(e => e.feature_code).HasMaxLength(20);
 
+            entity.HasIndex(e => new { e.entity_type, e.entity_id, e.created_at }, "IX_AIAssistanceLogs_Entity");
+
             entity.HasOne(d => d.reviewed_byNavigation).WithMany(p => p.AIAssistanceLogs)
                 .HasForeignKey(d => d.reviewed_by)
                 .HasConstraintName("FK_AIAssistanceLogs_Reviewer");

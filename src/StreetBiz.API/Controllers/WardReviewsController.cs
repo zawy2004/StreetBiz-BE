@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
 using StreetBiz.Application.DTOs.Finance;
+using StreetBiz.Application.Features.AiAssistance;
 using StreetBiz.Application.Features.Finance.WardReports;
 using StreetBiz.Application.Features.WardSlots;
 
@@ -52,6 +53,24 @@ public sealed class WardReviewsController(ISender sender) : ControllerBase
         Ok(await sender.Send(
             new PinWardProposalCommand(id, request.Latitude, request.Longitude),
             cancellationToken));
+
+    /// <summary>AIC-04: the latest logged assessment for this proposal, if any -- never calls the
+    /// AI provider itself. IsStale tells the officer whether the proposal's own data has changed
+    /// since that assessment was made.</summary>
+    [HttpGet("cases/proposals/{id:long}/ai-assessment")]
+    public async Task<ActionResult<AiProposalAssessmentView>> GetProposalAssessment(
+        long id,
+        CancellationToken cancellationToken) =>
+        Ok(await sender.Send(new GetProposalAssessmentQuery(id), cancellationToken));
+
+    /// <summary>AIC-04: the officer explicitly asks for a fresh assessment (or gets back the
+    /// cached one, if nothing about the proposal has changed since).</summary>
+    [HttpPost("cases/proposals/{id:long}/ai-assessment")]
+    [EnableRateLimiting("WardAi")]
+    public async Task<ActionResult<AiProposalAssessment>> RunProposalAssessment(
+        long id,
+        CancellationToken cancellationToken) =>
+        Ok(await sender.Send(new RunProposalAssessmentCommand(id), cancellationToken));
 
     [HttpGet("geo/search")]
     [EnableRateLimiting("WardGeo")]

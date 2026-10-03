@@ -2,6 +2,7 @@ using MediatR;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
+using StreetBiz.Application.Features.AiAssistance;
 using StreetBiz.Application.Features.WardCompliance;
 
 namespace StreetBiz.API.Controllers;
@@ -157,10 +158,20 @@ public sealed class WardComplianceController(ISender sender) : ControllerBase
         Ok(await sender.Send(request, ct));
 
     [HttpPost("ai/encroachment-check")]
+    [EnableRateLimiting("WardAi")]
     public async Task<ActionResult<AiEncroachmentResult>> AiEncroachmentCheck(
         GetAiEncroachmentCheckQuery request,
         CancellationToken ct) =>
         Ok(await sender.Send(request, ct));
+
+    /// <summary>BR-41: the officer accepts or rejects a previously-logged AI suggestion --
+    /// never the same action as approving/saving whatever the suggestion was about.</summary>
+    [HttpPost("ai/suggestions/{id:long}/feedback")]
+    public async Task<ActionResult<AiSuggestionFeedbackDto>> ReviewSuggestion(
+        long id,
+        AiSuggestionFeedbackRequest request,
+        CancellationToken ct) =>
+        Ok(await sender.Send(new ReviewAiSuggestionCommand(id, request), ct));
 
     /// <summary>Authenticated only -- an earlier draft left this [AllowAnonymous], letting
     /// anyone call out to a paid LLM with no rate limit. See Program.cs for the rate-limit
@@ -187,6 +198,11 @@ public sealed class WardComplianceController(ISender sender) : ControllerBase
     public async Task<ActionResult<IReadOnlyList<WardPatrolHeatmapPointDto>>> PatrolHeatmap(
         CancellationToken ct) =>
         Ok(await sender.Send(new GetWardPatrolHeatmapQuery(), ct));
+
+    /// <summary>AIC-06: permits whose QR scans repeatedly land away from their licensed slot.</summary>
+    [HttpGet("insights/geofence-drift")]
+    public async Task<ActionResult<GeofenceDriftReportDto>> GeofenceDrift(CancellationToken ct) =>
+        Ok(await sender.Send(new GetGeofenceDriftQuery(), ct));
     #endregion
 }
 

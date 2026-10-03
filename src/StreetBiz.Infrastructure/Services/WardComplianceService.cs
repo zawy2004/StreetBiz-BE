@@ -7,6 +7,7 @@ using System.Linq.Expressions;
 using Microsoft.EntityFrameworkCore;
 using StreetBiz.Application.Common.Exceptions;
 using StreetBiz.Application.Common.Security;
+using StreetBiz.Application.Features.AiAssistance;
 using StreetBiz.Application.Features.VendorKyc;
 using StreetBiz.Application.Features.WardCompliance;
 using StreetBiz.Application.Features.WardSlots;
@@ -20,6 +21,7 @@ public sealed class WardComplianceService(
     IPermitTokenService permitTokens,
     IAiComplianceService aiService,
     IKycResultRepository kycResults,
+    IAiAssistanceLogs aiLogs,
     TimeProvider clock)
     : IWardComplianceService
 {
@@ -277,8 +279,15 @@ public sealed class WardComplianceService(
         // backfill so the next read, which sees the stored id_number, matches it.
         if (result.IsAiGenerated)
         {
-            reg.ai_check_result = JsonSerializer.Serialize(
-                new CachedDocumentCheck(DocumentCheckKey(reg, evidence, ownerName), result));
+            var key = DocumentCheckKey(reg, evidence, ownerName);
+            // BR-41: log the suggestion before it is cached, so a cache hit (the common case --
+            // every later view of this record until something changes) still carries the id an
+            // officer needs to accept/reject it.
+            var logId = await aiLogs.RecordAsync(
+                AiFeatureCodes.DocumentCheck, AiLogEntities.Registration, reg.registration_id, key, result, result.MatchPercentage, ct);
+            result = result with { AiLogId = logId };
+
+            reg.ai_check_result = JsonSerializer.Serialize(new CachedDocumentCheck(key, result));
             reg.ai_checked_at = Now;
             changed = true;
         }
@@ -304,6 +313,20 @@ public sealed class WardComplianceService(
         foreach (var e in evidence.OrderBy(e => e.EvidenceId))
         {
             parts.Append(e.EvidenceId).Append('|').Append(e.Type).Append('|').Append(e.FileUrl).Append('\n');
+        }
+
+        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(parts.ToString())));
+    }
+
+    /// <summary>Fingerprint of everything ClassifyAndDraftAsync reads -- a later edit to the
+    /// ward's own penalty schedule (amount, legal basis, which types are active) forces a fresh
+    /// draft instead of silently keeping a citation that no longer matches.</summary>
+    private static string LegalDraftKey(string? description, IReadOnlyList<PenaltyScheduleItemDto> schedules)
+    {
+        var parts = new StringBuilder().Append(description).Append('\n');
+        foreach (var s in schedules.OrderBy(s => s.ScheduleId))
+        {
+            parts.Append(s.ScheduleId).Append('|').Append(s.PenaltyAmount).Append('|').Append(s.LegalBasis).Append('\n');
         }
 
         return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(parts.ToString())));
@@ -1204,12 +1227,12 @@ public sealed class WardComplianceService(
                 request.Latitude.Value, request.Longitude.Value,
                 (double)slot.latitude, (double)slot.longitude);
 
-            // Urban GPS tolerance: 25 meters. This is a deterministic distance
-            // calculation, not an AI judgement -- no [AI] label.
-            if (distanceMeters > 25.0)
+            // Urban GPS tolerance, shared with AIC-06's repeated-drift check below. This is a
+            // deterministic distance calculation, not an AI judgement -- no [AI] label.
+            if (distanceMeters > GeofenceDriftDefaults.ToleranceMeters)
             {
                 isLocationMatched = false;
-                locationWarning = $"Cảnh báo lệch vị trí: điểm quét thực tế cách ô cấp phép {Math.Round(distanceMeters.Value, 1)}m (vượt dung sai 25m).";
+                locationWarning = $"Cảnh báo lệch vị trí: điểm quét thực tế cách ô cấp phép {Math.Round(distanceMeters.Value, 1)}m (vượt dung sai {GeofenceDriftDefaults.ToleranceMeters:0}m).";
             }
         }
 
@@ -1223,7 +1246,7 @@ public sealed class WardComplianceService(
                 ct);
         }
 
-        db.PermitScanLogs.Add(new PermitScanLog
+        var scanLog = new PermitScanLog
         {
             permit_id = validity.permit_id,
             qr_payload = raw,
@@ -1235,8 +1258,18 @@ public sealed class WardComplianceService(
             latitude = request.Latitude.HasValue ? (decimal)request.Latitude.Value : null,
             longitude = request.Longitude.HasValue ? (decimal)request.Longitude.Value : null,
             scanned_at = Now
-        });
+        };
+        db.PermitScanLogs.Add(scanLog);
         await db.SaveChangesAsync(ct);
+
+        // BR-41: log AIC-02 against this specific scan, not the permit -- a later re-inspection
+        // of the same permit gets its own log row and its own accept/reject.
+        if (aiVision is { IsAiGenerated: true })
+        {
+            var aiLogId = await aiLogs.RecordAsync(
+                AiFeatureCodes.InspectionPhoto, AiLogEntities.ScanLog, scanLog.scan_id, inputKey: null, aiVision, confidence: null, ct);
+            aiVision = aiVision with { AiLogId = aiLogId };
+        }
 
         return new InspectWardPermitResult(
             Found: true,
@@ -1430,8 +1463,28 @@ public sealed class WardComplianceService(
 
         // AI Legal Co-pilot: classify + draft FROM the ward's own configured
         // schedule -- never invents a legal citation or amount [BR-41/42].
+        // This view used to call Groq on every open of the same violation; cache the answer
+        // the same way RunDocumentCheckAsync does, keyed on everything the draft reads.
         var availableSchedules = await ListPenaltySchedulesAsync(actor, ToVnDate(v.recorded_at), ct);
-        var aiSuggestion = await aiService.ClassifyAndDraftAsync(v.description, availableSchedules, ct);
+        var legalDraftKey = LegalDraftKey(v.description, availableSchedules);
+        var cachedSuggestion = await aiLogs.FindLatestAsync<AiLegalSuggestion>(
+            AiFeatureCodes.LegalDraft, AiLogEntities.Violation, v.violation_id, legalDraftKey, ct);
+
+        AiLegalSuggestion aiSuggestion;
+        if (cachedSuggestion is not null)
+        {
+            aiSuggestion = cachedSuggestion.Output with { AiLogId = cachedSuggestion.AiLogId };
+        }
+        else
+        {
+            aiSuggestion = await aiService.ClassifyAndDraftAsync(v.description, availableSchedules, ct);
+            if (aiSuggestion.IsAiGenerated)
+            {
+                var logId = await aiLogs.RecordAsync(
+                    AiFeatureCodes.LegalDraft, AiLogEntities.Violation, v.violation_id, legalDraftKey, aiSuggestion, confidence: null, ct);
+                aiSuggestion = aiSuggestion with { AiLogId = logId };
+            }
+        }
 
         var status = v.Penalty?.penalty_status ?? "PENDING_SANCTION";
 
