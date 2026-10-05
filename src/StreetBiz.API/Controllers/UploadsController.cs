@@ -98,6 +98,8 @@ public sealed class UploadsController(
         }
 
         Response.Headers.CacheControl = "private, no-store";
+        Response.Headers["X-Content-Type-Options"] = "nosniff";
+        Response.Headers.ContentDisposition = "attachment";
         return File(stream, EvidenceFiles.ContentTypes[Path.GetExtension(fileName)]);
     }
 

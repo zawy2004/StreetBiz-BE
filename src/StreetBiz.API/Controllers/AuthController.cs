@@ -32,6 +32,7 @@ public sealed class AuthController(ISender sender) : ControllerBase
     }
 
     /// <summary>AUTH-01: register a new account.</summary>
+    [EnableRateLimiting(AuthRateLimitSetup.SignIn)]
     [HttpPost("register")]
     public async Task<ActionResult<AuthResultDto>> Register(RegisterRequest request, CancellationToken cancellationToken)
     {
@@ -65,6 +66,7 @@ public sealed class AuthController(ISender sender) : ControllerBase
     }
 
     /// <summary>Rotate access/refresh tokens.</summary>
+    [EnableRateLimiting(AuthRateLimitSetup.Refresh)]
     [HttpPost("refresh")]
     public async Task<ActionResult<AuthResultDto>> Refresh(RefreshRequest request, CancellationToken cancellationToken)
     {
@@ -83,6 +85,7 @@ public sealed class AuthController(ISender sender) : ControllerBase
     }
 
     /// <summary>AUTH-07: change the password.</summary>
+    [EnableRateLimiting(AuthRateLimitSetup.SignIn)]
     [Authorize]
     [HttpPost("change-password")]
     public async Task<IActionResult> ChangePassword(ChangePasswordRequest request, CancellationToken cancellationToken)

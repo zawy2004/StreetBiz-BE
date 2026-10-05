@@ -9,7 +9,8 @@ public sealed record AppUser(
     string RoleCode,
     int? WardUnitId,
     string AccountStatus,
-    DateTime? PhoneVerifiedAt);
+    DateTime? PhoneVerifiedAt,
+    DateTime? LockoutUntil = null);
 
 /// <summary>Data required to create a new user account.</summary>
 public sealed record NewUser(

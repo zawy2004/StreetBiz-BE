@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Options;
 using StreetBiz.Application.Common.Interfaces;
 using StreetBiz.Application.Common.Security;
@@ -56,7 +57,44 @@ public static class DependencyInjection
         services.AddSingleton<IDateTimeProvider, DateTimeProvider>();
         services.AddSingleton<IPasswordHasher, PasswordHasher>();
         services.AddSingleton<IJwtTokenService, JwtTokenService>();
-        services.AddSingleton<ISmsSender, LoggingSmsSender>();
+        services.Configure<SmsSettings>(configuration.GetSection(SmsSettings.SectionName));
+        services.AddHttpClient<HttpSmsSender>(client => client.Timeout = TimeSpan.FromSeconds(15));
+        // OTP codes must never reach production logs: the logging sender is Development-only,
+        // and any other environment refuses to start without a real provider and an OTP hash key.
+        services.AddSingleton<ISmsSender>(sp =>
+        {
+            var env = sp.GetRequiredService<IHostEnvironment>();
+            var sms = sp.GetRequiredService<IOptions<SmsSettings>>().Value;
+            if (env.IsDevelopment() && !string.Equals(sms.Provider, "Http", StringComparison.OrdinalIgnoreCase))
+            {
+                return ActivatorUtilities.CreateInstance<LoggingSmsSender>(sp);
+            }
+
+            if (!string.Equals(sms.Provider, "Http", StringComparison.OrdinalIgnoreCase)
+                || string.IsNullOrWhiteSpace(sms.Endpoint))
+            {
+                throw new InvalidOperationException(
+                    "Sms:Provider must be \"Http\" with Sms:Endpoint set outside Development.");
+            }
+
+            return sp.GetRequiredService<HttpSmsSender>();
+        });
+        services.AddOptions<OtpSettings>()
+            .Bind(configuration.GetSection(OtpSettings.SectionName))
+            .PostConfigure<IHostEnvironment>((settings, env) =>
+            {
+                if (!string.IsNullOrWhiteSpace(settings.HashKey))
+                {
+                    return;
+                }
+
+                if (!env.IsDevelopment())
+                {
+                    throw new InvalidOperationException("Otp:HashKey must be configured (user-secrets / env var).");
+                }
+
+                settings.HashKey = "dev-only-otp-hash-key";
+            });
         services.AddSingleton<IFileStorage, LocalFileStorage>();
         services.AddHttpClient(MomoGateway.HttpClientName, client => client.Timeout = TimeSpan.FromSeconds(30));
         services.AddSingleton<IPaymentGateway, ConfiguredPaymentGateway>();

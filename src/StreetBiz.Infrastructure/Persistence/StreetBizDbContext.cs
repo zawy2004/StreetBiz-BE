@@ -1294,6 +1294,7 @@ public partial class StreetBizDbContext : DbContext
                 .HasMaxLength(20)
                 .HasDefaultValue("ACTIVE");
             entity.Property(e => e.created_at).HasDefaultValueSql("(sysutcdatetime())");
+            entity.Property(e => e.failed_login_count).HasDefaultValue(0);
             entity.Property(e => e.full_name).HasMaxLength(150);
             entity.Property(e => e.password_hash).HasMaxLength(255);
             entity.Property(e => e.phone_number).HasMaxLength(15);

@@ -10,8 +10,8 @@ public static partial class AuthValidationRules
     [GeneratedRegex(@"^(0\d{9}|\+84\d{9})$")]
     public static partial Regex PhoneRegex();
 
-    // >= 8 chars, at least one upper, one lower, one digit, one special, no whitespace (BR-59).
-    [GeneratedRegex(@"^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[^\w\s])\S{8,}$")]
+    // 8-72 chars (BCrypt ignores everything past 72 bytes), at least one upper, one lower, one digit, one special, no whitespace (BR-59).
+    [GeneratedRegex(@"^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[^\w\s])\S{8,72}$")]
     public static partial Regex PasswordRegex();
 
     [GeneratedRegex(@"^\d{6}$")]

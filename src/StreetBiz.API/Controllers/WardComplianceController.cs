@@ -156,6 +156,7 @@ public sealed class WardComplianceController(ISender sender) : ControllerBase
         CancellationToken ct) =>
         Ok(await sender.Send(request, ct));
 
+    [EnableRateLimiting("VendorAssistantAi")]
     [HttpPost("ai/encroachment-check")]
     public async Task<ActionResult<AiEncroachmentResult>> AiEncroachmentCheck(
         GetAiEncroachmentCheckQuery request,

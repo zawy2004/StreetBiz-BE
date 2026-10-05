@@ -60,14 +60,14 @@ public sealed class RegisterCommandHandler(
             await units.EnsureWardAsync(wardUnitId, cancellationToken);
         }
 
-        // 1) Prove phone ownership (consumes the SIGNUP challenge).
-        await otpService.ConsumeAsync(request.PhoneNumber, OtpPurposes.Signup, request.Otp, cancellationToken);
-
-        // 2) Enforce unique phone (BR-04).
+        // 1) Enforce unique phone (BR-04) before the OTP is spent, so a duplicate does not burn the code.
         if (await userRepository.PhoneExistsAsync(request.PhoneNumber, cancellationToken))
         {
             throw new ConflictException(AppMessages.PhoneAlreadyRegistered);
         }
+
+        // 2) Prove phone ownership (consumes the SIGNUP challenge).
+        await otpService.ConsumeAsync(request.PhoneNumber, OtpPurposes.Signup, request.Otp, cancellationToken);
 
         // 3) Create the account (ACTIVE, phone verified). Vendor row is created for VENDOR role.
         var now = clock.UtcNow;

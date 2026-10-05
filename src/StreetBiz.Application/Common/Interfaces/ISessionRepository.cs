@@ -13,6 +13,9 @@ public interface ISessionRepository
     Task<IReadOnlyList<AppSession>> ListActiveByUserAsync(long userId, CancellationToken cancellationToken);
 
     Task RevokeAsync(long sessionId, CancellationToken cancellationToken);
+
+    /// <summary>Revokes the session only if still active; false means another request already did (atomic).</summary>
+    Task<bool> TryRevokeAsync(long sessionId, CancellationToken cancellationToken);
     Task RevokeAllForUserAsync(long userId, CancellationToken cancellationToken);
     Task RevokeAllForUserExceptAsync(long userId, long keepSessionId, CancellationToken cancellationToken);
     Task TouchAsync(long sessionId, CancellationToken cancellationToken);

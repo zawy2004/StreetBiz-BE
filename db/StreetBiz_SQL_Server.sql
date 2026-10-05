@@ -88,6 +88,8 @@
    The API never runs schema changes (docs/database.md).
 
    CHANGE LOG (newest first)
+     2026-10-05  UserAccounts.failed_login_count / lockout_until: temporary account lock after
+                 repeated wrong passwords (auth hardening).
      2026-09-28  Food-safety (ATTP) certificates: FoodCategories.requires_food_safety, new tables
                  FoodSafetyApplications, FoodSafetyApplicationItems, FoodSafetyEvidence
                  (vendor -> ward -> department result recorded by the ward).
@@ -175,6 +177,8 @@ CREATE TABLE UserAccounts (
     ward_unit_type      AS CAST(N'WARD' AS NVARCHAR(20)) PERSISTED,
     account_status      NVARCHAR(20)          NOT NULL DEFAULT 'ACTIVE',
     phone_verified_at   DATETIME2             NULL,
+    failed_login_count  INT                   NOT NULL DEFAULT 0,
+    lockout_until       DATETIME2             NULL,
     created_at          DATETIME2             NOT NULL DEFAULT SYSUTCDATETIME(),
     updated_at          DATETIME2             NULL,
     -- WARD-13: fixed title printed under a sanction decision (e.g. N'Chủ tịch UBND Phường ...').

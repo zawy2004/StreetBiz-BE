@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Microsoft.OpenApi.Models;
@@ -139,6 +140,21 @@ if (app.Environment.IsDevelopment())
 if (!app.Environment.IsDevelopment())
 {
     app.UseHttpsRedirection();
+}
+
+// Behind a reverse proxy every client shares the proxy IP, so the per-IP auth limits would
+// become one global bucket. Only trust X-Forwarded-For from proxies listed in config.
+if (app.Configuration.GetSection("ForwardedHeaders:KnownProxies").Get<string[]>() is { Length: > 0 } proxies)
+{
+    var forwarded = new ForwardedHeadersOptions { ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto };
+    forwarded.KnownProxies.Clear();
+    forwarded.KnownNetworks.Clear();
+    foreach (var proxy in proxies)
+    {
+        forwarded.KnownProxies.Add(System.Net.IPAddress.Parse(proxy));
+    }
+
+    app.UseForwardedHeaders(forwarded);
 }
 
 app.UseCors(CorsSetup.PolicyName);

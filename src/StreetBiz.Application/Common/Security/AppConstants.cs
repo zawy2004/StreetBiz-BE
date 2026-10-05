@@ -61,7 +61,7 @@ public static class AppMessages
 
     // Field-level validation messages (MSG07 "{field} is required" family).
     public const string PasswordRequired = "Vui lòng nhập mật khẩu.";
-    public const string PasswordPolicy = "Mật khẩu cần tối thiểu 8 ký tự, gồm chữ hoa, chữ thường, chữ số và ký tự đặc biệt.";
+    public const string PasswordPolicy = "Mật khẩu cần từ 8 đến 72 ký tự, gồm chữ hoa, chữ thường, chữ số và ký tự đặc biệt.";
     public const string NewPasswordPolicy = "Mật khẩu mới chưa đạt yêu cầu bảo mật.";
     public const string NewPasswordMustDiffer = "Mật khẩu mới phải khác mật khẩu hiện tại.";
     public const string CurrentPasswordRequired = "Vui lòng nhập mật khẩu hiện tại.";
@@ -72,6 +72,7 @@ public static class AppMessages
     public const string UnsupportedOtpPurpose = "Mục đích mã xác thực không hợp lệ.";
     public const string SessionNotFound = "Không tìm thấy phiên đăng nhập.";
     public const string TooManyAttempts = "Bạn đã thử quá nhiều lần. Vui lòng chờ ít phút rồi thử lại.";
+    public const string AccountLocked = "Tài khoản tạm thời bị khoá do nhập sai mật khẩu nhiều lần. Vui lòng thử lại sau.";
 }
 
 /// <summary>AdministrativeUnits.unit_type values. `ward_unit_type` is a computed 'WARD' column.</summary>

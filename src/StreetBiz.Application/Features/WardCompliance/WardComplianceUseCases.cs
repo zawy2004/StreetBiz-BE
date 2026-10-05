@@ -1,5 +1,6 @@
 using FluentValidation;
 using MediatR;
+using StreetBiz.Application.Common.Exceptions;
 using StreetBiz.Application.Common.Security;
 using StreetBiz.Application.Features.WardSlots;
 
@@ -535,10 +536,23 @@ public sealed record GetAiEncroachmentCheckQuery(
     double? SlotLength) : IRequest<AiEncroachmentResult>;
 
 public sealed class GetAiEncroachmentCheckQueryHandler(
+    IWardActorContext actorContext,
     IAiComplianceService aiService) : IRequestHandler<GetAiEncroachmentCheckQuery, AiEncroachmentResult>
 {
-    public Task<AiEncroachmentResult> Handle(GetAiEncroachmentCheckQuery request, CancellationToken cancellationToken) =>
-        aiService.AnalyzeInspectionPhotoAsync(request.PhotoUrl, request.SlotWidth, request.SlotLength, cancellationToken);
+    public async Task<AiEncroachmentResult> Handle(GetAiEncroachmentCheckQuery request, CancellationToken cancellationToken)
+    {
+        // Ward officers only, and only photos we store ourselves (or an inline image): the URL is
+        // caller-supplied, so fetching anything else would be a server-side request forgery vector.
+        await actorContext.RequireAsync(cancellationToken);
+        if (!EvidenceFiles.TryParseUrl(request.PhotoUrl, out _, out _)
+            && request.PhotoUrl?.StartsWith("data:image/", StringComparison.OrdinalIgnoreCase) != true)
+        {
+            throw new DomainRuleException("Ảnh hiện trường phải được tải lên từ hệ thống.");
+        }
+
+        return await aiService.AnalyzeInspectionPhotoAsync(
+            request.PhotoUrl, request.SlotWidth, request.SlotLength, cancellationToken);
+    }
 }
 #endregion
 
