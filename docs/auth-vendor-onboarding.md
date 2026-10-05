@@ -20,17 +20,22 @@ AI / Storefront use cases are the next increments.
 | AUTH-06 Reset password | `POST /api/auth/reset-password` |
 | AUTH-08 List sessions | `GET /api/auth/sessions` (auth) |
 | AUTH-09 Revoke session | `DELETE /api/auth/sessions/{id}` (auth) |
+| AUTH-09 Sign out other devices | `DELETE /api/auth/sessions` (auth; keeps the current session) |
+| Security history | `GET /api/auth/login-history?take=20&before={id}` (auth; own events, newest first) |
 
 Vendor Business Registration (REG-01…05):
 
 | Use case | Endpoint |
 |---|---|
-| REG-01 Submit registration | `POST /api/vendor/registrations` (auth) |
+| REG-01 Create registration (draft) | `POST /api/vendor/registrations` (auth) → status `DRAFT`, invisible to the ward |
+| REG-01 File the draft | `POST /api/vendor/registrations/{id}/submit` (auth; needs the documents the vendor type requires, BR-09) |
 | REG-02 Upload evidence file | `POST /api/uploads/evidence` (auth, multipart `file`) → `{ fileUrl }` |
 | REG-02 Attach evidence | `POST /api/vendor/registrations/{id}/evidence` (auth, `fileUrl` from the upload) |
 | REG-03 Track registrations | `GET /api/vendor/registrations` (auth) |
 | REG-03 Registration detail | `GET /api/vendor/registrations/{id}` (auth) → registration + evidence |
-| REG-04 Update & re-submit | `PUT /api/vendor/registrations/{id}` (auth) |
+| REG-04 Update | `PUT /api/vendor/registrations/{id}` (auth; a `DRAFT` stays a draft, a filed registration is re-filed and loses the officer's earlier identity check) |
+| REG-02 Remove evidence | `DELETE /api/vendor/registrations/{id}/evidence/{evidenceId}` (auth; only while editable) |
+| AIC-09 Onboarding assistant | `POST /api/vendor/assistant` (vendors only; question ≤ 500, context ≤ 1500 characters) |
 | REG-05 Withdraw | `POST /api/vendor/registrations/{id}/withdraw` (auth) |
 | Evidence download | `GET /api/uploads/evidence/{ownerUserId}/{file}` (auth: owner, or the reviewing ward officer) |
 
@@ -146,3 +151,63 @@ the policy does not need `AllowCredentials`.
 
 - Infrastructure: `BCrypt.Net-Next`, `System.IdentityModel.Tokens.Jwt`
 - API: `Microsoft.AspNetCore.Authentication.JwtBearer`
+
+## Ward review of registrations (WARD-04…06, REG-06)
+
+| Use case | Endpoint |
+|---|---|
+| Queue | `GET /api/ward/enrollments?status=&vendorType=&page=` — pending files: fast-track first, then oldest first. Drafts never appear. |
+| Detail | `GET /api/ward/enrollments/{id}` |
+| Take a file into review | `POST /api/ward/enrollments/{id}/claim` — `SUBMITTED` → `UNDER_REVIEW`; the vendor can no longer edit it |
+| Confirm identity (BR-41) | `POST /api/ward/enrollments/{id}/confirm-identity` |
+| Decide | `POST /api/ward/enrollments/{id}/decision` — `APPROVE` / `REJECT` / `MORE_INFO` with a written reason |
+| Fast-track check (REG-06) | `GET /api/ward/enrollments/{id}/fast-track-check` — advisory list of met / unmet conditions |
+
+### Registration status machine
+
+One table (`RegistrationStatuses.CanTransition`) governs vendor edits, withdrawals and ward decisions:
+
+~~~
+DRAFT ─submit→ SUBMITTED ─claim→ UNDER_REVIEW ─┬→ APPROVED ─→ WITHDRAWN
+   │              │                              ├→ REJECTED   (terminal)
+   │              ├──────────────────────────────┤→ MORE_INFORMATION_REQUIRED ─edit→ SUBMITTED
+   └→ WITHDRAWN   └→ WITHDRAWN                   └→ WITHDRAWN
+~~~
+
+- `REJECTED` and `WITHDRAWN` are terminal; the vendor files a new registration.
+- Decisions, claims and withdrawals are conditional `UPDATE`s: if another request changed the status
+  first the caller gets **409** instead of silently overwriting it.
+- `APPROVE` requires the officer's identity confirmation **and** every document in
+  `EvidenceTypes.RequiredFor(vendorType)`.
+
+## Security behaviour
+
+- **OTP:** 6 digits, HMAC-SHA256 hashed with `Otp:HashKey`, valid 5 minutes, 60 s resend cooldown,
+  5 wrong attempts lock the code, at most 5 codes per phone per hour and 10 per day.
+- **SMS:** `LoggingSmsSender` is Development-only. Any other environment must set
+  `Sms:Provider=Http` and `Sms:Endpoint` (+ `Sms:ApiKey`), or the API refuses to start.
+- **Sign-in lockout:** 5 wrong passwords lock the account for 15 minutes
+  (`UserAccounts.failed_login_count` / `lockout_until`). Unknown phone numbers cost the same time as
+  known ones.
+- **Refresh tokens:** rotated atomically; replaying a token that was rotated more than 30 s ago
+  revokes every session of that user; a login expires 30 days after it started however often it is
+  refreshed. A suspended account loses access on its next request.
+- **Passwords:** 8–72 characters (BCrypt ignores anything past 72 bytes).
+- **Security history:** `ISecurityEvents` writes sign-in success/failure, lockouts, password
+  change/reset and session revocations to `AuditLogs`; password change/reset and a lockout also
+  create an in-app `SECURITY_ALERT` notification.
+- **Behind a proxy:** list trusted proxy addresses in `ForwardedHeaders:KnownProxies`, otherwise
+  every client shares the proxy's address and the per-IP auth limits become one global bucket.
+
+### Configuration added
+
+| Key | Purpose |
+|---|---|
+| `Otp:HashKey` | server secret for hashing OTP codes (required outside Development) |
+| `Sms:Provider`, `Sms:Endpoint`, `Sms:ApiKey`, `Sms:Sender` | SMS gateway (`Http` provider) |
+| `ForwardedHeaders:KnownProxies` | trusted reverse-proxy IPs |
+
+### Schema change
+
+`UserAccounts.failed_login_count` and `lockout_until` — rebuild the local database
+(`scripts/setup-local-db.ps1 -Recreate`).
