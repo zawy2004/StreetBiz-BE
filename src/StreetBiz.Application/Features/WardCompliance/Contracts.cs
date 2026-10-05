@@ -384,7 +384,11 @@ public sealed record WardRenewalBatchDecisionResult(
 public interface IWardComplianceService
 {
     // Enrollment / Registration
-    Task<IReadOnlyList<WardEnrollmentListItemDto>> ListEnrollmentsAsync(WardActor actor, string? status, int page, CancellationToken ct);
+    Task<IReadOnlyList<WardEnrollmentListItemDto>> ListEnrollmentsAsync(
+        WardActor actor, string? status, int page, CancellationToken ct, string? vendorType = null);
+
+    /// <summary>REG-06: which fast-track conditions a filed registration meets (advisory; the officer still decides).</summary>
+    Task<FastTrackCheckDto> CheckFastTrackAsync(WardActor actor, long registrationId, CancellationToken ct);
     Task<WardEnrollmentDetailDto> GetEnrollmentDetailAsync(WardActor actor, long registrationId, CancellationToken ct);
     Task<WardEnrollmentDetailDto> DecideEnrollmentAsync(WardActor actor, long registrationId, WardEnrollmentDecision decision, CancellationToken ct);
 
@@ -455,3 +459,9 @@ public interface IAiComplianceService
     Task<string> AnswerVendorAssistantAsync(string question, string? context, CancellationToken ct);
 }
 #endregion
+
+/// <summary>One condition of the REG-06 fast-track check.</summary>
+public sealed record FastTrackCriterionDto(string Code, string Label, bool Passed);
+
+/// <summary>Whether every fast-track condition is met. Only orders the queue; never approves.</summary>
+public sealed record FastTrackCheckDto(bool Eligible, IReadOnlyList<FastTrackCriterionDto> Criteria);

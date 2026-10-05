@@ -22,8 +22,9 @@ public sealed class WardComplianceController(ISender sender) : ControllerBase
     public async Task<ActionResult<IReadOnlyList<WardEnrollmentListItemDto>>> ListEnrollments(
         [FromQuery] string? status,
         [FromQuery] int page = 1,
+        [FromQuery] string? vendorType = null,
         CancellationToken ct = default) =>
-        Ok(await sender.Send(new ListWardEnrollmentsQuery(status, page), ct));
+        Ok(await sender.Send(new ListWardEnrollmentsQuery(status, page, vendorType), ct));
 
     [HttpGet("enrollments/{id:long}")]
     public async Task<ActionResult<WardEnrollmentDetailDto>> GetEnrollment(
@@ -37,6 +38,11 @@ public sealed class WardComplianceController(ISender sender) : ControllerBase
         WardEnrollmentDecision decision,
         CancellationToken ct) =>
         Ok(await sender.Send(new DecideWardEnrollmentCommand(id, decision), ct));
+
+    /// <summary>REG-06: which fast-track conditions this registration meets.</summary>
+    [HttpGet("enrollments/{id:long}/fast-track-check")]
+    public async Task<ActionResult<FastTrackCheckDto>> CheckFastTrack(long id, CancellationToken ct) =>
+        Ok(await sender.Send(new CheckWardFastTrackQuery(id), ct));
 
     /// <summary>WARD-04: take a SUBMITTED file into review (UNDER_REVIEW); the vendor can no longer edit it.</summary>
     [HttpPost("enrollments/{id:long}/claim")]

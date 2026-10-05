@@ -63,7 +63,8 @@ public sealed class WardComplianceService(
         WardActor actor,
         string? status,
         int page,
-        CancellationToken ct)
+        CancellationToken ct,
+        string? vendorType = null)
     {
         var query = db.BusinessRegistrations.AsNoTracking()
             .Include(x => x.vendor).ThenInclude(v => v.user)
@@ -73,6 +74,11 @@ public sealed class WardComplianceService(
         if (!string.IsNullOrWhiteSpace(status))
         {
             query = query.Where(x => x.registration_status == status);
+        }
+
+        if (!string.IsNullOrWhiteSpace(vendorType))
+        {
+            query = query.Where(x => x.vendor_type == vendorType);
         }
 
         var offset = (page - 1) * 20;
@@ -199,6 +205,32 @@ public sealed class WardComplianceService(
 
         await db.SaveChangesAsync(ct);
         return await GetEnrollmentDetailAsync(actor, registrationId, ct);
+    }
+
+    public async Task<FastTrackCheckDto> CheckFastTrackAsync(WardActor actor, long registrationId, CancellationToken ct)
+    {
+        var reg = await db.BusinessRegistrations.AsNoTracking()
+            .Include(x => x.RegistrationEvidences)
+            .SingleOrDefaultAsync(x => x.registration_id == registrationId, ct);
+
+        if (reg is null || reg.ward_unit_id != actor.WardId || reg.registration_status == RegistrationStatuses.Draft)
+        {
+            throw new NotFoundException("Không tìm thấy hồ sơ đăng ký điểm bán tại địa bàn phường của bạn.");
+        }
+
+        var types = reg.RegistrationEvidences.Select(e => e.evidence_type).ToHashSet();
+        var criteria = new List<FastTrackCriterionDto>
+        {
+            new("FIXED_STOREFRONT", "Cửa hàng cố định", reg.vendor_type == VendorTypes.FixedStorefront),
+            new("BUSINESS_LICENSE", "Có giấy phép kinh doanh đính kèm", types.Contains(EvidenceTypes.BusinessLicense)),
+            new("ADDRESS", "Có địa chỉ kinh doanh", !string.IsNullOrWhiteSpace(reg.declared_address)),
+            new("IDENTITY_DOCUMENTS", "Có đủ hai mặt CCCD",
+                types.Contains(EvidenceTypes.IdentityDocument) && types.Contains(EvidenceTypes.IdentityDocumentBack)),
+            new("FOOD_SAFETY_COMMITMENT", "Đã cam kết an toàn thực phẩm", reg.food_safety_commitment_at is not null),
+        };
+
+        // Advisory only: it explains why a file was queued ahead, it decides nothing.
+        return new FastTrackCheckDto(criteria.All(c => c.Passed), criteria);
     }
 
     public async Task<WardEnrollmentDetailDto> ClaimEnrollmentAsync(

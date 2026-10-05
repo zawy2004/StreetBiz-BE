@@ -310,6 +310,77 @@ public sealed class WardComplianceServiceTests
         await Assert.ThrowsAsync<NotFoundException>(() => f.NewService().GetEnrollmentDetailAsync(f.Actor, 2, default));
     }
 
+    [Fact]
+    public async Task Fast_track_check_lists_each_condition_and_is_not_eligible_until_all_pass()
+    {
+        using var f = await Fixture.Create();
+
+        var before = await f.NewService().CheckFastTrackAsync(f.Actor, 2, default);
+
+        Assert.False(before.Eligible);
+        Assert.False(before.Criteria.Single(c => c.Code == "FIXED_STOREFRONT").Passed); // fixture vendor is itinerant
+        Assert.False(before.Criteria.Single(c => c.Code == "BUSINESS_LICENSE").Passed);
+
+        using (var db = f.NewDb())
+        {
+            var reg = await db.BusinessRegistrations.SingleAsync(r => r.registration_id == 2);
+            reg.vendor_type = "FIXED_STOREFRONT";
+            reg.declared_address = "12 Lê Duẩn";
+            reg.food_safety_commitment_at = DateTime.UtcNow;
+            await db.SaveChangesAsync();
+        }
+
+        await GiveRequiredEvidence(f, registrationId: 2);
+        using (var db = f.NewDb())
+        {
+            db.RegistrationEvidences.Add(new RegistrationEvidence
+            {
+                registration_id = 2, evidence_type = "BUSINESS_LICENSE", file_url = "/uploads/gpkd.jpg", uploaded_at = DateTime.UtcNow,
+            });
+            await db.SaveChangesAsync();
+        }
+
+        var after = await f.NewService().CheckFastTrackAsync(f.Actor, 2, default);
+
+        Assert.True(after.Eligible);
+        Assert.All(after.Criteria, c => Assert.True(c.Passed));
+    }
+
+    [Fact]
+    public async Task The_ward_queue_can_be_narrowed_to_one_vendor_type()
+    {
+        using var f = await Fixture.Create();
+        using (var db = f.NewDb())
+        {
+            (await db.BusinessRegistrations.SingleAsync(r => r.registration_id == 2)).vendor_type = "FIXED_STOREFRONT";
+            await db.SaveChangesAsync();
+        }
+
+        var fixedOnly = await f.NewService().ListEnrollmentsAsync(f.Actor, null, 1, default, "FIXED_STOREFRONT");
+        var itinerantOnly = await f.NewService().ListEnrollmentsAsync(f.Actor, null, 1, default, "ITINERANT");
+
+        Assert.Equal(["Hộ B"], fixedOnly.Select(i => i.DisplayName));
+        Assert.Equal(["Hộ A"], itinerantOnly.Select(i => i.DisplayName));
+    }
+
+    [Fact]
+    public async Task The_pending_queue_puts_fast_track_files_first_then_the_oldest()
+    {
+        using var f = await Fixture.Create();
+        using (var db = f.NewDb())
+        {
+            db.BusinessRegistrations.AddRange(
+                new BusinessRegistration { registration_id = 3, vendor_id = 10, ward_unit_id = 1, vendor_type = "FIXED_STOREFRONT", display_name = "Nhanh", registration_status = "SUBMITTED", fast_track_flag = true, created_at = new DateTime(2026, 10, 3) },
+                new BusinessRegistration { registration_id = 4, vendor_id = 11, ward_unit_id = 1, vendor_type = "ITINERANT", display_name = "Cũ", registration_status = "SUBMITTED", created_at = new DateTime(2026, 10, 1) });
+            (await db.BusinessRegistrations.SingleAsync(r => r.registration_id == 2)).created_at = new DateTime(2026, 10, 2);
+            await db.SaveChangesAsync();
+        }
+
+        var queue = await f.NewService().ListEnrollmentsAsync(f.Actor, "SUBMITTED", 1, default);
+
+        Assert.Equal(["Nhanh", "Cũ", "Hộ B"], queue.Select(i => i.DisplayName));
+    }
+
     private static async Task GiveRequiredEvidence(Fixture f, long registrationId)
     {
         using var db = f.NewDb();

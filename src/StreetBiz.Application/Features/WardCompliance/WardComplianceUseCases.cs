@@ -7,7 +7,8 @@ using StreetBiz.Application.Features.WardSlots;
 namespace StreetBiz.Application.Features.WardCompliance;
 
 #region Enrollment / Registration Use Cases
-public sealed record ListWardEnrollmentsQuery(string? Status, int Page = 1) : IRequest<IReadOnlyList<WardEnrollmentListItemDto>>;
+public sealed record ListWardEnrollmentsQuery(string? Status, int Page = 1, string? VendorType = null)
+    : IRequest<IReadOnlyList<WardEnrollmentListItemDto>>;
 
 public sealed class ListWardEnrollmentsQueryValidator : AbstractValidator<ListWardEnrollmentsQuery>
 {
@@ -27,7 +28,8 @@ public sealed class ListWardEnrollmentsQueryHandler(
         CancellationToken cancellationToken)
     {
         var actor = await actorContext.RequireAsync(cancellationToken);
-        return await complianceService.ListEnrollmentsAsync(actor, request.Status, request.Page, cancellationToken);
+        return await complianceService.ListEnrollmentsAsync(
+            actor, request.Status, request.Page, cancellationToken, request.VendorType);
     }
 }
 
@@ -603,3 +605,17 @@ public sealed class GetWardPatrolHeatmapQueryHandler(
     }
 }
 #endregion
+
+public sealed record CheckWardFastTrackQuery(long Id) : IRequest<FastTrackCheckDto>;
+
+public sealed class CheckWardFastTrackQueryHandler(
+    IWardActorContext actorContext,
+    IWardComplianceService complianceService)
+    : IRequestHandler<CheckWardFastTrackQuery, FastTrackCheckDto>
+{
+    public async Task<FastTrackCheckDto> Handle(CheckWardFastTrackQuery request, CancellationToken cancellationToken)
+    {
+        var actor = await actorContext.RequireAsync(cancellationToken);
+        return await complianceService.CheckFastTrackAsync(actor, request.Id, cancellationToken);
+    }
+}

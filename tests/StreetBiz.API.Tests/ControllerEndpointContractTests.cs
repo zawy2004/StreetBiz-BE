@@ -171,6 +171,7 @@ public sealed class ControllerEndpointContractTests
         "POST /api/ward/enrollments/{id}/decision",
         "POST /api/ward/enrollments/{id}/confirm-identity",
         "POST /api/ward/enrollments/{id}/claim",
+        "GET /api/ward/enrollments/{id}/fast-track-check",
         "GET /api/ward/rental-applications",
         "GET /api/ward/rental-applications/{id}",
         "POST /api/ward/rental-applications/{id}/decision",
