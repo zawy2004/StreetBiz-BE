@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using StreetBiz.Application.Common.Security;
 using StreetBiz.Application.DTOs.VendorRegistration;
+using StreetBiz.Application.Features.VendorRegistration.FileRegistration;
 using StreetBiz.Application.Features.VendorRegistration.GetRegistration;
 using StreetBiz.Application.Features.VendorRegistration.RemoveEvidence;
 using StreetBiz.Application.Features.VendorRegistration.SubmitEvidence;
@@ -18,7 +19,7 @@ namespace StreetBiz.API.Controllers;
 [Route("api/vendor/registrations")]
 public sealed class VendorRegistrationController(ISender sender) : ControllerBase
 {
-    /// <summary>REG-01: submit a business registration.</summary>
+    /// <summary>REG-01: create a registration as a draft (use POST {id}/submit to file it).</summary>
     [HttpPost]
     public async Task<ActionResult<BusinessRegistrationDto>> Submit(
         [FromBody] SubmitRegistrationRequest request, CancellationToken cancellationToken)
@@ -46,7 +47,7 @@ public sealed class VendorRegistrationController(ISender sender) : ControllerBas
             request.PlannedStartDate,
             request.FoodSafetyCommitment,
             request.HouseholdMembers?.Select(m => m.ToModel()).ToList()), cancellationToken);
-        return Ok(new { message = RegMessages.Submitted, data = result });
+        return Ok(new { message = RegMessages.DraftSaved, data = result });
     }
 
     /// <summary>REG-03: list the caller's registrations and their status.</summary>
@@ -79,6 +80,14 @@ public sealed class VendorRegistrationController(ISender sender) : ControllerBas
     {
         await sender.Send(new RemoveEvidenceCommand(registrationId, evidenceId), cancellationToken);
         return NoContent();
+    }
+
+    /// <summary>REG-01: file a completed draft with the ward (requires the mandatory documents).</summary>
+    [HttpPost("{registrationId:long}/submit")]
+    public async Task<ActionResult<BusinessRegistrationDto>> File(long registrationId, CancellationToken cancellationToken)
+    {
+        var result = await sender.Send(new FileRegistrationCommand(registrationId), cancellationToken);
+        return Ok(new { message = RegMessages.Submitted, data = result });
     }
 
     /// <summary>REG-04: update and re-submit an editable registration.</summary>

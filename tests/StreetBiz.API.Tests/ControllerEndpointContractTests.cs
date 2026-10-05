@@ -152,6 +152,7 @@ public sealed class ControllerEndpointContractTests
         "GET /api/vendor/registrations/{registrationId}",
         "POST /api/vendor/registrations/{registrationId}/evidence",
         "PUT /api/vendor/registrations/{registrationId}",
+        "POST /api/vendor/registrations/{registrationId}/submit",
         "POST /api/vendor/registrations/{registrationId}/withdraw",
         "DELETE /api/vendor/registrations/{registrationId}/evidence/{evidenceId}",
         "POST /api/vendor/kyc/id-card",

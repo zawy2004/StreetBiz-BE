@@ -117,6 +117,7 @@ public static class OwnerIdTypes
 public static class RegMessages
 {
     public const string Submitted = "Đã nộp hồ sơ đăng ký kinh doanh.";                                // MSG09
+    public const string DraftSaved = "Đã lưu bản nháp hồ sơ đăng ký.";
     public const string SelectVendorType = "Vui lòng chọn loại hình kinh doanh.";                      // MSG10
     public const string DuplicatePending = "Bạn đang có một hồ sơ chờ xét duyệt. Vui lòng chờ kết quả hoặc rút hồ sơ đó trước."; // BR-09
     public const string FixedNeedsAddress = "Cửa hàng cố định cần nhập địa chỉ kinh doanh.";           // BR-07

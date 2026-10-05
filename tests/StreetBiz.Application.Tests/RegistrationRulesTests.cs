@@ -107,3 +107,85 @@ public sealed class RegistrationRulesTests
         await act.Should().ThrowAsync<ConflictException>();
     }
 }
+
+public sealed class FileRegistrationTests
+{
+    private static StreetBiz.Application.Common.Models.BizRegistration Draft(string vendorType = VendorTypes.Itinerant) =>
+        new(5, 1, vendorType, "Hộ A", null, null, null, 1, RegistrationStatuses.Draft,
+            false, null, null, DateTime.UtcNow, null);
+
+    private readonly Mock<IVendorContext> vendorContext = new();
+    private readonly Mock<IBusinessRegistrationRepository> repository = new();
+
+    private StreetBiz.Application.Features.VendorRegistration.FileRegistration.FileRegistrationCommandHandler Handler() =>
+        new(vendorContext.Object, repository.Object);
+
+    private static StreetBiz.Application.Common.Models.BizRegistrationEvidence Evidence(string type) =>
+        new(1, 5, type, "/x", DateTime.UtcNow);
+
+    [Fact]
+    public async Task A_draft_missing_required_documents_cannot_be_filed()
+    {
+        vendorContext.Setup(v => v.RequireOwnedRegistrationAsync(5, default)).ReturnsAsync(Draft());
+        repository.Setup(r => r.ListEvidenceAsync(5, default)).ReturnsAsync([Evidence(EvidenceTypes.IdentityDocument)]);
+
+        var act = () => Handler().Handle(
+            new StreetBiz.Application.Features.VendorRegistration.FileRegistration.FileRegistrationCommand(5), default);
+
+        (await act.Should().ThrowAsync<DomainRuleException>()).Which.Message.Should().Contain("CCCD mặt sau");
+        repository.Verify(r => r.TryTransitionAsync(It.IsAny<long>(), It.IsAny<string>(), default), Times.Never);
+    }
+
+    [Fact]
+    public async Task A_fixed_storefront_also_needs_its_business_licence()
+    {
+        vendorContext.Setup(v => v.RequireOwnedRegistrationAsync(5, default)).ReturnsAsync(Draft(VendorTypes.FixedStorefront));
+        repository.Setup(r => r.ListEvidenceAsync(5, default)).ReturnsAsync(
+            [Evidence(EvidenceTypes.IdentityDocument), Evidence(EvidenceTypes.IdentityDocumentBack)]);
+
+        var act = () => Handler().Handle(
+            new StreetBiz.Application.Features.VendorRegistration.FileRegistration.FileRegistrationCommand(5), default);
+
+        (await act.Should().ThrowAsync<DomainRuleException>()).Which.Message.Should().Contain("Giấy phép kinh doanh");
+    }
+
+    [Fact]
+    public async Task A_complete_draft_is_filed_and_the_ward_is_told()
+    {
+        vendorContext.Setup(v => v.RequireOwnedRegistrationAsync(5, default)).ReturnsAsync(Draft());
+        repository.Setup(r => r.ListEvidenceAsync(5, default)).ReturnsAsync(
+            [Evidence(EvidenceTypes.IdentityDocument), Evidence(EvidenceTypes.IdentityDocumentBack)]);
+        repository.Setup(r => r.TryTransitionAsync(5, RegistrationStatuses.Submitted, default)).ReturnsAsync(true);
+        repository.Setup(r => r.GetByIdAsync(5, default)).ReturnsAsync(Draft() with { RegistrationStatus = RegistrationStatuses.Submitted });
+
+        var result = await Handler().Handle(
+            new StreetBiz.Application.Features.VendorRegistration.FileRegistration.FileRegistrationCommand(5), default);
+
+        result.RegistrationStatus.Should().Be(RegistrationStatuses.Submitted);
+        repository.Verify(r => r.RecordSubmittedAsync(5, default), Times.Once);
+    }
+
+    [Fact]
+    public async Task Only_a_draft_can_be_filed()
+    {
+        vendorContext.Setup(v => v.RequireOwnedRegistrationAsync(5, default))
+            .ReturnsAsync(Draft() with { RegistrationStatus = RegistrationStatuses.Approved });
+
+        var act = () => Handler().Handle(
+            new StreetBiz.Application.Features.VendorRegistration.FileRegistration.FileRegistrationCommand(5), default);
+
+        await act.Should().ThrowAsync<DomainRuleException>();
+    }
+
+    [Fact]
+    public async Task A_second_filed_application_is_a_conflict()
+    {
+        vendorContext.Setup(v => v.RequireOwnedRegistrationAsync(5, default)).ReturnsAsync(Draft());
+        repository.Setup(r => r.HasActivePendingAsync(1, default, 5)).ReturnsAsync(true);
+
+        var act = () => Handler().Handle(
+            new StreetBiz.Application.Features.VendorRegistration.FileRegistration.FileRegistrationCommand(5), default);
+
+        await act.Should().ThrowAsync<ConflictException>();
+    }
+}

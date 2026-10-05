@@ -23,6 +23,9 @@ public interface IBusinessRegistrationRepository
     /// </summary>
     Task<bool> TryTransitionAsync(long registrationId, string to, CancellationToken cancellationToken);
 
+    /// <summary>Audits a filing and notifies the ward officers (called once a draft becomes SUBMITTED).</summary>
+    Task RecordSubmittedAsync(long registrationId, CancellationToken cancellationToken);
+
     Task<bool> IsEvidenceFileUsedAsync(string fileUrl, CancellationToken cancellationToken);
 
     Task<bool> RemoveEvidenceAsync(long registrationId, long evidenceId, CancellationToken cancellationToken);

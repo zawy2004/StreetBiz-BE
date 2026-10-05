@@ -294,6 +294,22 @@ public sealed class WardComplianceServiceTests
             new StreetBiz.Application.Common.Models.NewBizRegistration("ITINERANT", "Hộ B", null, null, null, 1), default));
     }
 
+    [Fact]
+    public async Task A_draft_registration_is_invisible_to_the_ward()
+    {
+        using var f = await Fixture.Create();
+        using (var db = f.NewDb())
+        {
+            (await db.BusinessRegistrations.SingleAsync(r => r.registration_id == 2)).registration_status = "DRAFT";
+            await db.SaveChangesAsync();
+        }
+
+        var list = await f.NewService().ListEnrollmentsAsync(f.Actor, null, 1, default);
+
+        Assert.DoesNotContain(list, item => item.DisplayName == "Hộ B");
+        await Assert.ThrowsAsync<NotFoundException>(() => f.NewService().GetEnrollmentDetailAsync(f.Actor, 2, default));
+    }
+
     private static async Task GiveRequiredEvidence(Fixture f, long registrationId)
     {
         using var db = f.NewDb();

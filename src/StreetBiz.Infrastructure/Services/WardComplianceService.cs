@@ -67,7 +67,8 @@ public sealed class WardComplianceService(
     {
         var query = db.BusinessRegistrations.AsNoTracking()
             .Include(x => x.vendor).ThenInclude(v => v.user)
-            .Where(x => x.ward_unit_id == actor.WardId);
+            // A draft is still the vendor's private work; the ward only sees filed registrations.
+            .Where(x => x.ward_unit_id == actor.WardId && x.registration_status != RegistrationStatuses.Draft);
 
         if (!string.IsNullOrWhiteSpace(status))
         {
@@ -113,7 +114,7 @@ public sealed class WardComplianceService(
             .AsSplitQuery()
             .SingleOrDefaultAsync(x => x.registration_id == registrationId, ct);
 
-        if (reg is null || reg.ward_unit_id != actor.WardId)
+        if (reg is null || reg.ward_unit_id != actor.WardId || reg.registration_status == RegistrationStatuses.Draft)
         {
             throw new NotFoundException("Không tìm thấy hồ sơ đăng ký điểm bán tại địa bàn phường của bạn.");
         }
@@ -168,7 +169,7 @@ public sealed class WardComplianceService(
         var reg = await db.BusinessRegistrations
             .SingleOrDefaultAsync(x => x.registration_id == registrationId, ct);
 
-        if (reg is null || reg.ward_unit_id != actor.WardId)
+        if (reg is null || reg.ward_unit_id != actor.WardId || reg.registration_status == RegistrationStatuses.Draft)
         {
             throw new NotFoundException("Không tìm thấy hồ sơ đăng ký điểm bán tại địa bàn phường của bạn.");
         }
@@ -208,7 +209,7 @@ public sealed class WardComplianceService(
         var reg = await db.BusinessRegistrations.AsNoTracking()
             .SingleOrDefaultAsync(x => x.registration_id == registrationId, ct);
 
-        if (reg is null || reg.ward_unit_id != actor.WardId)
+        if (reg is null || reg.ward_unit_id != actor.WardId || reg.registration_status == RegistrationStatuses.Draft)
         {
             throw new NotFoundException("Không tìm thấy hồ sơ đăng ký điểm bán tại địa bàn phường của bạn.");
         }
@@ -262,7 +263,7 @@ public sealed class WardComplianceService(
             .Include(x => x.RegistrationEvidences)
             .SingleOrDefaultAsync(x => x.registration_id == registrationId, ct);
 
-        if (reg is null || reg.ward_unit_id != actor.WardId)
+        if (reg is null || reg.ward_unit_id != actor.WardId || reg.registration_status == RegistrationStatuses.Draft)
         {
             throw new NotFoundException("Không tìm thấy hồ sơ đăng ký điểm bán tại địa bàn phường của bạn.");
         }
@@ -401,7 +402,7 @@ public sealed class WardComplianceService(
         var reg = await db.BusinessRegistrations.AsNoTracking()
             .SingleOrDefaultAsync(x => x.registration_id == registrationId, ct);
 
-        if (reg is null || reg.ward_unit_id != actor.WardId)
+        if (reg is null || reg.ward_unit_id != actor.WardId || reg.registration_status == RegistrationStatuses.Draft)
         {
             throw new NotFoundException("Không tìm thấy hồ sơ đăng ký điểm bán tại địa bàn phường của bạn.");
         }
