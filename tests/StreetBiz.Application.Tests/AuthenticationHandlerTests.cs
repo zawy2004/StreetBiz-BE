@@ -78,7 +78,7 @@ public sealed class AuthenticationHandlerTests
         hasher.Setup(h => h.Verify("wrong", "hash")).Returns(false);
         var sessions = new Mock<ISessionRepository>();
 
-        var handler = new ChangePasswordCommandHandler(currentUser.Object, users.Object, hasher.Object, sessions.Object);
+        var handler = new ChangePasswordCommandHandler(currentUser.Object, users.Object, hasher.Object, sessions.Object, new Mock<ISecurityEvents>().Object);
         var act = () => handler.Handle(new ChangePasswordCommand("wrong", "N3w!Passw0rd"), CancellationToken.None);
 
         var error = await act.Should().ThrowAsync<ValidationAppException>();

@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
 using StreetBiz.API.Extensions;
+using StreetBiz.Application.Common.Interfaces;
 using StreetBiz.Application.Common.Security;
 using StreetBiz.Application.DTOs.Authentication;
 using StreetBiz.Application.Features.Authentication.ChangePassword;
@@ -118,6 +119,22 @@ public sealed class AuthController(ISender sender) : ControllerBase
     [HttpGet("sessions")]
     public async Task<ActionResult<IReadOnlyList<SessionDto>>> Sessions(CancellationToken cancellationToken)
         => Ok(await sender.Send(new ListSessionsQuery(), cancellationToken));
+
+    /// <summary>AUTH-09: sign out every device except this one.</summary>
+    [Authorize]
+    [HttpDelete("sessions")]
+    public async Task<IActionResult> RevokeOtherSessions(CancellationToken cancellationToken)
+    {
+        await sender.Send(new RevokeOtherSessionsCommand(), cancellationToken);
+        return Ok(new { message = AppMessages.SessionRevoked });
+    }
+
+    /// <summary>The caller's own sign-in and security history, newest first (paged with `before`).</summary>
+    [Authorize]
+    [HttpGet("login-history")]
+    public async Task<ActionResult<IReadOnlyList<SecurityEvent>>> LoginHistory(
+        [FromQuery] int take = 20, [FromQuery] long? before = null, CancellationToken cancellationToken = default)
+        => Ok(await sender.Send(new LoginHistoryQuery(take, before), cancellationToken));
 
     /// <summary>AUTH-09: revoke a specific session.</summary>
     [Authorize]

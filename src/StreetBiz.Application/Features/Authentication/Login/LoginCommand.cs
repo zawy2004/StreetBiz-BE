@@ -25,10 +25,14 @@ public sealed class LoginCommandHandler(
     IUserAccountRepository userRepository,
     IPasswordHasher passwordHasher,
     IAuthTokenIssuer tokenIssuer,
-    IDateTimeProvider clock) : IRequestHandler<LoginCommand, AuthResultDto>
+    IDateTimeProvider clock,
+    ISecurityEvents securityEvents) : IRequestHandler<LoginCommand, AuthResultDto>
 {
     private const int MaxFailures = 5;
     private static readonly TimeSpan LockoutDuration = TimeSpan.FromMinutes(15);
+
+    private static string Describe(LoginCommand request) =>
+        $"IP {request.IpAddress ?? "?"} · {request.DeviceInfo ?? "thiết bị không rõ"}";
 
     public async Task<AuthResultDto> Handle(LoginCommand request, CancellationToken cancellationToken)
     {
@@ -51,7 +55,15 @@ public sealed class LoginCommandHandler(
 
         if (!passwordHasher.Verify(request.Password, user.PasswordHash))
         {
-            await userRepository.RecordFailedLoginAsync(user.Id, MaxFailures, LockoutDuration, cancellationToken);
+            var locked = await userRepository.RecordFailedLoginAsync(user.Id, MaxFailures, LockoutDuration, cancellationToken);
+            await securityEvents.RecordAsync(
+                user.Id,
+                locked ? SecurityActions.AccountLocked : SecurityActions.LoginFailed,
+                Describe(request),
+                locked
+                    ? ("Tài khoản tạm thời bị khoá", "Có nhiều lần đăng nhập sai. Tài khoản bị khoá 15 phút. Nếu không phải bạn, hãy đổi mật khẩu sau khi mở khoá.")
+                    : null,
+                cancellationToken);
             throw new AuthenticationException(AppMessages.InvalidCredentials);
         }
 
@@ -61,6 +73,7 @@ public sealed class LoginCommandHandler(
         }
 
         await userRepository.ClearFailedLoginsAsync(user.Id, cancellationToken);
+        await securityEvents.RecordAsync(user.Id, SecurityActions.LoginSuccess, Describe(request), null, cancellationToken);
         return await tokenIssuer.IssueAsync(user, request.DeviceInfo, request.IpAddress, cancellationToken);
     }
 }

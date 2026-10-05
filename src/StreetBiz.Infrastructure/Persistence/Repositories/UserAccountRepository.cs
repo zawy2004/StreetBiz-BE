@@ -102,16 +102,17 @@ public sealed class UserAccountRepository(
         await dbContext.SaveChangesAsync(cancellationToken);
     }
 
-    public async Task RecordFailedLoginAsync(
+    public async Task<bool> RecordFailedLoginAsync(
         long userId, int maxFailures, TimeSpan lockoutDuration, CancellationToken cancellationToken)
     {
         await dbContext.UserAccounts.Where(u => u.user_id == userId)
             .ExecuteUpdateAsync(set => set.SetProperty(u => u.failed_login_count, u => u.failed_login_count + 1), cancellationToken);
         var until = clock.UtcNow.Add(lockoutDuration);
-        await dbContext.UserAccounts.Where(u => u.user_id == userId && u.failed_login_count >= maxFailures)
+        var locked = await dbContext.UserAccounts.Where(u => u.user_id == userId && u.failed_login_count >= maxFailures)
             .ExecuteUpdateAsync(set => set
                 .SetProperty(u => u.failed_login_count, 0)
                 .SetProperty(u => u.lockout_until, until), cancellationToken);
+        return locked > 0;
     }
 
     public async Task ClearFailedLoginsAsync(long userId, CancellationToken cancellationToken)

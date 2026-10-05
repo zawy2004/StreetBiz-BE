@@ -101,6 +101,7 @@ public static class DependencyInjection
         services.AddSingleton<IRefundGateway, ConfiguredRefundGateway>();
 
         services.AddScoped<IOtpService, OtpService>();
+        services.AddScoped<ISecurityEvents, SecurityEvents>();
         services.AddScoped<IUserAccountRepository, UserAccountRepository>();
         services.AddScoped<ISessionRepository, SessionRepository>();
         services.AddScoped<IVendorRepository, VendorRepository>();

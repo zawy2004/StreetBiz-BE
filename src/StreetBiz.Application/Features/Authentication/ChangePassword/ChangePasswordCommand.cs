@@ -27,7 +27,8 @@ public sealed class ChangePasswordCommandHandler(
     ICurrentUser currentUser,
     IUserAccountRepository userRepository,
     IPasswordHasher passwordHasher,
-    ISessionRepository sessionRepository) : IRequestHandler<ChangePasswordCommand, Unit>
+    ISessionRepository sessionRepository,
+    ISecurityEvents securityEvents) : IRequestHandler<ChangePasswordCommand, Unit>
 {
     public async Task<Unit> Handle(ChangePasswordCommand request, CancellationToken cancellationToken)
     {
@@ -53,6 +54,13 @@ public sealed class ChangePasswordCommandHandler(
         {
             await sessionRepository.RevokeAllForUserExceptAsync(userId, sessionId, cancellationToken);
         }
+
+        await securityEvents.RecordAsync(
+            userId,
+            SecurityActions.PasswordChanged,
+            null,
+            ("Mật khẩu đã được đổi", "Mật khẩu tài khoản của bạn vừa được thay đổi và các thiết bị khác đã bị đăng xuất. Nếu không phải bạn, hãy liên hệ hỗ trợ ngay."),
+            cancellationToken);
 
         return Unit.Value;
     }

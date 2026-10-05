@@ -13,8 +13,8 @@ public interface IUserAccountRepository
 
     Task UpdatePasswordHashAsync(long userId, string passwordHash, CancellationToken cancellationToken);
 
-    /// <summary>Counts a wrong password; once the limit is reached the account is locked and the counter reset.</summary>
-    Task RecordFailedLoginAsync(long userId, int maxFailures, TimeSpan lockoutDuration, CancellationToken cancellationToken);
+    /// <summary>Counts a wrong password; once the limit is reached the account is locked, the counter reset and true returned.</summary>
+    Task<bool> RecordFailedLoginAsync(long userId, int maxFailures, TimeSpan lockoutDuration, CancellationToken cancellationToken);
 
     Task ClearFailedLoginsAsync(long userId, CancellationToken cancellationToken);
 }

@@ -29,7 +29,8 @@ public sealed class ResetPasswordCommandHandler(
     IOtpService otpService,
     IUserAccountRepository userRepository,
     IPasswordHasher passwordHasher,
-    ISessionRepository sessionRepository) : IRequestHandler<ResetPasswordCommand, Unit>
+    ISessionRepository sessionRepository,
+    ISecurityEvents securityEvents) : IRequestHandler<ResetPasswordCommand, Unit>
 {
     public async Task<Unit> Handle(ResetPasswordCommand request, CancellationToken cancellationToken)
     {
@@ -42,6 +43,12 @@ public sealed class ResetPasswordCommandHandler(
             user.Id, passwordHasher.Hash(request.NewPassword), cancellationToken);
 
         await sessionRepository.RevokeAllForUserAsync(user.Id, cancellationToken);
+        await securityEvents.RecordAsync(
+            user.Id,
+            SecurityActions.PasswordReset,
+            null,
+            ("Mật khẩu đã được đặt lại", "Mật khẩu tài khoản của bạn vừa được đặt lại bằng mã OTP và mọi thiết bị đã bị đăng xuất. Nếu không phải bạn, hãy liên hệ hỗ trợ ngay."),
+            cancellationToken);
         return Unit.Value;
     }
 }

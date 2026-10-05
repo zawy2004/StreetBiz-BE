@@ -10,7 +10,8 @@ public sealed record RevokeSessionCommand(long SessionId) : IRequest<Unit>;
 
 public sealed class RevokeSessionCommandHandler(
     ICurrentUser currentUser,
-    ISessionRepository sessionRepository) : IRequestHandler<RevokeSessionCommand, Unit>
+    ISessionRepository sessionRepository,
+    ISecurityEvents securityEvents) : IRequestHandler<RevokeSessionCommand, Unit>
 {
     public async Task<Unit> Handle(RevokeSessionCommand request, CancellationToken cancellationToken)
     {
@@ -30,6 +31,8 @@ public sealed class RevokeSessionCommandHandler(
         }
 
         await sessionRepository.RevokeAsync(request.SessionId, cancellationToken);
+        await securityEvents.RecordAsync(
+            userId, SecurityActions.SessionRevoked, session.DeviceInfo, null, cancellationToken);
         return Unit.Value;
     }
 }

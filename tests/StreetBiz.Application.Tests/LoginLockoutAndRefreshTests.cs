@@ -22,6 +22,7 @@ public sealed class LoginLockoutAndRefreshTests
     private readonly Mock<IDateTimeProvider> clock = new();
     private readonly Mock<ISessionRepository> sessions = new();
     private readonly Mock<IJwtTokenService> jwt = new();
+    private readonly Mock<ISecurityEvents> events = new();
 
     public LoginLockoutAndRefreshTests()
     {
@@ -38,7 +39,7 @@ public sealed class LoginLockoutAndRefreshTests
     private static AppUser User(DateTime? lockedUntil = null) =>
         new(1, Phone, "hash", "A", RoleCodes.Vendor, null, AccountStatuses.Active, null, lockedUntil);
 
-    private LoginCommandHandler Login() => new(users.Object, hasher.Object, tokens.Object, clock.Object);
+    private LoginCommandHandler Login() => new(users.Object, hasher.Object, tokens.Object, clock.Object, events.Object);
 
     private RefreshTokenCommandHandler Refresh() =>
         new(jwt.Object, sessions.Object, users.Object, clock.Object, tokens.Object);
@@ -140,5 +141,103 @@ public sealed class LoginLockoutAndRefreshTests
 
         await act.Should().ThrowAsync<AuthenticationException>();
         sessions.Verify(s => s.RevokeAllForUserAsync(It.IsAny<long>(), default), Times.Never);
+    }
+}
+
+public sealed class SecurityEventTests
+{
+    private const string Phone = "0905000001";
+    private static readonly DateTime Now = new(2026, 10, 5, 8, 0, 0, DateTimeKind.Utc);
+
+    private readonly Mock<IUserAccountRepository> users = new();
+    private readonly Mock<IPasswordHasher> hasher = new();
+    private readonly Mock<IAuthTokenIssuer> tokens = new();
+    private readonly Mock<IDateTimeProvider> clock = new();
+    private readonly Mock<ISecurityEvents> events = new();
+
+    public SecurityEventTests()
+    {
+        clock.SetupGet(c => c.UtcNow).Returns(Now);
+        users.Setup(u => u.GetByPhoneAsync(Phone, default)).ReturnsAsync(
+            new AppUser(1, Phone, "hash", "A", RoleCodes.Vendor, null, AccountStatuses.Active, null));
+        tokens.Setup(t => t.IssueAsync(It.IsAny<AppUser>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new AuthResultDto("a", Now, "r", new UserDto(1, Phone, null, RoleCodes.Vendor, null, AccountStatuses.Active)));
+    }
+
+    private LoginCommandHandler Login() => new(users.Object, hasher.Object, tokens.Object, clock.Object, events.Object);
+
+    [Fact]
+    public async Task A_good_sign_in_is_recorded_with_where_it_came_from_and_does_not_notify()
+    {
+        hasher.Setup(h => h.Verify("ok", "hash")).Returns(true);
+
+        await Login().Handle(new LoginCommand(Phone, "ok", "Firefox", "10.0.0.1"), default);
+
+        events.Verify(e => e.RecordAsync(
+            1, SecurityActions.LoginSuccess, It.Is<string?>(d => d!.Contains("10.0.0.1") && d.Contains("Firefox")),
+            null, default), Times.Once);
+    }
+
+    [Fact]
+    public async Task A_wrong_password_is_recorded_without_notifying_the_owner()
+    {
+        hasher.Setup(h => h.Verify("bad", "hash")).Returns(false);
+        users.Setup(u => u.RecordFailedLoginAsync(1, 5, TimeSpan.FromMinutes(15), default)).ReturnsAsync(false);
+
+        var act = () => Login().Handle(new LoginCommand(Phone, "bad", null, "10.0.0.1"), default);
+
+        await act.Should().ThrowAsync<AuthenticationException>();
+        events.Verify(e => e.RecordAsync(
+            1, SecurityActions.LoginFailed, It.IsAny<string?>(), null, default), Times.Once);
+    }
+
+    [Fact]
+    public async Task The_attempt_that_locks_the_account_notifies_the_owner()
+    {
+        hasher.Setup(h => h.Verify("bad", "hash")).Returns(false);
+        users.Setup(u => u.RecordFailedLoginAsync(1, 5, TimeSpan.FromMinutes(15), default)).ReturnsAsync(true);
+
+        var act = () => Login().Handle(new LoginCommand(Phone, "bad", null, null), default);
+
+        await act.Should().ThrowAsync<AuthenticationException>();
+        events.Verify(e => e.RecordAsync(
+            1, SecurityActions.AccountLocked, It.IsAny<string?>(),
+            It.Is<(string Title, string Body)?>(n => n != null), default), Times.Once);
+    }
+
+    [Fact]
+    public async Task Signing_out_other_devices_revokes_all_but_the_current_session_and_is_recorded()
+    {
+        var currentUser = new Mock<ICurrentUser>();
+        currentUser.SetupGet(c => c.UserId).Returns(1);
+        currentUser.SetupGet(c => c.SessionId).Returns(9);
+        var sessions = new Mock<ISessionRepository>();
+        var handler = new StreetBiz.Application.Features.Authentication.Sessions.RevokeOtherSessionsCommandHandler(
+            currentUser.Object, sessions.Object, events.Object);
+
+        await handler.Handle(new StreetBiz.Application.Features.Authentication.Sessions.RevokeOtherSessionsCommand(), default);
+
+        sessions.Verify(s => s.RevokeAllForUserExceptAsync(1, 9, default), Times.Once);
+        events.Verify(e => e.RecordAsync(1, SecurityActions.OtherSessionsRevoked, null, null, default), Times.Once);
+    }
+
+    [Fact]
+    public async Task Changing_the_password_notifies_the_owner()
+    {
+        var currentUser = new Mock<ICurrentUser>();
+        currentUser.SetupGet(c => c.UserId).Returns(1);
+        currentUser.SetupGet(c => c.SessionId).Returns(9);
+        hasher.Setup(h => h.Verify("old", "hash")).Returns(true);
+        hasher.Setup(h => h.Hash("New#Pass123")).Returns("newhash");
+        var handler = new StreetBiz.Application.Features.Authentication.ChangePassword.ChangePasswordCommandHandler(
+            currentUser.Object, users.Object, hasher.Object, new Mock<ISessionRepository>().Object, events.Object);
+        users.Setup(u => u.GetByIdAsync(1, default)).ReturnsAsync(
+            new AppUser(1, Phone, "hash", "A", RoleCodes.Vendor, null, AccountStatuses.Active, null));
+
+        await handler.Handle(
+            new StreetBiz.Application.Features.Authentication.ChangePassword.ChangePasswordCommand("old", "New#Pass123"), default);
+
+        events.Verify(e => e.RecordAsync(
+            1, SecurityActions.PasswordChanged, null, It.Is<(string Title, string Body)?>(n => n != null), default), Times.Once);
     }
 }

@@ -108,6 +108,8 @@ public sealed class ControllerEndpointContractTests
         "POST /api/auth/reset-password",
         "GET /api/auth/sessions",
         "DELETE /api/auth/sessions/{sessionId}",
+        "DELETE /api/auth/sessions",
+        "GET /api/auth/login-history",
         "POST /api/vendor/address-changes",
         "GET /api/vendor/address-changes",
         "POST /api/vendor/rental-applications/open-slot",
