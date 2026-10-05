@@ -173,20 +173,6 @@ public sealed class WardComplianceController(ISender sender) : ControllerBase
         GetAiEncroachmentCheckQuery request,
         CancellationToken ct) =>
         Ok(await sender.Send(request, ct));
-
-    /// <summary>Authenticated only -- an earlier draft left this [AllowAnonymous], letting
-    /// anyone call out to a paid LLM with no rate limit. See Program.cs for the rate-limit
-    /// policy applied to this route.</summary>
-    [EnableRateLimiting("VendorAssistantAi")]
-    [HttpPost("ai/vendor-assistant")]
-    public async Task<ActionResult<VendorAssistantResponse>> VendorAssistant(
-        [FromBody] VendorAssistantRequest request,
-        [FromServices] IAiComplianceService aiService,
-        CancellationToken ct)
-    {
-        var answer = await aiService.AnswerVendorAssistantAsync(request.Question, request.Context, ct);
-        return Ok(new VendorAssistantResponse(answer, true));
-    }
     #endregion
 
     #region Insights (rule-based, no LLM)
@@ -202,6 +188,4 @@ public sealed class WardComplianceController(ISender sender) : ControllerBase
     #endregion
 }
 
-public sealed record VendorAssistantRequest(string Question, string? Context = null);
-public sealed record VendorAssistantResponse(string Answer, bool IsAiGenerated);
 

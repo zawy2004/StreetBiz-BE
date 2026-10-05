@@ -188,7 +188,7 @@ public sealed class ControllerEndpointContractTests
         "POST /api/ward/violations/{id}/sanction",
         "POST /api/ward/ai/document-extract",
         "POST /api/ward/ai/encroachment-check",
-        "POST /api/ward/ai/vendor-assistant",
+        "POST /api/vendor/assistant",
         "GET /api/ward/insights/risk-queue",
         "GET /api/ward/insights/patrol-heatmap",
         "GET /api/ward/reports/collection",
