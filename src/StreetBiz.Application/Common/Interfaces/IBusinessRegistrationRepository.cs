@@ -16,6 +16,17 @@ public interface IBusinessRegistrationRepository
 
     Task SetStatusAsync(long registrationId, string status, CancellationToken cancellationToken);
 
+    /// <summary>
+    /// Moves the registration to <paramref name="to"/> if the transition table allows it, in one
+    /// conditional UPDATE. Returns false when another request changed the status first.
+    /// Throws a domain-rule error for an illegal move.
+    /// </summary>
+    Task<bool> TryTransitionAsync(long registrationId, string to, CancellationToken cancellationToken);
+
+    Task<bool> IsEvidenceFileUsedAsync(string fileUrl, CancellationToken cancellationToken);
+
+    Task<bool> RemoveEvidenceAsync(long registrationId, long evidenceId, CancellationToken cancellationToken);
+
     Task<long> AddEvidenceAsync(long registrationId, NewRegistrationEvidence evidence, CancellationToken cancellationToken);
 
     Task<IReadOnlyList<BizRegistrationEvidence>> ListEvidenceAsync(long registrationId, CancellationToken cancellationToken);

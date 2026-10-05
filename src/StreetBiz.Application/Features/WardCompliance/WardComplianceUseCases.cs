@@ -119,6 +119,20 @@ public sealed class ConfirmEnrollmentIdentityCommandHandler(
 }
 #endregion
 
+public sealed record ClaimWardEnrollmentCommand(long Id) : IRequest<WardEnrollmentDetailDto>;
+
+public sealed class ClaimWardEnrollmentCommandHandler(
+    IWardActorContext actorContext,
+    IWardComplianceService complianceService)
+    : IRequestHandler<ClaimWardEnrollmentCommand, WardEnrollmentDetailDto>
+{
+    public async Task<WardEnrollmentDetailDto> Handle(ClaimWardEnrollmentCommand request, CancellationToken cancellationToken)
+    {
+        var actor = await actorContext.RequireAsync(cancellationToken);
+        return await complianceService.ClaimEnrollmentAsync(actor, request.Id, cancellationToken);
+    }
+}
+
 #region Rental Application Use Cases
 public sealed record ListWardRentalApplicationsQuery(string? Status, int Page = 1) : IRequest<IReadOnlyList<WardRentalApplicationListItemDto>>;
 

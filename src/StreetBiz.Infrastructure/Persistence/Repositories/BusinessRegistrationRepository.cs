@@ -48,6 +48,10 @@ public sealed class BusinessRegistrationRepository(
 
         dbContext.BusinessRegistrations.Add(entity);
         await dbContext.SaveChangesAsync(cancellationToken);
+        await RecordVendorEventAsync(
+            vendorId, entity, "ENROLLMENT_SUBMITTED",
+            "Có hồ sơ điểm bán mới", $"Hộ kinh doanh '{entity.display_name}' vừa nộp hồ sơ đăng ký.",
+            cancellationToken);
         return entity.registration_id;
     }
 
@@ -76,6 +80,13 @@ public sealed class BusinessRegistrationRepository(
             .FirstOrDefaultAsync(r => r.registration_id == registrationId, cancellationToken)
             ?? throw new NotFoundException(RegMessages.NotFound);
 
+        // Re-checked on the loaded row: the handler's read may be stale if an officer claimed the file since.
+        if (!RegistrationStatuses.Editable.Contains(e.registration_status))
+        {
+            throw new DomainRuleException(
+                string.Format(RegMessages.NotEditable, RegMessages.StatusWord(e.registration_status)));
+        }
+
         e.vendor_type = data.VendorType;
         e.display_name = data.DisplayName;
         e.declared_address = data.DeclaredAddress;
@@ -84,6 +95,15 @@ public sealed class BusinessRegistrationRepository(
         e.ward_unit_id = data.WardUnitId;
         e.registration_status = RegistrationStatuses.Submitted;
         e.updated_at = clock.UtcNow;
+
+        // The officer's identity check and earlier verdict described the OLD data; an edited
+        // file must be verified again instead of being approved on a stale confirmation.
+        e.identity_verified_by = null;
+        e.identity_verified_at = null;
+        e.identity_verification_note = null;
+        e.reviewed_by = null;
+        e.reviewed_at = null;
+        e.review_decision_reason = null;
 
         ApplyOwnerAndBusinessFields(e, data);
         if (data.FoodSafetyCommitment && e.food_safety_commitment_at is null)
@@ -103,6 +123,10 @@ public sealed class BusinessRegistrationRepository(
         await dbContext.SaveChangesAsync(cancellationToken);
         // Switching to itinerant drops the licence requirement, so the flag is recomputed.
         await RefreshFastTrackAsync(registrationId, cancellationToken);
+        await RecordVendorEventAsync(
+            e.vendor_id, e, "ENROLLMENT_RESUBMITTED",
+            "Hồ sơ điểm bán được nộp lại", $"Hộ kinh doanh '{e.display_name}' đã cập nhật và nộp lại hồ sơ.",
+            cancellationToken);
     }
 
     public async Task SetStatusAsync(long registrationId, string status, CancellationToken cancellationToken)
@@ -116,6 +140,93 @@ public sealed class BusinessRegistrationRepository(
 
         e.registration_status = status;
         e.updated_at = clock.UtcNow;
+        await dbContext.SaveChangesAsync(cancellationToken);
+    }
+
+    public async Task<bool> TryTransitionAsync(long registrationId, string to, CancellationToken cancellationToken)
+    {
+        var current = await dbContext.BusinessRegistrations.AsNoTracking()
+            .Where(r => r.registration_id == registrationId)
+            .Select(r => r.registration_status)
+            .FirstOrDefaultAsync(cancellationToken)
+            ?? throw new NotFoundException(RegMessages.NotFound);
+
+        if (!RegistrationStatuses.CanTransition(current, to))
+        {
+            throw new DomainRuleException(string.Format(RegMessages.IllegalTransition, current, to));
+        }
+
+        var now = clock.UtcNow;
+        var rows = await dbContext.BusinessRegistrations
+            .Where(r => r.registration_id == registrationId && r.registration_status == current)
+            .ExecuteUpdateAsync(set => set
+                .SetProperty(r => r.registration_status, to)
+                .SetProperty(r => r.updated_at, now), cancellationToken);
+        return rows == 1;
+    }
+
+    public Task<bool> IsEvidenceFileUsedAsync(string fileUrl, CancellationToken cancellationToken) =>
+        dbContext.RegistrationEvidences.AsNoTracking().AnyAsync(e => e.file_url == fileUrl, cancellationToken);
+
+    public async Task<bool> RemoveEvidenceAsync(long registrationId, long evidenceId, CancellationToken cancellationToken)
+    {
+        var rows = await dbContext.RegistrationEvidences
+            .Where(e => e.registration_id == registrationId && e.evidence_id == evidenceId)
+            .ExecuteDeleteAsync(cancellationToken);
+        if (rows == 0)
+        {
+            return false;
+        }
+
+        // Dropping the licence can end fast-track eligibility.
+        await RefreshFastTrackAsync(registrationId, cancellationToken);
+        return true;
+    }
+
+    /// <summary>Writes the vendor-side audit row (BR-46) and tells the ward a file needs attention.</summary>
+    private async Task RecordVendorEventAsync(
+        long vendorId, BusinessRegistration registration, string action, string wardTitle, string wardBody,
+        CancellationToken cancellationToken)
+    {
+        var userId = await dbContext.Vendors.AsNoTracking()
+            .Where(v => v.vendor_id == vendorId)
+            .Select(v => v.user_id)
+            .FirstOrDefaultAsync(cancellationToken);
+        var now = clock.UtcNow;
+        if (userId > 0)
+        {
+            dbContext.AuditLogs.Add(new AuditLog
+            {
+                actor_user_id = userId,
+                action = action,
+                entity_type = "BusinessRegistration",
+                entity_id = registration.registration_id,
+                details = $"{registration.display_name}: {registration.registration_status}",
+                created_at = now,
+            });
+        }
+
+        var officers = await dbContext.UserAccounts.AsNoTracking()
+            .Where(u => u.role_code == RoleCodes.WardAuthority
+                        && u.ward_unit_id == registration.ward_unit_id
+                        && u.account_status == AccountStatuses.Active)
+            .Select(u => u.user_id)
+            .ToListAsync(cancellationToken);
+        foreach (var officerId in officers)
+        {
+            dbContext.Notifications.Add(new Notification
+            {
+                user_id = officerId,
+                notification_type = "ENROLLMENT_STATUS_UPDATE",
+                title = wardTitle,
+                body = wardBody,
+                related_entity_type = "BusinessRegistration",
+                related_entity_id = registration.registration_id,
+                is_read = false,
+                sent_at = now,
+            });
+        }
+
         await dbContext.SaveChangesAsync(cancellationToken);
     }
 

@@ -393,6 +393,7 @@ public interface IWardComplianceService
     /// DecideEnrollmentAsync refuses an APPROVE decision until this has been called.
     /// </summary>
     Task<WardEnrollmentDetailDto> ConfirmIdentityAsync(WardActor actor, long registrationId, ConfirmEnrollmentIdentity request, CancellationToken ct);
+    Task<WardEnrollmentDetailDto> ClaimEnrollmentAsync(WardActor actor, long registrationId, CancellationToken ct);
 
     /// <summary>
     /// Re-runs AI-OCR against the registration's own stored evidence (server-authoritative --

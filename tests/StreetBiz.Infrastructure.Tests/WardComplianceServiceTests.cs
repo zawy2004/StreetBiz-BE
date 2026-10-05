@@ -126,6 +126,7 @@ public sealed class WardComplianceServiceTests
         using var f = await Fixture.Create();
         var service = f.NewService();
 
+        await GiveRequiredEvidence(f, registrationId: 2);
         var confirmed = await service.ConfirmIdentityAsync(f.Actor, 2,
             new ConfirmEnrollmentIdentity("Đối chiếu trực tiếp tại UBND phường ngày 20/09/2026"), default);
         Assert.True(confirmed.IdentityVerified);
@@ -203,6 +204,111 @@ public sealed class WardComplianceServiceTests
         Assert.Equal(2, ai.Comparisons);
         using var db = f.NewDb();
         Assert.Null((await db.BusinessRegistrations.SingleAsync(r => r.registration_id == 2)).ai_check_result);
+    }
+
+    [Fact]
+    public async Task Approving_without_the_required_documents_is_refused()
+    {
+        using var f = await Fixture.Create();
+        var service = f.NewService();
+        await service.ConfirmIdentityAsync(f.Actor, 2, new ConfirmEnrollmentIdentity("Đã đối chiếu CCCD"), default);
+
+        var ex = await Assert.ThrowsAsync<DomainRuleException>(() => service.DecideEnrollmentAsync(f.Actor, 2,
+            new WardEnrollmentDecision("APPROVE", "Đạt yêu cầu", "SUBMITTED"), default));
+
+        Assert.Contains("CCCD mặt trước", ex.Message);
+    }
+
+    [Theory]
+    [InlineData("WITHDRAWN")]
+    [InlineData("REJECTED")]
+    public async Task A_terminal_registration_cannot_be_approved_even_with_a_matching_expected_status(string status)
+    {
+        using var f = await Fixture.Create();
+        using (var db = f.NewDb())
+        {
+            (await db.BusinessRegistrations.SingleAsync(r => r.registration_id == 2)).registration_status = status;
+            await db.SaveChangesAsync();
+        }
+
+        await Assert.ThrowsAsync<DomainRuleException>(() => f.NewService().DecideEnrollmentAsync(f.Actor, 2,
+            new WardEnrollmentDecision("APPROVE", "Đạt yêu cầu", status), default));
+    }
+
+    [Fact]
+    public async Task A_decision_cannot_be_flipped_after_the_fact()
+    {
+        using var f = await Fixture.Create();
+        var service = f.NewService();
+
+        // Registration 1 is already APPROVED; rejecting it afterwards is not a legal move.
+        await Assert.ThrowsAsync<DomainRuleException>(() => service.DecideEnrollmentAsync(f.Actor, 1,
+            new WardEnrollmentDecision("REJECT", "Đổi ý", "APPROVED"), default));
+    }
+
+    [Fact]
+    public async Task Claiming_moves_a_submitted_file_into_review_and_is_idempotent()
+    {
+        using var f = await Fixture.Create();
+
+        var claimed = await f.NewService().ClaimEnrollmentAsync(f.Actor, 2, default);
+        var again = await f.NewService().ClaimEnrollmentAsync(f.Actor, 2, default);
+
+        Assert.Equal("UNDER_REVIEW", claimed.Status);
+        Assert.Equal("UNDER_REVIEW", again.Status);
+
+        // A decision must now be made against the new status.
+        await GiveRequiredEvidence(f, registrationId: 2);
+        await f.NewService().ConfirmIdentityAsync(f.Actor, 2, new ConfirmEnrollmentIdentity("Đã đối chiếu CCCD"), default);
+        var decided = await f.NewService().DecideEnrollmentAsync(f.Actor, 2,
+            new WardEnrollmentDecision("REJECT", "Thiếu thông tin", "UNDER_REVIEW"), default);
+        Assert.Equal("REJECTED", decided.Status);
+    }
+
+    [Fact]
+    public async Task A_vendor_edit_clears_the_officers_identity_confirmation()
+    {
+        using var f = await Fixture.Create();
+        await f.NewService().ConfirmIdentityAsync(f.Actor, 2, new ConfirmEnrollmentIdentity("Đã đối chiếu CCCD"), default);
+
+        using var db = f.NewDb();
+        var repository = new BusinessRegistrationRepository(db, new DateTimeProvider());
+        await repository.UpdateAndResubmitAsync(2, new StreetBiz.Application.Common.Models.NewBizRegistration(
+            "ITINERANT", "Hộ B", null, null, null, 1), default);
+
+        using var verify = f.NewDb();
+        var reg = await verify.BusinessRegistrations.SingleAsync(r => r.registration_id == 2);
+        Assert.Null(reg.identity_verified_at);
+        Assert.Equal("SUBMITTED", reg.registration_status);
+    }
+
+    [Fact]
+    public async Task A_vendor_cannot_edit_a_file_an_officer_is_reviewing()
+    {
+        using var f = await Fixture.Create();
+        await f.NewService().ClaimEnrollmentAsync(f.Actor, 2, default);
+
+        using var db = f.NewDb();
+        var repository = new BusinessRegistrationRepository(db, new DateTimeProvider());
+        await Assert.ThrowsAsync<DomainRuleException>(() => repository.UpdateAndResubmitAsync(2,
+            new StreetBiz.Application.Common.Models.NewBizRegistration("ITINERANT", "Hộ B", null, null, null, 1), default));
+    }
+
+    private static async Task GiveRequiredEvidence(Fixture f, long registrationId)
+    {
+        using var db = f.NewDb();
+        foreach (var type in new[] { "IDENTITY_DOCUMENT", "IDENTITY_DOCUMENT_BACK" })
+        {
+            db.RegistrationEvidences.Add(new RegistrationEvidence
+            {
+                registration_id = registrationId,
+                evidence_type = type,
+                file_url = $"/uploads/{registrationId}-{type}.jpg",
+                uploaded_at = DateTime.UtcNow,
+            });
+        }
+
+        await db.SaveChangesAsync();
     }
 
     private static async Task GiveConsentAndIdPhoto(Fixture f, long registrationId)

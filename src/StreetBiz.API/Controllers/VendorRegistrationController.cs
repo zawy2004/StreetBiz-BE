@@ -4,6 +4,7 @@ using Microsoft.AspNetCore.Mvc;
 using StreetBiz.Application.Common.Security;
 using StreetBiz.Application.DTOs.VendorRegistration;
 using StreetBiz.Application.Features.VendorRegistration.GetRegistration;
+using StreetBiz.Application.Features.VendorRegistration.RemoveEvidence;
 using StreetBiz.Application.Features.VendorRegistration.SubmitEvidence;
 using StreetBiz.Application.Features.VendorRegistration.SubmitRegistration;
 using StreetBiz.Application.Features.VendorRegistration.TrackRegistrations;
@@ -70,6 +71,14 @@ public sealed class VendorRegistrationController(ISender sender) : ControllerBas
             request.OcrExtractedData,
             request.BiometricConsent), cancellationToken);
         return Ok(result);
+    }
+
+    /// <summary>REG-02: remove an attached document while the registration is still editable.</summary>
+    [HttpDelete("{registrationId:long}/evidence/{evidenceId:long}")]
+    public async Task<IActionResult> RemoveEvidence(long registrationId, long evidenceId, CancellationToken cancellationToken)
+    {
+        await sender.Send(new RemoveEvidenceCommand(registrationId, evidenceId), cancellationToken);
+        return NoContent();
     }
 
     /// <summary>REG-04: update and re-submit an editable registration.</summary>

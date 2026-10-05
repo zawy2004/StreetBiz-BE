@@ -76,7 +76,10 @@ public sealed class WardComplianceService(
 
         var offset = (page - 1) * 20;
         var items = await query
-            .OrderByDescending(x => x.created_at)
+            // The pending queue is worked oldest-first with fast-track files ahead (REG-06); history stays newest-first.
+            .OrderByDescending(x => x.fast_track_flag && (x.registration_status == RegistrationStatuses.Submitted || x.registration_status == RegistrationStatuses.UnderReview))
+            .ThenBy(x => (x.registration_status == RegistrationStatuses.Submitted || x.registration_status == RegistrationStatuses.UnderReview) ? x.created_at : DateTime.MaxValue)
+            .ThenByDescending(x => x.created_at)
             .Skip(offset)
             .Take(20)
             .Select(x => new WardEnrollmentListItemDto(
@@ -170,6 +173,13 @@ public sealed class WardComplianceService(
             throw new NotFoundException("Không tìm thấy hồ sơ đăng ký điểm bán tại địa bàn phường của bạn.");
         }
 
+        // Confirming identity only makes sense for a file still open for review.
+        if (reg.registration_status is not (RegistrationStatuses.Submitted or RegistrationStatuses.UnderReview))
+        {
+            throw new DomainRuleException(string.Format(
+                RegMessages.IllegalTransition, reg.registration_status, RegistrationStatuses.UnderReview));
+        }
+
         reg.identity_verified_by = actor.UserId;
         reg.identity_verified_at = Now;
         reg.identity_verification_note = request.Note.Trim();
@@ -186,6 +196,58 @@ public sealed class WardComplianceService(
             created_at = Now
         });
 
+        await db.SaveChangesAsync(ct);
+        return await GetEnrollmentDetailAsync(actor, registrationId, ct);
+    }
+
+    public async Task<WardEnrollmentDetailDto> ClaimEnrollmentAsync(
+        WardActor actor,
+        long registrationId,
+        CancellationToken ct)
+    {
+        var reg = await db.BusinessRegistrations.AsNoTracking()
+            .SingleOrDefaultAsync(x => x.registration_id == registrationId, ct);
+
+        if (reg is null || reg.ward_unit_id != actor.WardId)
+        {
+            throw new NotFoundException("Không tìm thấy hồ sơ đăng ký điểm bán tại địa bàn phường của bạn.");
+        }
+
+        if (reg.registration_status == RegistrationStatuses.UnderReview)
+        {
+            // Idempotent: re-opening a file this ward already claimed is not an error.
+            return await GetEnrollmentDetailAsync(actor, registrationId, ct);
+        }
+
+        if (!RegistrationStatuses.CanTransition(reg.registration_status, RegistrationStatuses.UnderReview))
+        {
+            throw new DomainRuleException(string.Format(
+                RegMessages.IllegalTransition, reg.registration_status, RegistrationStatuses.UnderReview));
+        }
+
+        var now = Now;
+        var claimed = await db.BusinessRegistrations
+            .Where(x => x.registration_id == registrationId && x.registration_status == RegistrationStatuses.Submitted)
+            .ExecuteUpdateAsync(set => set
+                .SetProperty(x => x.registration_status, RegistrationStatuses.UnderReview)
+                .SetProperty(x => x.updated_at, now), ct);
+        if (claimed != 1)
+        {
+            throw new ConflictException(RegMessages.ConcurrentChange);
+        }
+
+        // The row changed behind the change tracker's back; drop stale copies so the detail re-read is fresh.
+        db.ChangeTracker.Clear();
+
+        db.AuditLogs.Add(new AuditLog
+        {
+            actor_user_id = actor.UserId,
+            action = "ENROLLMENT_UNDER_REVIEW",
+            entity_type = "BusinessRegistration",
+            entity_id = registrationId,
+            details = $"Cán bộ {actor.Name} nhận xử lý hồ sơ.",
+            created_at = now
+        });
         await db.SaveChangesAsync(ct);
         return await GetEnrollmentDetailAsync(actor, registrationId, ct);
     }
@@ -334,7 +396,9 @@ public sealed class WardComplianceService(
         WardEnrollmentDecision decision,
         CancellationToken ct)
     {
-        var reg = await db.BusinessRegistrations
+        // AsNoTracking: the status is written with a conditional UPDATE below, and the detail re-read
+        // at the end must see that write rather than a stale tracked copy.
+        var reg = await db.BusinessRegistrations.AsNoTracking()
             .SingleOrDefaultAsync(x => x.registration_id == registrationId, ct);
 
         if (reg is null || reg.ward_unit_id != actor.WardId)
@@ -349,27 +413,65 @@ public sealed class WardComplianceService(
 
         var newStatus = decision.Decision.ToUpperInvariant() switch
         {
-            "APPROVE" => "APPROVED",
-            "REJECT" => "REJECTED",
-            "MORE_INFO" => "MORE_INFORMATION_REQUIRED",
+            "APPROVE" => RegistrationStatuses.Approved,
+            "REJECT" => RegistrationStatuses.Rejected,
+            "MORE_INFO" => RegistrationStatuses.MoreInformationRequired,
             _ => throw new DomainRuleException("Quyết định không hợp lệ.")
         };
 
-        // BR-41 KYC gate: AI-OCR (id_number/AiComplianceService) only reads and self-compares
-        // an uploaded photo -- it never queries the Bo Cong an/CSDL quoc gia ve dan cu -- so it
-        // cannot by itself prove the applicant is who they claim. An officer must have called
-        // ConfirmIdentityAsync first; only then may APPROVE proceed.
-        if (newStatus == "APPROVED" && reg.identity_verified_at is null)
+        // One legal-moves table for vendor and ward alike: a withdrawn, rejected or draft file
+        // cannot be approved, and a verdict cannot be flipped after the fact.
+        if (!RegistrationStatuses.CanTransition(reg.registration_status, newStatus))
         {
-            throw new DomainRuleException(RegMessages.IdentityVerificationRequiredForApproval);
+            throw new DomainRuleException(
+                string.Format(RegMessages.IllegalTransition, reg.registration_status, newStatus));
         }
 
-        reg.registration_status = newStatus;
-        reg.reviewed_by = actor.UserId;
-        reg.reviewer_role = RoleCodes.WardAuthority;
-        reg.reviewed_at = Now;
-        reg.review_decision_reason = decision.Reason.Trim();
-        reg.updated_at = Now;
+        if (newStatus == RegistrationStatuses.Approved)
+        {
+            // BR-41 KYC gate: AI-OCR (id_number/AiComplianceService) only reads and self-compares
+            // an uploaded photo -- it never queries the Bo Cong an/CSDL quoc gia ve dan cu -- so it
+            // cannot by itself prove the applicant is who they claim. An officer must have called
+            // ConfirmIdentityAsync first; only then may APPROVE proceed.
+            if (reg.identity_verified_at is null)
+            {
+                throw new DomainRuleException(RegMessages.IdentityVerificationRequiredForApproval);
+            }
+
+            // BR-07: the server, not the browser, decides that the required documents are on file.
+            var present = await db.RegistrationEvidences.AsNoTracking()
+                .Where(e => e.registration_id == registrationId)
+                .Select(e => e.evidence_type)
+                .ToListAsync(ct);
+            var missing = EvidenceTypes.RequiredFor(reg.vendor_type).Except(present).Select(EvidenceTypes.Label).ToList();
+            if (missing.Count > 0)
+            {
+                throw new DomainRuleException(
+                    string.Format(RegMessages.MissingRequiredEvidence, string.Join(", ", missing)));
+            }
+        }
+
+        var now = Now;
+        var reason = decision.Reason.Trim();
+        var expected = reg.registration_status;
+
+        // Conditional write: if the vendor withdrew or edited the file after this officer opened
+        // it, the status no longer matches and the decision is refused instead of overwriting.
+        var updated = await db.BusinessRegistrations
+            .Where(x => x.registration_id == registrationId && x.registration_status == expected)
+            .ExecuteUpdateAsync(set => set
+                .SetProperty(x => x.registration_status, newStatus)
+                .SetProperty(x => x.reviewed_by, actor.UserId)
+                .SetProperty(x => x.reviewed_at, now)
+                .SetProperty(x => x.review_decision_reason, reason)
+                .SetProperty(x => x.updated_at, now), ct);
+        if (updated != 1)
+        {
+            throw new ConflictException(RegMessages.ConcurrentChange);
+        }
+
+        // The row changed behind the change tracker's back; drop stale copies so the detail re-read is fresh.
+        db.ChangeTracker.Clear();
 
         // Audit Log [BR-46]
         db.AuditLogs.Add(new AuditLog
@@ -378,8 +480,8 @@ public sealed class WardComplianceService(
             action = $"ENROLLMENT_{newStatus}",
             entity_type = "BusinessRegistration",
             entity_id = reg.registration_id,
-            details = $"Cán bộ {actor.Name} quyết định: {newStatus}. Lý do: {decision.Reason.Trim()}",
-            created_at = Now
+            details = $"Cán bộ {actor.Name} quyết định: {newStatus}. Lý do: {reason}",
+            created_at = now
         });
 
         var vendorUser = await db.Vendors.AsNoTracking()

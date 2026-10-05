@@ -48,58 +48,9 @@ public sealed record SubmitRegistrationCommand(
     /// household street-food vendors are exempt from the formal Giấy chứng nhận cơ sở đủ điều
     /// kiện ATTP, but must still commit to meeting food-safety conditions.</summary>
     bool FoodSafetyCommitment = false,
-    IReadOnlyList<NewHouseholdMember>? HouseholdMembers = null) : IRequest<BusinessRegistrationDto>;
+    IReadOnlyList<NewHouseholdMember>? HouseholdMembers = null) : IRequest<BusinessRegistrationDto>, IRegistrationFields;
 
-public sealed class SubmitRegistrationCommandValidator : AbstractValidator<SubmitRegistrationCommand>
-{
-    public SubmitRegistrationCommandValidator()
-    {
-        RuleFor(x => x.VendorType)
-            .Must(t => VendorTypes.All.Contains(t))
-            .WithMessage(RegMessages.SelectVendorType);
-
-        RuleFor(x => x.DisplayName)
-            .NotEmpty().WithMessage(RegMessages.DisplayNameRequired)
-            .MaximumLength(180).WithMessage(RegMessages.DisplayNameTooLong);
-
-        // BR-07: a fixed storefront must declare an address.
-        RuleFor(x => x.DeclaredAddress)
-            .NotEmpty()
-            .When(x => x.VendorType == VendorTypes.FixedStorefront)
-            .WithMessage(RegMessages.FixedNeedsAddress);
-
-        RuleFor(x => x.WardUnitId).GreaterThan(0).WithMessage(AppMessages.InvalidWard);
-
-        // ---- Chủ hộ kinh doanh: required on the real Mẫu số 01 form (RegMessages.OwnerXxx). ----
-        RuleFor(x => x.OwnerDateOfBirth).NotNull().WithMessage(RegMessages.OwnerDateOfBirthRequired);
-        RuleFor(x => x.OwnerGender)
-            .Must(g => g != null && OwnerGenders.All.Contains(g))
-            .WithMessage(RegMessages.OwnerGenderRequired);
-        RuleFor(x => x.OwnerNationality).NotEmpty().WithMessage(RegMessages.OwnerNationalityRequired);
-        RuleFor(x => x.IdType)
-            .Must(t => t != null && OwnerIdTypes.All.Contains(t))
-            .WithMessage(RegMessages.IdTypeRequired);
-        RuleFor(x => x.IdIssuedDate).NotNull().WithMessage(RegMessages.IdIssuedDateRequired);
-        RuleFor(x => x.IdIssuedPlace).NotEmpty().WithMessage(RegMessages.IdIssuedPlaceRequired);
-        RuleFor(x => x.PermanentAddress).NotEmpty().WithMessage(RegMessages.PermanentAddressRequired);
-
-        // ---- Ngành nghề, quy mô hộ kinh doanh ----
-        RuleFor(x => x.BusinessLine).NotEmpty().WithMessage(RegMessages.BusinessLineRequired);
-        RuleFor(x => x.CapitalAmount).NotNull().GreaterThanOrEqualTo(0)
-            .WithMessage(RegMessages.CapitalAmountRequired);
-        RuleFor(x => x.LaborCount).NotNull().GreaterThanOrEqualTo(0)
-            .WithMessage(RegMessages.LaborCountRequired);
-        RuleFor(x => x.PlannedStartDate).NotNull().WithMessage(RegMessages.PlannedStartDateRequired);
-
-        // ---- Cam kết ATTP: bắt buộc riêng biệt, không gộp vào điều khoản chung. ----
-        RuleFor(x => x.FoodSafetyCommitment).Equal(true).WithMessage(RegMessages.FoodSafetyCommitmentRequired);
-
-        RuleForEach(x => x.HouseholdMembers).ChildRules(member =>
-        {
-            member.RuleFor(m => m.FullName).NotEmpty().WithMessage(RegMessages.HouseholdMemberNameRequired);
-        });
-    }
-}
+public sealed class SubmitRegistrationCommandValidator : RegistrationFieldsValidator<SubmitRegistrationCommand>;
 
 public sealed class SubmitRegistrationCommandHandler(
     IVendorContext vendorContext,

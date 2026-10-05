@@ -30,7 +30,13 @@ public sealed class WithdrawRegistrationCommandHandler(
             throw new DomainRuleException(RegMessages.WithdrawBlockedActiveContract);
         }
 
-        await repository.SetStatusAsync(request.RegistrationId, RegistrationStatuses.Withdrawn, cancellationToken);
+        // Conditional update: if an officer decided the file a moment ago this loses the race
+        // instead of silently overwriting their verdict.
+        if (!await repository.TryTransitionAsync(request.RegistrationId, RegistrationStatuses.Withdrawn, cancellationToken))
+        {
+            throw new ConflictException(RegMessages.ConcurrentChange);
+        }
+
         return Unit.Value;
     }
 }

@@ -24,6 +24,31 @@ public static class RegistrationStatuses
 
     /// <summary>Statuses a vendor may still edit (REG-04, BR-62).</summary>
     public static readonly string[] Editable = [Draft, Submitted, MoreInformationRequired];
+
+    /// <summary>
+    /// The only legal moves. Vendor edits, withdrawals and ward decisions all go through this
+    /// table, so an officer cannot approve a withdrawn or rejected file, flip a decision after
+    /// the fact, or review something still being drafted. REJECTED and WITHDRAWN are terminal:
+    /// the vendor files a new registration instead.
+    /// </summary>
+    private static readonly Dictionary<string, string[]> Transitions = new()
+    {
+        [Draft] = [Submitted, Withdrawn],
+        [Submitted] = [UnderReview, MoreInformationRequired, Approved, Rejected, Withdrawn],
+        [UnderReview] = [MoreInformationRequired, Approved, Rejected, Withdrawn],
+        [MoreInformationRequired] = [Submitted, Withdrawn],
+        [Approved] = [Withdrawn],
+        [Rejected] = [],
+        [Withdrawn] = [],
+    };
+
+    /// <summary>A same-status "move" is allowed only where re-saving is meaningful (a SUBMITTED edit).</summary>
+    public static bool CanTransition(string from, string to) =>
+        Transitions.TryGetValue(from, out var next) && (next.Contains(to) || (from == to && from == Submitted));
+
+    /// <summary>Statuses from which <paramref name="to"/> is reachable.</summary>
+    public static string[] SourcesOf(string to) =>
+        Transitions.Keys.Where(from => CanTransition(from, to)).ToArray();
 }
 
 /// <summary>RegistrationEvidence.evidence_type values (DB CHECK).</summary>
@@ -98,6 +123,15 @@ public static class RegMessages
     public const string UploadValidDocument = "Vui lòng tải lên giấy tờ tuỳ thân hoặc giấy phép kinh doanh hợp lệ."; // MSG14
     public const string NotEditable = "Hồ sơ không thể chỉnh sửa vì {0}.";                             // MSG62
     public const string Withdrawn = "Đã rút hồ sơ đăng ký.";
+    public const string IllegalTransition = "Không thể chuyển hồ sơ từ trạng thái \"{0}\" sang \"{1}\".";
+    public const string ConcurrentChange = "Hồ sơ vừa được cập nhật bởi một thao tác khác. Vui lòng tải lại.";
+    public const string MissingRequiredEvidence = "Hồ sơ còn thiếu giấy tờ bắt buộc: {0}.";
+    public const string EvidenceAlreadyUsed = "Tệp này đã được đính kèm vào một hồ sơ khác.";
+    public const string EvidenceNotFound = "Không tìm thấy giấy tờ đã đính kèm.";
+    public const string OwnerTooYoung = "Chủ hộ kinh doanh phải đủ 18 tuổi.";
+    public const string DateMustBePast = "Ngày không được ở tương lai.";
+    public const string CoordinatesInvalid = "Toạ độ vị trí không hợp lệ.";
+    public const string FieldTooLong = "Nội dung quá dài.";
     public const string WithdrawBlockedActiveContract = "Không thể rút hồ sơ khi đang có hợp đồng thuê ô vỉa hè hiệu lực.";
     public const string NotAVendor = "Chỉ tài khoản Hộ kinh doanh mới quản lý được hồ sơ đăng ký.";
     public const string NotFound = "Không tìm thấy hồ sơ đăng ký.";

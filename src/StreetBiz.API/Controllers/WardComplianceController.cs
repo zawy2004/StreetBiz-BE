@@ -38,6 +38,11 @@ public sealed class WardComplianceController(ISender sender) : ControllerBase
         CancellationToken ct) =>
         Ok(await sender.Send(new DecideWardEnrollmentCommand(id, decision), ct));
 
+    /// <summary>WARD-04: take a SUBMITTED file into review (UNDER_REVIEW); the vendor can no longer edit it.</summary>
+    [HttpPost("enrollments/{id:long}/claim")]
+    public async Task<ActionResult<WardEnrollmentDetailDto>> ClaimEnrollment(long id, CancellationToken ct) =>
+        Ok(await sender.Send(new ClaimWardEnrollmentCommand(id), ct));
+
     /// <summary>BR-41 KYC gate: officer confirms they compared the vendor against their
     /// physical/chip CCCD. Required before a decision/decision with APPROVE succeeds.</summary>
     [HttpPost("enrollments/{id:long}/confirm-identity")]
