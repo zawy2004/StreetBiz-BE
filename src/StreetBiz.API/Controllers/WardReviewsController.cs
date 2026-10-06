@@ -77,6 +77,17 @@ public sealed class WardReviewsController(ISender sender) : ControllerBase
         CancellationToken cancellationToken) =>
         Ok(await sender.Send(new GetCollectionReportQuery(from, to), cancellationToken));
 
+    /// <summary>WARD-14: the same report as an .xlsx workbook, with the receipts behind the totals.</summary>
+    [HttpGet("reports/collection/export")]
+    public async Task<IActionResult> ExportCollectionReport(
+        [FromQuery] DateOnly? from,
+        [FromQuery] DateOnly? to,
+        CancellationToken cancellationToken)
+    {
+        var file = await sender.Send(new ExportCollectionReportQuery(from, to), cancellationToken);
+        return File(file.Content, file.ContentType, file.FileName);
+    }
+
     /// <summary>WARD-15: the ward's current operational snapshot.</summary>
     [HttpGet("dashboard")]
     public async Task<ActionResult<WardDashboardDto>> Dashboard(CancellationToken cancellationToken) =>

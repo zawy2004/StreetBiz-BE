@@ -6,6 +6,7 @@ using StreetBiz.Application.DTOs.Commerce;
 using StreetBiz.Application.Common.Exceptions;
 using StreetBiz.Application.Common.Security;
 using StreetBiz.Application.Features.Commerce;
+using StreetBiz.Application.Features.Commerce.OrderTracking;
 using StreetBiz.API.Hubs;
 
 namespace StreetBiz.API.Controllers;
@@ -126,7 +127,7 @@ public sealed class OrdersController(
         CancellationToken cancellationToken)
     {
         var result = await sender.Send(new CheckoutOrderCommand(
-            request.CartId, request.Provider, idempotencyKey), cancellationToken);
+            request.CartId, request.Provider, idempotencyKey, request.Location), cancellationToken);
         await realtime.PublishAsync(result.OrderId, result.OrderStatus, cancellationToken);
         return Ok(result);
     }
@@ -156,7 +157,7 @@ public sealed class OrdersController(
         CancellationToken cancellationToken)
     {
         var result = await sender.Send(new PlacePrepaidOrderCommand(
-            request.Provider, request.IdempotencyKey), cancellationToken);
+            request.Provider, request.IdempotencyKey, request.Location), cancellationToken);
         await realtime.PublishAsync(result, cancellationToken);
         return Ok(result);
     }
@@ -552,8 +553,9 @@ public static class OrderApiPaging
 
 public sealed record AddCartItemRequest(long MenuItemId, int Quantity, string? Note);
 public sealed record UpdateCartItemRequest(int Quantity, string? Note);
-public sealed record PlaceOrderRequest(string Provider, string IdempotencyKey);
-public sealed record CheckoutOrderRequest(long CartId, string Provider);
+// Location: where the customer is, required while PickupRange:Enforced is on (ORD-01).
+public sealed record PlaceOrderRequest(string Provider, string IdempotencyKey, PickupLocationInput? Location = null);
+public sealed record CheckoutOrderRequest(long CartId, string Provider, PickupLocationInput? Location = null);
 public sealed record ExpectedOrderStatusRequest(string ExpectedStatus);
 public sealed record ScanOrderPickupRequest(string Token);
 public sealed record ConfirmPickupByCodeRequest(string Code);

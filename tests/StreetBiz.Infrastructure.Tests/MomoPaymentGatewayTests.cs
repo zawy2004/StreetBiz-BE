@@ -24,17 +24,36 @@ public sealed class MomoPaymentGatewayTests
             new PaymentGatewayCheckoutRequest(19, "SB-000019", 42, "key-1", "MOMO", 50_000m), default);
 
         Assert.Equal("https://test-payment.momo.vn/v2/gateway/pay?t=abc", result.PaymentUrl);
-        Assert.Equal("SB-T42", result.ProviderReference);
+        Assert.Matches("^SB-T42-[0-9a-f]{8}$", result.ProviderReference);
         Assert.EndsWith("/create", momo.LastUri);
         using var sent = JsonDocument.Parse(momo.LastBody!);
         var body = sent.RootElement;
+        Assert.Equal(result.ProviderReference, body.GetProperty("orderId").GetString());
         Assert.Equal("http://localhost:5173/customer/orders/19/payment", body.GetProperty("redirectUrl").GetString());
         Assert.Equal("50000", body.GetProperty("amount").GetString());
-        var raw = $"accessKey={AccessKey}&amount=50000&extraData=&ipnUrl={body.GetProperty("ipnUrl").GetString()}" +
-            $"&orderId=SB-T42&orderInfo={body.GetProperty("orderInfo").GetString()}&partnerCode=MOMO" +
+        var extraData = body.GetProperty("extraData").GetString();
+        Assert.Equal("key-1", KeyIn(extraData));
+        var raw = $"accessKey={AccessKey}&amount=50000&extraData={extraData}&ipnUrl={body.GetProperty("ipnUrl").GetString()}" +
+            $"&orderId={result.ProviderReference}&orderInfo={body.GetProperty("orderInfo").GetString()}&partnerCode=MOMO" +
             $"&redirectUrl={body.GetProperty("redirectUrl").GetString()}&requestId={body.GetProperty("requestId").GetString()}" +
             "&requestType=captureWallet";
         Assert.Equal(Sign(raw), body.GetProperty("signature").GetString());
+    }
+
+    [Fact]
+    public async Task A_retried_checkout_gets_a_new_orderId_because_MoMo_refuses_a_repeated_one()
+    {
+        // Checked against MoMo's live test endpoint: the same orderId twice is resultCode 41,
+        // even with a new requestId, and SB-T1…SB-T30 were already taken on the shared test key.
+        var gateway = Gateway(new FakeMomo("""{"resultCode":0,"message":"Thành công.","payUrl":"https://test-payment.momo.vn/pay"}"""));
+        var request = new PaymentGatewayCheckoutRequest(19, "SB-000019", 42, "key-1", "MOMO", 50_000m);
+
+        var first = await gateway.CreateCheckoutAsync(request, default);
+        var retry = await gateway.CreateCheckoutAsync(request, default);
+
+        Assert.StartsWith("SB-T42-", first.ProviderReference);
+        Assert.StartsWith("SB-T42-", retry.ProviderReference);
+        Assert.NotEqual(first.ProviderReference, retry.ProviderReference);
     }
 
     [Fact]
@@ -60,6 +79,7 @@ public sealed class MomoPaymentGatewayTests
         Assert.Equal("SUCCESS", genuine.Status);
         Assert.Equal("SB-T42", genuine.ProviderReference);
         Assert.Equal(50_000m, genuine.Amount);
+        Assert.Equal("key-1", genuine.IdempotencyKey);
         Assert.False(tampered.SignatureValid);
     }
 
@@ -112,15 +132,26 @@ public sealed class MomoPaymentGatewayTests
     private static string Ipn(long amount, int resultCode)
     {
         const string orderInfo = "StreetBiz SB-000019";
-        var raw = $"accessKey={AccessKey}&amount={amount}&extraData=&message=Thành công.&orderId=SB-T42" +
+        var extraData = ExtraData("key-1");
+        var raw = $"accessKey={AccessKey}&amount={amount}&extraData={extraData}&message=Thành công.&orderId=SB-T42" +
             $"&orderInfo={orderInfo}&orderType=momo_wallet&partnerCode=MOMO&payType=qr&requestId=r1" +
             $"&responseTime=1790000000000&resultCode={resultCode}&transId=4088878653";
         return JsonSerializer.Serialize(new
         {
             partnerCode = "MOMO", orderId = "SB-T42", requestId = "r1", amount, orderInfo,
             orderType = "momo_wallet", transId = 4088878653L, resultCode, message = "Thành công.",
-            payType = "qr", responseTime = 1790000000000L, extraData = "", signature = Sign(raw),
+            payType = "qr", responseTime = 1790000000000L, extraData, signature = Sign(raw),
         }, new JsonSerializerOptions { Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping });
+    }
+
+    /// <summary>MoMo's extraData wire format: base64 of a JSON object.</summary>
+    private static string ExtraData(string idempotencyKey) =>
+        Convert.ToBase64String(Encoding.UTF8.GetBytes($$"""{"idempotencyKey":"{{idempotencyKey}}"}"""));
+
+    private static string? KeyIn(string? extraData)
+    {
+        using var json = JsonDocument.Parse(Convert.FromBase64String(extraData!));
+        return json.RootElement.GetProperty("idempotencyKey").GetString();
     }
 
     private static string Sign(string raw)

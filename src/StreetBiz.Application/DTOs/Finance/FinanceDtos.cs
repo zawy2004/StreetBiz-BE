@@ -99,7 +99,16 @@ public sealed record InvoiceDetailDto(
     long? FeeItemId,
     long? PenaltyId,
     string? PaymentProvider,
-    DateTime? PaidAt);
+    DateTime? PaidAt)
+{
+    // What the receipt PDF prints, so the screen shows the same receipt rather than a summary.
+    public string? WardName { get; init; }
+    public string? PayerName { get; init; }
+    public string? BusinessName { get; init; }
+    public string? ProviderReference { get; init; }
+    public string? DecisionNumber { get; init; }
+    public string? AmountInWords { get; init; }
+}
 
 /// <summary>FEE-01/FEE-04: a checkout was opened, here is where to send the vendor to pay it.</summary>
 public sealed record FinanceCheckoutDto(

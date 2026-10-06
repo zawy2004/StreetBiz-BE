@@ -5,13 +5,18 @@ using StreetBiz.Application.Common.Interfaces;
 using StreetBiz.Application.Common.Models;
 using StreetBiz.Application.Common.Security;
 using StreetBiz.Application.DTOs.Commerce;
+using StreetBiz.Application.Features.Commerce.OrderTracking;
 
 namespace StreetBiz.Application.Features.Commerce;
 
 public sealed record CheckoutOrderCommand(
     long CartId,
     string Provider,
-    string IdempotencyKey) : IRequest<CheckoutDto>;
+    string IdempotencyKey,
+    PickupLocationInput? Location = null) : IRequest<CheckoutDto>, IPickupRangeGated
+{
+    long? IPickupRangeGated.PickupCartId => CartId;
+}
 
 public sealed class CheckoutOrderCommandValidator : AbstractValidator<CheckoutOrderCommand>
 {
@@ -24,6 +29,7 @@ public sealed class CheckoutOrderCommandValidator : AbstractValidator<CheckoutOr
             .Must(value => PaymentProviders.IsValid(value.Trim().ToUpperInvariant()))
             .WithMessage("Provider must be MOMO or ZALOPAY.");
         RuleFor(x => x.IdempotencyKey).NotEmpty().MaximumLength(100);
+        RuleFor(x => x.Location!).SetValidator(new PickupLocationInputValidator()).When(x => x.Location is not null);
     }
 }
 

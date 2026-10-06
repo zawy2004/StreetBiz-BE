@@ -17,6 +17,10 @@ public static class BusinessCalendar
     public static DateOnly Today(TimeProvider clock) =>
         DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(clock.GetUtcNow(), TimeZone).DateTime);
 
+    /// <summary>The Vietnamese calendar day a stored UTC instant falls on.</summary>
+    public static DateOnly DateOf(DateTime utc) =>
+        DateOnly.FromDateTime(TimeZoneInfo.ConvertTimeFromUtc(DateTime.SpecifyKind(utc, DateTimeKind.Utc), TimeZone));
+
     /// <summary>The UTC instant a Vietnamese calendar day begins.</summary>
     public static DateTime StartOfDayUtc(DateOnly day) =>
         TimeZoneInfo.ConvertTimeToUtc(day.ToDateTime(TimeOnly.MinValue, DateTimeKind.Unspecified), TimeZone);

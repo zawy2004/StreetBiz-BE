@@ -18,11 +18,42 @@ internal static class MomoGateway
     public const string HttpClientName = "momo";
 
     /// <summary>
-    /// One MoMo orderId per payment transaction, so a retried checkout sends the same id
-    /// and SetPaymentProviderReferenceAsync keeps matching. MoMo allows [0-9a-zA-Z-_.].
+    /// A fresh MoMo orderId for every create call: "SB-T{transactionId}-{8 hex}". MoMo refuses
+    /// any orderId it has seen before (resultCode 41) — including a retry of the same
+    /// still-pending order — and orderIds are unique per partner code, which everyone using
+    /// MoMo's shared test key shares, and which restarts from SB-T1 whenever a database is
+    /// re-seeded. A bare "SB-T{transactionId}" was therefore refused on the very first attempt
+    /// once anyone had tested with that transaction number. The transaction id stays in front
+    /// so the return page can still tell which payment it is. MoMo allows [0-9a-zA-Z-_.].
     /// </summary>
-    public static string OrderId(long transactionId) =>
-        "SB-T" + transactionId.ToString(CultureInfo.InvariantCulture);
+    public static string NewOrderId(long transactionId) =>
+        "SB-T" + transactionId.ToString(CultureInfo.InvariantCulture) + "-" + Guid.NewGuid().ToString("N")[..8];
+
+    /// <summary>
+    /// extraData is base64 JSON that MoMo signs and echoes back unchanged in the IPN. It carries
+    /// our Idempotency-Key, so an IPN for an earlier attempt of the same transaction (whose
+    /// orderId a retry has since replaced in provider_reference) still matches it.
+    /// </summary>
+    public static string ExtraData(string idempotencyKey) =>
+        Convert.ToBase64String(JsonSerializer.SerializeToUtf8Bytes(new { idempotencyKey }));
+
+    public static string? IdempotencyKeyFrom(string? extraData)
+    {
+        if (string.IsNullOrWhiteSpace(extraData))
+        {
+            return null;
+        }
+
+        try
+        {
+            using var json = JsonDocument.Parse(Convert.FromBase64String(extraData));
+            return Str(json.RootElement, "idempotencyKey");
+        }
+        catch (Exception ex) when (ex is FormatException or JsonException)
+        {
+            return null;
+        }
+    }
 
     public static async Task<PaymentGatewayCheckoutResult> CreateAsync(
         HttpClient http,
@@ -30,7 +61,7 @@ internal static class MomoGateway
         PaymentGatewayCheckoutRequest request,
         CancellationToken cancellationToken)
     {
-        var orderId = OrderId(request.TransactionId);
+        var orderId = NewOrderId(request.TransactionId);
         var requestId = Guid.NewGuid().ToString("N"); // unique per call, MoMo max 50 chars
         // VND has no subunit; MoMo takes an integer amount (min 1,000, max 50,000,000).
         var amount = decimal.ToInt64(decimal.Round(request.Amount, 0)).ToString(CultureInfo.InvariantCulture);
@@ -39,7 +70,7 @@ internal static class MomoGateway
             .Replace("{referenceId}", request.ReferenceId.ToString(CultureInfo.InvariantCulture), StringComparison.Ordinal)
             .Replace("{transactionId}", request.TransactionId.ToString(CultureInfo.InvariantCulture), StringComparison.Ordinal);
         var ipnUrl = momo.NotifyUrl!;
-        const string extraData = "";
+        var extraData = ExtraData(request.IdempotencyKey);
 
         var signature = Sign(momo.SecretKey!,
             $"accessKey={momo.AccessKey}&amount={amount}&extraData={extraData}&ipnUrl={ipnUrl}" +
@@ -128,7 +159,12 @@ internal static class MomoGateway
                 && CryptographicOperations.FixedTimeEquals(
                     Encoding.ASCII.GetBytes(expected), Encoding.ASCII.GetBytes(supplied.ToLowerInvariant()));
             return new PaymentGatewayCallback(
-                Str(root, "orderId"), null, Dec(root, "amount"), Status(Int(root, "resultCode")), valid, rawPayload);
+                Str(root, "orderId"),
+                IdempotencyKeyFrom(Str(root, "extraData")),
+                Dec(root, "amount"),
+                Status(Int(root, "resultCode")),
+                valid,
+                rawPayload);
         }
         catch (JsonException)
         {

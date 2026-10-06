@@ -2,18 +2,21 @@ using System.Data;
 using System.Globalization;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
 using StreetBiz.Application.Common.Exceptions;
 using StreetBiz.Application.Common.Interfaces;
 using StreetBiz.Application.Common.Models;
 using StreetBiz.Application.Common.Security;
 using StreetBiz.Application.DTOs.Finance;
+using StreetBiz.Infrastructure.Payments;
 using StreetBiz.Infrastructure.Persistence.ScaffoldedModels;
 
 namespace StreetBiz.Infrastructure.Persistence.Repositories;
 
 public sealed class FinanceRepository(
     StreetBizDbContext db,
-    TimeProvider clock) : IFinanceRepository
+    TimeProvider clock,
+    IOptions<PaymentGatewaySettings> paymentSettings) : IFinanceRepository
 {
     private static readonly CultureInfo Vietnamese = CultureInfo.GetCultureInfo("vi-VN");
 
@@ -410,6 +413,119 @@ public sealed class FinanceRepository(
         }
     }
 
+    /// <summary>
+    /// The receipt's extra facts, each read on its own: one projection spanning the fee and the
+    /// penalty navigation chains together is the shape EF Core failed to translate before (see
+    /// RawInvoiceQuery), and a receipt is read one at a time, so a few small queries cost nothing.
+    /// </summary>
+    public async Task<InvoiceDocumentRow?> GetInvoiceDocumentAsync(
+        long vendorId, long invoiceId, CancellationToken cancellationToken)
+    {
+        var invoice = await GetInvoiceAsync(vendorId, invoiceId, cancellationToken);
+        if (invoice is null)
+        {
+            return null;
+        }
+
+        long? slotId;
+        string? businessName;
+        string? decisionNumber = null;
+        string? providerReference;
+        if (invoice.FeeItemId is { } feeItemId)
+        {
+            var fee = await db.FeeScheduleItems.AsNoTracking()
+                .Where(item => item.fee_item_id == feeItemId)
+                .Select(item => new
+                {
+                    item.fee_schedule.contract.slot_id,
+                    item.fee_schedule.contract.application.registration.display_name,
+                })
+                .FirstAsync(cancellationToken);
+            slotId = fee.slot_id;
+            businessName = fee.display_name;
+            providerReference = await SuccessfulReferenceAsync(
+                db.PaymentTransactions.Where(payment => payment.fee_item_id == feeItemId), cancellationToken);
+        }
+        else
+        {
+            var penaltyId = invoice.PenaltyId!.Value;
+            var penalty = await db.Penalties.AsNoTracking()
+                .Where(row => row.penalty_id == penaltyId)
+                .Select(row => new
+                {
+                    row.violation.slot_id,
+                    ContractSlotId = row.violation.contract != null ? (long?)row.violation.contract.slot_id : null,
+                    BusinessName = row.violation.contract != null
+                        ? row.violation.contract.application.registration.display_name
+                        : null,
+                    row.decision_number,
+                })
+                .FirstAsync(cancellationToken);
+            slotId = penalty.slot_id ?? penalty.ContractSlotId;
+            businessName = penalty.BusinessName;
+            decisionNumber = penalty.decision_number;
+            providerReference = await SuccessfulReferenceAsync(
+                db.PaymentTransactions.Where(payment => payment.penalty_id == penaltyId), cancellationToken);
+        }
+
+        var wardUnitId = slotId is null
+            ? null
+            : await db.SidewalkSlots.AsNoTracking()
+                .Where(slot => slot.slot_id == slotId)
+                .Select(slot => (int?)slot.zone.ward_unit_id)
+                .FirstOrDefaultAsync(cancellationToken);
+        var wardName = wardUnitId is null
+            ? null
+            : await db.AdministrativeUnits.AsNoTracking()
+                .Where(unit => unit.unit_id == wardUnitId)
+                .Select(unit => unit.unit_name)
+                .FirstOrDefaultAsync(cancellationToken);
+        var payer = await db.Vendors.AsNoTracking()
+            .Where(vendor => vendor.vendor_id == vendorId)
+            .Select(vendor => new { vendor.user.full_name, vendor.user.phone_number })
+            .FirstAsync(cancellationToken);
+
+        return new InvoiceDocumentRow(
+            invoice.InvoiceNumber,
+            invoice.Kind,
+            invoice.Amount,
+            invoice.IssuedAt,
+            wardName,
+            payer.full_name,
+            payer.phone_number,
+            businessName,
+            invoice.SlotCode,
+            invoice.PeriodLabel,
+            invoice.ViolationLabel,
+            decisionNumber,
+            invoice.PaymentProvider,
+            providerReference,
+            invoice.PaidAt);
+    }
+
+    private static Task<string?> SuccessfulReferenceAsync(
+        IQueryable<PaymentTransaction> payments, CancellationToken cancellationToken) =>
+        payments.AsNoTracking()
+            .Where(payment => payment.transaction_status == PaymentStatuses.Success)
+            .OrderByDescending(payment => payment.callback_received_at)
+            .Select(payment => payment.provider_reference)
+            .FirstOrDefaultAsync(cancellationToken);
+
+    /// <summary>
+    /// Only while no provider order was ever opened for it (no provider_reference): with no
+    /// payment page, nobody can pay it, so FAILED is the truth. A transaction an earlier attempt
+    /// did open stays PENDING — its page may still be paid, and a FAILED status would make that
+    /// payment's callback a DUPLICATE, taking money without applying it.
+    /// </summary>
+    public Task AbandonUnopenedCheckoutAsync(long transactionId, CancellationToken cancellationToken) =>
+        db.PaymentTransactions
+            .Where(payment => payment.transaction_id == transactionId
+                && payment.transaction_status == PaymentStatuses.Pending
+                && payment.provider_reference == null)
+            .ExecuteUpdateAsync(
+                setters => setters.SetProperty(payment => payment.transaction_status, PaymentStatuses.Failed),
+                cancellationToken);
+
     // ------------------------------------------------------------------
     // SYS-04 callback
     // ------------------------------------------------------------------
@@ -517,7 +633,18 @@ public sealed class FinanceRepository(
                 return await Finish(PaymentCallbackOutcome.Rejected, CallbackResults.Rejected);
             }
 
-            payment.provider_reference ??= callback.ProviderReference;
+            if (normalizedStatus == PaymentStatuses.Failed
+                && IsEarlierAttempt(payment.provider_reference, callback.ProviderReference))
+            {
+                // A retry opens a fresh MoMo order, so one transaction can have several; only the
+                // latest may fail it. A failure on an earlier, abandoned attempt is recorded but
+                // must not fail a transaction whose newer attempt can still be paid.
+                return await Finish(PaymentCallbackOutcome.Rejected, CallbackResults.Rejected);
+            }
+
+            // Keep the reference of the order actually settled — it may be an earlier attempt's —
+            // so the receipt and a later reconciliation with the provider name the right one.
+            payment.provider_reference = callback.ProviderReference ?? payment.provider_reference;
             payment.callback_received_at = Now;
             payment.transaction_status = normalizedStatus;
 
@@ -562,6 +689,14 @@ public sealed class FinanceRepository(
                 throw new NotFoundException(FinanceMessages.TransactionNotFound);
             }
 
+            // With MoMo's merchant keys configured, a MoMo transaction is only ever settled by
+            // MoMo itself (the IPN, or the sync that queries MoMo). This Development shortcut
+            // would otherwise mark a real, unpaid MoMo order as received.
+            if (payment.provider == PaymentProviders.Momo && paymentSettings.Value.Momo.IsMomoConfigured)
+            {
+                throw new DomainRuleException(FinanceMessages.SandboxNotAvailableForRealProvider);
+            }
+
             if (payment.transaction_status is PaymentStatuses.Success or PaymentStatuses.Failed)
             {
                 throw new ConflictException(FinanceMessages.TransactionAlreadyProcessed);
@@ -600,6 +735,10 @@ public sealed class FinanceRepository(
                 PaymentCallbackOutcome.Applied, callbackEvent.callback_event_id, payment.transaction_id);
         });
     }
+
+    /// <summary>The callback is about an attempt older than the one provider_reference now points to.</summary>
+    private static bool IsEarlierAttempt(string? latestReference, string? reportedReference) =>
+        latestReference is not null && reportedReference is not null && latestReference != reportedReference;
 
     /// <summary>
     /// True while nobody has already paid the instalment/penalty this transaction targets, and

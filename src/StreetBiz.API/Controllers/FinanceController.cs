@@ -5,6 +5,7 @@ using StreetBiz.Application.Common.Security;
 using StreetBiz.Application.DTOs.Finance;
 using StreetBiz.Application.Features.Finance.ConfirmSandboxPayment;
 using StreetBiz.Application.Features.Finance.GetInvoice;
+using StreetBiz.Application.Features.Finance.InvoiceDocuments;
 using StreetBiz.Application.Features.Finance.GetSummary;
 using StreetBiz.Application.Features.Finance.ListFeeItems;
 using StreetBiz.Application.Features.Finance.ListInvoices;
@@ -14,6 +15,7 @@ using StreetBiz.Application.Features.Finance.ListViolations;
 using StreetBiz.Application.Features.Finance.PayFee;
 using StreetBiz.Application.Features.Finance.PayPenalty;
 using StreetBiz.Application.Features.Finance.SyncPayment;
+using StreetBiz.Application.Features.Finance.VendorContracts;
 
 namespace StreetBiz.API.Controllers;
 
@@ -118,4 +120,37 @@ public sealed class FinanceController(
     [HttpGet("invoices/{invoiceId:long}")]
     public async Task<ActionResult<InvoiceDetailDto>> GetInvoice(long invoiceId, CancellationToken cancellationToken) =>
         Ok(await sender.Send(new GetInvoiceQuery(invoiceId), cancellationToken));
+
+    /// <summary>FEE-03: the caller's payment receipt as a PDF download.</summary>
+    [HttpGet("invoices/{invoiceId:long}/pdf")]
+    public async Task<IActionResult> DownloadInvoicePdf(long invoiceId, CancellationToken cancellationToken)
+    {
+        var file = await sender.Send(new GetInvoicePdfQuery(invoiceId), cancellationToken);
+        return File(file.Content, file.ContentType, file.FileName);
+    }
+
+    /// <summary>Every contract with a fee schedule and how far it has been paid.</summary>
+    [HttpGet("contracts")]
+    public async Task<ActionResult<IReadOnlyList<VendorContractFinanceDto>>> ListContracts(
+        CancellationToken cancellationToken) =>
+        Ok(await sender.Send(new ListVendorContractsQuery(), cancellationToken));
+
+    /// <summary>One contract's fee schedule, instalment by instalment, with the invoices issued.</summary>
+    [HttpGet("contracts/{contractId:long}/schedule")]
+    public async Task<ActionResult<ContractScheduleDto>> GetContractSchedule(
+        long contractId, CancellationToken cancellationToken) =>
+        Ok(await sender.Send(new GetContractScheduleQuery(contractId), cancellationToken));
+
+    /// <summary>FEE-01: one instalment and its contract, before and after it is paid.</summary>
+    [HttpGet("fees/{feeItemId:long}")]
+    public async Task<ActionResult<FeeItemDetailDto>> GetFeeItem(long feeItemId, CancellationToken cancellationToken) =>
+        Ok(await sender.Send(new GetFeeItemDetailQuery(feeItemId), cancellationToken));
+
+    /// <summary>A year's receipts and instalments as an .xlsx statement (default: this year).</summary>
+    [HttpGet("statement")]
+    public async Task<IActionResult> DownloadStatement([FromQuery] int? year, CancellationToken cancellationToken)
+    {
+        var file = await sender.Send(new GetVendorStatementQuery(year), cancellationToken);
+        return File(file.Content, file.ContentType, file.FileName);
+    }
 }

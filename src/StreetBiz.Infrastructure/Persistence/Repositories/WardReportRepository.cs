@@ -2,6 +2,7 @@ using Microsoft.EntityFrameworkCore;
 using StreetBiz.Application.Common.Interfaces;
 using StreetBiz.Application.Common.Models;
 using StreetBiz.Application.Common.Security;
+using StreetBiz.Application.DTOs.Finance;
 
 namespace StreetBiz.Infrastructure.Persistence.Repositories;
 
@@ -129,6 +130,92 @@ public sealed class WardReportRepository(StreetBizDbContext db) : IWardReportRep
             feeOutstanding + penaltyOutstanding,
             openViolations);
     }
+
+    /// <summary>
+    /// Fee and penalty receipts are read by two separate queries and merged in memory, for the
+    /// same reason as everything else here; penalties are placed in a ward through the
+    /// violation's slot, as the report's own penalty totals are.
+    /// </summary>
+    public async Task<IReadOnlyList<WardInvoiceRow>> ListWardInvoicesAsync(
+        int wardUnitId, DateOnly from, DateOnly to, CancellationToken cancellationToken)
+    {
+        var fromUtc = BusinessCalendar.StartOfDayUtc(from);
+        var toExclusiveUtc = BusinessCalendar.StartOfDayUtc(to.AddDays(1));
+
+        var fees = await db.Invoices.AsNoTracking()
+            .Where(invoice => invoice.fee_item != null
+                && invoice.issued_at >= fromUtc && invoice.issued_at < toExclusiveUtc
+                && invoice.fee_item.fee_schedule.contract.slot.zone.ward_unit_id == wardUnitId)
+            .Select(invoice => new
+            {
+                invoice.invoice_number,
+                invoice.issued_at,
+                invoice.amount,
+                Payer = invoice.vendor.user.full_name,
+                SlotCode = invoice.fee_item!.fee_schedule.contract.slot.slot_code,
+                invoice.fee_item.due_date,
+                Ordinal = invoice.fee_item.fee_schedule.FeeScheduleItems
+                    .Count(sibling => sibling.due_date < invoice.fee_item.due_date) + 1,
+                OfCount = invoice.fee_item.fee_schedule.FeeScheduleItems.Count(),
+                Provider = invoice.fee_item.PaymentTransactions
+                    .Where(payment => payment.transaction_status == PaymentStatuses.Success)
+                    .Select(payment => payment.provider)
+                    .FirstOrDefault(),
+            })
+            .ToListAsync(cancellationToken);
+
+        var penalties = await db.Invoices.AsNoTracking()
+            .Where(invoice => invoice.penalty != null
+                && invoice.issued_at >= fromUtc && invoice.issued_at < toExclusiveUtc
+                && invoice.penalty.violation.slot != null
+                && invoice.penalty.violation.slot.zone.ward_unit_id == wardUnitId)
+            .Select(invoice => new
+            {
+                invoice.invoice_number,
+                invoice.issued_at,
+                invoice.amount,
+                Payer = invoice.vendor.user.full_name,
+                SlotCode = invoice.penalty!.violation.slot!.slot_code,
+                ViolationLabel = invoice.penalty.violation.violation_typeNavigation.description,
+                invoice.penalty.decision_number,
+                Provider = invoice.penalty.PaymentTransactions
+                    .Where(payment => payment.transaction_status == PaymentStatuses.Success)
+                    .Select(payment => payment.provider)
+                    .FirstOrDefault(),
+            })
+            .ToListAsync(cancellationToken);
+
+        return fees
+            .Select(row => new WardInvoiceRow(
+                row.invoice_number,
+                DateTime.SpecifyKind(row.issued_at, DateTimeKind.Utc),
+                "FEE",
+                row.Payer,
+                row.SlotCode,
+                $"Phí thuê ô {row.SlotCode} — {FinanceMapper.PeriodLabel(row.Ordinal, row.OfCount, row.due_date)}",
+                row.amount,
+                row.Provider))
+            .Concat(penalties.Select(row => new WardInvoiceRow(
+                row.invoice_number,
+                DateTime.SpecifyKind(row.issued_at, DateTimeKind.Utc),
+                "PENALTY",
+                row.Payer,
+                row.SlotCode,
+                row.decision_number is null
+                    ? $"Tiền phạt: {row.ViolationLabel}"
+                    : $"Tiền phạt: {row.ViolationLabel} (QĐ {row.decision_number})",
+                row.amount,
+                row.Provider)))
+            .OrderBy(row => row.IssuedAt)
+            .ThenBy(row => row.InvoiceNumber, StringComparer.Ordinal)
+            .ToList();
+    }
+
+    public Task<string?> GetWardNameAsync(int wardUnitId, CancellationToken cancellationToken) =>
+        db.AdministrativeUnits.AsNoTracking()
+            .Where(unit => unit.unit_id == wardUnitId)
+            .Select(unit => unit.unit_name)
+            .FirstOrDefaultAsync(cancellationToken);
 
     private IQueryable<ScaffoldedModels.FeeScheduleItem> WardFeeItems(int wardUnitId) =>
         db.FeeScheduleItems.AsNoTracking()

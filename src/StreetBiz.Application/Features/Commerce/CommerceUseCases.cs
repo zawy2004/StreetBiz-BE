@@ -5,6 +5,7 @@ using StreetBiz.Application.Common.Interfaces;
 using StreetBiz.Application.Common.Models;
 using StreetBiz.Application.Common.Security;
 using StreetBiz.Application.DTOs.Commerce;
+using StreetBiz.Application.Features.Commerce.OrderTracking;
 
 namespace StreetBiz.Application.Features.Commerce;
 
@@ -188,8 +189,14 @@ public sealed class ClearCartCommandHandler(
     }
 }
 
-public sealed record PlacePrepaidOrderCommand(string Provider, string IdempotencyKey)
-    : IRequest<OrderDto>;
+public sealed record PlacePrepaidOrderCommand(
+    string Provider,
+    string IdempotencyKey,
+    PickupLocationInput? Location = null)
+    : IRequest<OrderDto>, IPickupRangeGated
+{
+    long? IPickupRangeGated.PickupCartId => null;
+}
 
 public sealed class PlacePrepaidOrderCommandValidator : AbstractValidator<PlacePrepaidOrderCommand>
 {
@@ -201,6 +208,7 @@ public sealed class PlacePrepaidOrderCommandValidator : AbstractValidator<PlaceP
             .Must(value => PaymentProviders.IsValid(value.ToUpperInvariant()))
             .WithMessage("Provider must be MOMO or ZALOPAY.");
         RuleFor(x => x.IdempotencyKey).NotEmpty().MaximumLength(100);
+        RuleFor(x => x.Location!).SetValidator(new PickupLocationInputValidator()).When(x => x.Location is not null);
     }
 }
 

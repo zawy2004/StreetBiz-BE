@@ -42,20 +42,34 @@ public sealed class PayFeeCommandHandler(
         {
             throw new DomainRuleException(FinanceMessages.FeeItemNotPayable);
         }
+        if (!paymentGateway.IsProviderAvailable(provider))
+        {
+            throw new DomainRuleException(FinanceMessages.ProviderNotConfigured);
+        }
 
         var checkout = await finance.CreateFeeCheckoutAsync(
             vendorId, request.FeeItemId, provider, idempotencyKey, cancellationToken);
 
-        var gatewayResult = await paymentGateway.CreateCheckoutAsync(
-            new PaymentGatewayCheckoutRequest(
-                request.FeeItemId,
-                item.FeeItemPeriodLabel(),
-                checkout.TransactionId,
-                checkout.IdempotencyKey,
-                checkout.Provider,
-                checkout.Amount,
-                PaymentPurposes.RentalFee),
-            cancellationToken);
+        PaymentGatewayCheckoutResult gatewayResult;
+        try
+        {
+            gatewayResult = await paymentGateway.CreateCheckoutAsync(
+                new PaymentGatewayCheckoutRequest(
+                    request.FeeItemId,
+                    item.FeeItemPeriodLabel(),
+                    checkout.TransactionId,
+                    checkout.IdempotencyKey,
+                    checkout.Provider,
+                    checkout.Amount,
+                    PaymentPurposes.RentalFee),
+                cancellationToken);
+        }
+        catch
+        {
+            // Otherwise the attempt sits in the vendor's payment history as PENDING forever.
+            await finance.AbandonUnopenedCheckoutAsync(checkout.TransactionId, CancellationToken.None);
+            throw;
+        }
 
         if (!string.IsNullOrWhiteSpace(gatewayResult.ProviderReference))
         {

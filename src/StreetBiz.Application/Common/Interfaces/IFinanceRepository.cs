@@ -51,6 +51,15 @@ public interface IFinanceRepository
     /// <summary>Records the provider's own reference for a transaction once checkout returns one.</summary>
     Task SetPaymentProviderReferenceAsync(long transactionId, string providerReference, CancellationToken cancellationToken);
 
+    /// <summary>FEE-03: everything the caller's payment receipt prints, or null when it is not theirs.</summary>
+    Task<InvoiceDocumentRow?> GetInvoiceDocumentAsync(long vendorId, long invoiceId, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// The provider refused to open a checkout for this transaction: mark it FAILED, unless an
+    /// earlier attempt already opened a provider order for it (that page may still be paid).
+    /// </summary>
+    Task AbandonUnopenedCheckoutAsync(long transactionId, CancellationToken cancellationToken);
+
     /// <summary>
     /// SYS-04 dispatch: which purpose (RENTAL_FEE/PENALTY/ORDER) a transaction belongs to, looked
     /// up the same way <see cref="ApplyPaymentCallbackAsync"/> will — provider reference first,

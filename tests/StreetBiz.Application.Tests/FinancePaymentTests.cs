@@ -20,7 +20,7 @@ public sealed class FinancePaymentTests
             .ReturnsAsync(FeeItem(status: FeeItemStatuses.Overdue));
         finance.Setup(x => x.CreateFeeCheckoutAsync(4, 2, "MOMO", "idem-1", It.IsAny<CancellationToken>()))
             .ReturnsAsync(new FinanceCheckoutTransactionRow(101, "idem-1", "MOMO", 1_040_000m));
-        var gateway = new Mock<IPaymentGateway>();
+        var gateway = AvailableGateway();
         gateway.Setup(x => x.CreateCheckoutAsync(
                 It.Is<PaymentGatewayCheckoutRequest>(r => r.ReferenceId == 2 && r.TransactionId == 101),
                 It.IsAny<CancellationToken>()))
@@ -32,6 +32,27 @@ public sealed class FinancePaymentTests
         result.TransactionId.Should().Be(101);
         result.Purpose.Should().Be(PaymentPurposes.RentalFee);
         result.PaymentUrl.Should().Be("streetbiz://pay/momo");
+    }
+
+    [Fact]
+    public async Task When_MoMo_refuses_the_checkout_the_attempt_is_abandoned_and_MoMos_reason_surfaces()
+    {
+        var finance = new Mock<IFinanceRepository>();
+        finance.Setup(x => x.GetFeeItemForCheckoutAsync(4, 2, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(FeeItem(status: FeeItemStatuses.Pending));
+        finance.Setup(x => x.CreateFeeCheckoutAsync(4, 2, "MOMO", "idem-1", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new FinanceCheckoutTransactionRow(101, "idem-1", "MOMO", 1_040_000m));
+        var gateway = AvailableGateway();
+        gateway.Setup(x => x.CreateCheckoutAsync(It.IsAny<PaymentGatewayCheckoutRequest>(), It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new DomainRuleException("MoMo từ chối tạo giao dịch: số tiền không hợp lệ (mã 22)."));
+
+        var act = () => new PayFeeCommandHandler(VendorContext(), finance.Object, gateway.Object)
+            .Handle(new PayFeeCommand(2, "momo", "idem-1"), CancellationToken.None);
+
+        await act.Should().ThrowAsync<DomainRuleException>().WithMessage("*mã 22*");
+        finance.Verify(x => x.AbandonUnopenedCheckoutAsync(101, It.IsAny<CancellationToken>()), Times.Once);
+        finance.Verify(x => x.SetPaymentProviderReferenceAsync(
+            It.IsAny<long>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
     [Fact]
@@ -84,7 +105,7 @@ public sealed class FinancePaymentTests
             .ReturnsAsync(new PenaltyCheckoutRow(2, 4, 5, "Kê bàn ghế chắn lối đi bộ", "NVL-08", 1_000_000m, PenaltyStatuses.Unpaid));
         finance.Setup(x => x.CreatePenaltyCheckoutAsync(4, 2, "ZALOPAY", "idem-2", It.IsAny<CancellationToken>()))
             .ReturnsAsync(new FinanceCheckoutTransactionRow(202, "idem-2", "ZALOPAY", 1_000_000m));
-        var gateway = new Mock<IPaymentGateway>();
+        var gateway = AvailableGateway();
         gateway.Setup(x => x.CreateCheckoutAsync(It.IsAny<PaymentGatewayCheckoutRequest>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new PaymentGatewayCheckoutResult("streetbiz://pay/zalopay", "ZALO-REF-1"));
 
@@ -140,8 +161,33 @@ public sealed class FinancePaymentTests
         finance.Verify(x => x.ApplyPaymentCallbackAsync(It.IsAny<PaymentCallbackData>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
+    [Fact]
+    public async Task Pay_fee_refuses_a_provider_with_no_keys_and_no_sandbox_before_opening_a_transaction()
+    {
+        var finance = new Mock<IFinanceRepository>();
+        finance.Setup(x => x.GetFeeItemForCheckoutAsync(4, 2, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(FeeItem(status: FeeItemStatuses.Pending));
+        var gateway = new Mock<IPaymentGateway>();
+        gateway.Setup(x => x.IsProviderAvailable("ZALOPAY")).Returns(false);
+
+        var act = () => new PayFeeCommandHandler(VendorContext(), finance.Object, gateway.Object)
+            .Handle(new PayFeeCommand(2, "zalopay", "idem-1"), CancellationToken.None);
+
+        await act.Should().ThrowAsync<DomainRuleException>().WithMessage(FinanceMessages.ProviderNotConfigured);
+        finance.Verify(x => x.CreateFeeCheckoutAsync(
+            It.IsAny<long>(), It.IsAny<long>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
     private static FeeItemCheckoutRow FeeItem(string status) => new(
         2, 4, 5, "NVL-01", 2, 3, new DateOnly(2026, 10, 2), 1_040_000m, status);
+
+    private static Mock<IPaymentGateway> AvailableGateway()
+    {
+        var gateway = new Mock<IPaymentGateway>();
+        gateway.Setup(x => x.IsProviderAvailable(It.IsAny<string>())).Returns(true);
+        return gateway;
+    }
 
     private static IVendorContext VendorContext()
     {

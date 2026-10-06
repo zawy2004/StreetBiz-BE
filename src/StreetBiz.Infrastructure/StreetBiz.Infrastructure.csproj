@@ -7,11 +7,13 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <PackageReference Include="ClosedXML" Version="0.105.1" />
     <PackageReference Include="NetTopologySuite" Version="2.6.0" />
     <!-- Pins the SQL client transitive identity dependency above vulnerable releases. -->
     <PackageReference Include="Azure.Identity" Version="1.21.0" />
     <PackageReference Include="Microsoft.EntityFrameworkCore" Version="8.0.31" />
     <PackageReference Include="BCrypt.Net-Next" Version="4.0.3" />
+    <PackageReference Include="QuestPDF" Version="2026.9.1" />
     <PackageReference Include="System.IdentityModel.Tokens.Jwt" Version="8.1.2" />
     <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="8.0.31">
       <PrivateAssets>all</PrivateAssets>
@@ -32,6 +34,11 @@
   <ItemGroup>
     <ProjectReference Include="..\StreetBiz.Application\StreetBiz.Application.csproj" />
     <ProjectReference Include="..\StreetBiz.Domain\StreetBiz.Domain.csproj" />
+  </ItemGroup>
+
+  <!-- Receipts must print Vietnamese whatever fonts the host has installed (SIL OFL 1.1). -->
+  <ItemGroup>
+    <EmbeddedResource Include="Documents\Fonts\*.ttf" />
   </ItemGroup>
 
 </Project>

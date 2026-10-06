@@ -42,20 +42,34 @@ public sealed class PayPenaltyCommandHandler(
         {
             throw new DomainRuleException(FinanceMessages.PenaltyNotPayable);
         }
+        if (!paymentGateway.IsProviderAvailable(provider))
+        {
+            throw new DomainRuleException(FinanceMessages.ProviderNotConfigured);
+        }
 
         var checkout = await finance.CreatePenaltyCheckoutAsync(
             vendorId, request.PenaltyId, provider, idempotencyKey, cancellationToken);
 
-        var gatewayResult = await paymentGateway.CreateCheckoutAsync(
-            new PaymentGatewayCheckoutRequest(
-                request.PenaltyId,
-                penalty.ViolationLabel,
-                checkout.TransactionId,
-                checkout.IdempotencyKey,
-                checkout.Provider,
-                checkout.Amount,
-                PaymentPurposes.Penalty),
-            cancellationToken);
+        PaymentGatewayCheckoutResult gatewayResult;
+        try
+        {
+            gatewayResult = await paymentGateway.CreateCheckoutAsync(
+                new PaymentGatewayCheckoutRequest(
+                    request.PenaltyId,
+                    penalty.ViolationLabel,
+                    checkout.TransactionId,
+                    checkout.IdempotencyKey,
+                    checkout.Provider,
+                    checkout.Amount,
+                    PaymentPurposes.Penalty),
+                cancellationToken);
+        }
+        catch
+        {
+            // Otherwise the attempt sits in the vendor's payment history as PENDING forever.
+            await finance.AbandonUnopenedCheckoutAsync(checkout.TransactionId, CancellationToken.None);
+            throw;
+        }
 
         if (!string.IsNullOrWhiteSpace(gatewayResult.ProviderReference))
         {

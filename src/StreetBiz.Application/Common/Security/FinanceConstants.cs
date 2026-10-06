@@ -122,6 +122,14 @@ public static class FinanceMessages
     public const string TransactionNotFound = "Không tìm thấy giao dịch thanh toán.";
     public const string TransactionAlreadyProcessed = "Giao dịch này đã được xử lý.";
 
+    /// <summary>FEE-01/04: the chosen provider has neither merchant keys nor the Development sandbox.</summary>
+    public const string ProviderNotConfigured =
+        "Cổng thanh toán này chưa được cấu hình. Vui lòng chọn phương thức khác.";
+
+    /// <summary>Sandbox-confirm refused for a MoMo transaction once MoMo's merchant keys are configured.</summary>
+    public const string SandboxNotAvailableForRealProvider =
+        "Cổng MoMo đang được cấu hình để thanh toán thật; không thể xác nhận giả lập giao dịch này.";
+
     /// <summary>FEE-01: the instalment moved on (paid by another attempt, or gone OVERDUE/PAID) between the read and the checkout write.</summary>
     public const string FeeItemNoLongerPayable = "Kỳ phí này vừa thay đổi trạng thái. Vui lòng tải lại.";
 
