@@ -29,9 +29,9 @@ public sealed class RentalApplicationHandlerTests
         clock.Setup(c => c.UtcNow).Returns(new DateTime(2026, 9, 19, 8, 0, 0, DateTimeKind.Utc));
     }
 
-    private static SlotRow Slot(string status, decimal lat = 16.0130m, decimal lon = 108.2400m) => new(
+    private static SlotRow Slot(string status, decimal lat = 16.0130m, decimal lon = 108.2400m, DateOnly? applicationDeadline = null) => new(
         SlotId, "HQ-DH-01", 1, "Khu vuc gan truong dai hoc", WardId, lat, lon,
-        2, 3, status, SlotSources.WardDefined, 25000, null, null, null, false, false, false, null, null, null);
+        2, 3, status, SlotSources.WardDefined, 25000, null, null, applicationDeadline, null, false, false, false, null, null, null);
 
     private static BizRegistration Registration(
         string vendorType, decimal? lat = 16.0130m, decimal? lon = 108.2400m) => new(
@@ -77,6 +77,46 @@ public sealed class RentalApplicationHandlerTests
 
         await FluentActions.Awaiting(() => handler.Handle(command, CancellationToken.None))
             .Should().ThrowAsync<ConflictException>().WithMessage(SideMessages.ApplicationAlreadyOpenForSlot);
+    }
+
+    [Fact]
+    public async Task An_open_slot_application_is_refused_once_its_zones_deadline_has_passed()
+    {
+        // clock is fixed at 2026-09-19; a deadline of 2026-09-18 has already passed.
+        Owns(Registration(VendorTypes.Itinerant));
+        slots.Setup(s => s.GetByIdAsync(SlotId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Slot(SlotStatuses.Available, applicationDeadline: new DateOnly(2026, 9, 18)));
+
+        var handler = new SubmitOpenSlotApplicationCommandHandler(
+            vendorContext.Object, slots.Object, applications.Object, holds.Object, clock.Object);
+        var command = new SubmitOpenSlotApplicationCommand(RegistrationId, SlotId, 30, true);
+
+        await FluentActions.Awaiting(() => handler.Handle(command, CancellationToken.None))
+            .Should().ThrowAsync<DomainRuleException>().WithMessage(SideMessages.ZoneApplicationDeadlinePassed);
+
+        applications.Verify(a => a.CreateAsync(
+            It.IsAny<long>(), It.IsAny<long>(), It.IsAny<string>(), It.IsAny<int>(), It.IsAny<DateTime?>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task An_open_slot_application_still_succeeds_on_the_deadline_day_itself()
+    {
+        Owns(Registration(VendorTypes.Itinerant));
+        slots.Setup(s => s.GetByIdAsync(SlotId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Slot(SlotStatuses.Available, applicationDeadline: new DateOnly(2026, 9, 19)));
+        applications.Setup(a => a.CreateAsync(RegistrationId, SlotId, ApplicationMethods.ManualSelected, 30, It.IsAny<DateTime?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(902);
+        applications.Setup(a => a.GetByIdAsync(902, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new RentalApplicationRow(902, RegistrationId, SlotId, ApplicationMethods.ManualSelected, 30,
+                ApplicationStatuses.Pending, null, null, DateTime.UtcNow, VendorId: 70));
+
+        var handler = new SubmitOpenSlotApplicationCommandHandler(
+            vendorContext.Object, slots.Object, applications.Object, holds.Object, clock.Object);
+        var command = new SubmitOpenSlotApplicationCommand(RegistrationId, SlotId, 30, true);
+
+        var result = await handler.Handle(command, CancellationToken.None);
+
+        result.ApplicationMethod.Should().Be(ApplicationMethods.ManualSelected);
     }
 
     [Fact]
@@ -146,6 +186,21 @@ public sealed class RentalApplicationHandlerTests
 
         await FluentActions.Awaiting(() => handler.Handle(command, CancellationToken.None))
             .Should().ThrowAsync<DomainRuleException>().WithMessage(SideMessages.OutsideAdjacentRadius);
+    }
+
+    [Fact]
+    public async Task An_adjacent_application_is_refused_once_its_zones_deadline_has_passed()
+    {
+        Owns(Registration(VendorTypes.FixedStorefront));
+        slots.Setup(s => s.GetByIdAsync(SlotId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Slot(SlotStatuses.Available, applicationDeadline: new DateOnly(2026, 9, 18)));
+
+        var handler = new SubmitAdjacentApplicationCommandHandler(
+            vendorContext.Object, slots.Object, applications.Object, contracts.Object, sidewalkPolicy.Object, holds.Object, clock.Object);
+        var command = new SubmitAdjacentApplicationCommand(RegistrationId, SlotId, 30);
+
+        await FluentActions.Awaiting(() => handler.Handle(command, CancellationToken.None))
+            .Should().ThrowAsync<DomainRuleException>().WithMessage(SideMessages.ZoneApplicationDeadlinePassed);
     }
 
     [Fact]

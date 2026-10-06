@@ -99,5 +99,5 @@ public sealed class UserAccountRepository(
 
     private static AppUser Map(UserAccount u) => new(
         u.user_id, u.phone_number, u.password_hash, u.full_name, u.role_code,
-        u.ward_unit_id, u.account_status, u.phone_verified_at);
+        u.ward_unit_id, u.account_status, u.phone_verified_at, u.sanction_authority_title);
 }

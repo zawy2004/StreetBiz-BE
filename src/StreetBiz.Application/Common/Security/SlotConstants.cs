@@ -19,6 +19,24 @@ public static class BusinessCategories
     public const string General = "GENERAL";
 }
 
+/// <summary>PricingZones.price_display_unit values (DB CHECK). price_per_day is always the
+/// value FeeQuoteCalculator/FeeInstalmentPlanner read; MONTH only changes how an officer
+/// enters/sees the price.</summary>
+public static class PriceDisplayUnits
+{
+    public const string Day = "DAY";
+    public const string Month = "MONTH";
+}
+
+/// <summary>PricingZones.rental_mode values (DB CHECK). EVENT keeps the existing day-by-day
+/// rental flow and requires event_start_date/event_end_date; STANDARD is the default
+/// long-term zone, eligible for PriceDisplayUnits.Month.</summary>
+public static class RentalModes
+{
+    public const string Standard = "STANDARD";
+    public const string Event = "EVENT";
+}
+
 /// <summary>ZoneFeeComponents.calc_basis values (DB CHECK).</summary>
 public static class FeeBases
 {
@@ -153,8 +171,12 @@ public static class PermitEffectiveStatuses
 /// <summary>FeeScheduleItems.item_status / Penalties.penalty_status values relevant to SIDE-07's debt check.</summary>
 public static class DebtStatuses
 {
+    public const string FeeItemPending = "PENDING";
     public const string FeeItemPaid = "PAID";
     public const string FeeItemOverdue = "OVERDUE";
+    /// <summary>Phase D: a future instalment dropped by a voluntary contract cancellation
+    /// (SIDE-07) -- never refunded (it was never paid), never collected.</summary>
+    public const string FeeItemCancelled = "CANCELLED";
     public const string PenaltyUnpaid = "UNPAID";
 }
 
@@ -167,6 +189,7 @@ public static class SideMessages
     public const string ApplicationSubmitted = "Your rental application has been submitted successfully.";
     public const string ApplicationNotFound = "Rental application not found.";
     public const string ApplicationAlreadyOpenForSlot = "This slot already has an application under review.";
+    public const string ZoneApplicationDeadlinePassed = "This zone's application deadline has passed; it is no longer accepting new rental applications.";
     public const string ApplicationNotWithdrawable = "This application can no longer be withdrawn because it has already been decided.";
     public const string ApplicationWithdrawn = "Your rental application has been withdrawn.";
     public const string NotEligibleForAdjacent = "Only fixed-storefront vendors may apply for a storefront-adjacent slot."; // BR pre-check
