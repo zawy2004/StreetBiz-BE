@@ -233,6 +233,17 @@ public sealed class ChatRepository(
                 m => m.sender_user_id != participant.UserId && m.read_at == null,
                 cancellationToken);
 
+    public Task<ChatThreadUsers?> GetThreadUsersAsync(
+        long conversationId,
+        CancellationToken cancellationToken) =>
+        dbContext.ChatConversations
+            .AsNoTracking()
+            .Where(c => c.conversation_id == conversationId)
+            .Select(c => new ChatThreadUsers(
+                c.customer_user_id,
+                c.storefront.registration.vendor.user_id))
+            .SingleOrDefaultAsync(cancellationToken);
+
     private static IQueryable<ChatConversationRow> Project(
         IQueryable<ChatConversation> conversations,
         ChatParticipant participant) =>

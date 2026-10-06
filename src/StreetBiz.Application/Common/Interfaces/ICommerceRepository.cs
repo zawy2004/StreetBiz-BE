@@ -105,6 +105,9 @@ public interface ICommerceRepository
         long orderId,
         CancellationToken cancellationToken);
 
+    /// <summary>The vendor who sells this order, so realtime news reaches their board.</summary>
+    Task<long?> GetOrderVendorIdAsync(long orderId, CancellationToken cancellationToken);
+
     Task<OrderMutationResult> DecideSellerOrderAsync(
         long vendorId,
         long actorUserId,
