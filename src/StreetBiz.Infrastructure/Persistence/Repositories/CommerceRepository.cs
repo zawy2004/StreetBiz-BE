@@ -797,6 +797,12 @@ public sealed partial class CommerceRepository(
         return await BuildOrdersAsync(query, cancellationToken);
     }
 
+    public Task<long?> GetOrderVendorIdAsync(long orderId, CancellationToken cancellationToken) =>
+        db.Orders.AsNoTracking()
+            .Where(order => order.order_id == orderId)
+            .Select(order => (long?)order.storefront.registration.vendor_id)
+            .SingleOrDefaultAsync(cancellationToken);
+
     public async Task<CommerceOrderRow?> GetSellerOrderAsync(
         long vendorId,
         long orderId,
