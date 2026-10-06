@@ -9,6 +9,7 @@ using Microsoft.Extensions.Options;
 using StreetBiz.Application.Common.Exceptions;
 using StreetBiz.Application.Common.Geo;
 using StreetBiz.Application.Common.Security;
+using StreetBiz.Application.Features.SidewalkSlots.GetSlotQuote;
 using StreetBiz.Application.Features.WardConfiguration;
 using StreetBiz.Application.Features.WardSlots;
 using StreetBiz.Infrastructure.Persistence;
@@ -54,7 +55,7 @@ public sealed class WardConfigurationService(
         var types = await db.ViolationTypes.AsNoTracking()
             .OrderByDescending(t => t.is_active).ThenBy(t => t.violation_type_code)
             .ToListAsync(ct);
-        var rows = await db.PenaltyFeeSchedules.AsNoTracking()
+        var rows = await db.PenaltyFeeSchedules.AsNoTracking().Include(s => s.UserAccount)
             .Where(s => s.ward_unit_id == actor.WardId)
             .ToListAsync(ct);
         var inUse = await InUseScheduleIdsAsync(rows.Select(r => r.penalty_schedule_id).ToList(), ct);
@@ -64,7 +65,7 @@ public sealed class WardConfigurationService(
 
     public async Task<IReadOnlyList<PenaltyRateDto>> ListPenaltyHistoryAsync(WardActor actor, string violationType, CancellationToken ct)
     {
-        var rows = await db.PenaltyFeeSchedules.AsNoTracking()
+        var rows = await db.PenaltyFeeSchedules.AsNoTracking().Include(s => s.UserAccount)
             .Where(s => s.ward_unit_id == actor.WardId && s.violation_type == violationType)
             .OrderByDescending(s => s.effective_from).ThenByDescending(s => s.penalty_schedule_id)
             .ToListAsync(ct);
@@ -185,7 +186,7 @@ public sealed class WardConfigurationService(
     private async Task<WardPenaltyTypeDto> GetPenaltyTypeAsync(WardActor actor, string violationType, CancellationToken ct)
     {
         var type = await db.ViolationTypes.AsNoTracking().SingleAsync(t => t.violation_type_code == violationType, ct);
-        var rows = await db.PenaltyFeeSchedules.AsNoTracking()
+        var rows = await db.PenaltyFeeSchedules.AsNoTracking().Include(s => s.UserAccount)
             .Where(s => s.ward_unit_id == actor.WardId && s.violation_type == violationType)
             .ToListAsync(ct);
         var inUse = await InUseScheduleIdsAsync(rows.Select(r => r.penalty_schedule_id).ToList(), ct);
@@ -216,7 +217,8 @@ public sealed class WardConfigurationService(
     {
         var bracket = LegalBasisText.TryParseBracket(r.legal_basis);
         return new PenaltyRateDto(r.penalty_schedule_id, r.penalty_amount, bracket?.Min, bracket?.Max, r.legal_basis,
-            r.effective_from, r.effective_to, DateTime.SpecifyKind(r.created_at, DateTimeKind.Utc), inUse.Contains(r.penalty_schedule_id));
+            r.effective_from, r.effective_to, DateTime.SpecifyKind(r.created_at, DateTimeKind.Utc), inUse.Contains(r.penalty_schedule_id),
+            r.UserAccount?.full_name ?? "Cán bộ phường");
     }
 
     private static object RateSnapshot(PenaltyFeeSchedule r) => new
@@ -279,11 +281,17 @@ public sealed class WardConfigurationService(
             EnsureToken(ZoneToken(zone, zone.ZoneFeeComponents), request.VersionToken);
             await EnsureZoneNamesFreeAsync(actor, request, zoneId, ct);
 
-            var before = ZoneSnapshot(zone, zone.ZoneFeeComponents.OrderBy(c => c.sort_order)
-                .Select(c => new ZoneFeeComponentInput(c.component_name, c.calc_basis, (long)c.unit_amount)).ToList());
+            var oldFeeComponents = zone.ZoneFeeComponents.OrderBy(c => c.sort_order).ThenBy(c => c.component_id)
+                .Select(c => new ZoneFeeComponentInput(c.component_name, c.calc_basis, (long)c.unit_amount)).ToList();
+            var before = ZoneSnapshot(zone, oldFeeComponents);
             var oldPrice = zone.price_per_day;
             var oldFrom = zone.available_from;
             var oldTo = zone.available_to;
+            // Component ids are server-assigned and irrelevant to "did this change" -- compare only
+            // what the vendor is actually charged: name, calc basis and amount, in order.
+            var feeComponentsChanged = !oldFeeComponents
+                .Select(c => (c.ComponentName, c.CalcBasis, c.UnitAmount))
+                .SequenceEqual(request.FeeComponents.Select(c => (c.ComponentName, c.CalcBasis, c.UnitAmount)));
 
             ApplyZoneFields(zone, request);
             if (request.RegulationNumber is not null)
@@ -296,7 +304,7 @@ public sealed class WardConfigurationService(
 
             var priceChanged = oldPrice != zone.price_per_day;
             var hoursChanged = oldFrom != zone.available_from || oldTo != zone.available_to;
-            var notified = await NotifyZoneChangeAsync(zone, priceChanged, oldPrice, hoursChanged, ct);
+            var notified = await NotifyZoneChangeAsync(zone, priceChanged, oldPrice, feeComponentsChanged, hoursChanged, ct);
 
             Audit(actor, "ZONE_UPDATED", ZoneEntity, zone.zone_id,
                 new { before, after = ZoneSnapshot(zone, request.FeeComponents), reason = request.ChangeReason, vendorsNotified = notified });
@@ -328,18 +336,35 @@ public sealed class WardConfigurationService(
     public async Task<ZoneImpactPreviewDto> PreviewZoneImpactAsync(WardActor actor, int zoneId, ZoneImpactPreviewRequest request, CancellationToken ct)
     {
         var zone = await ZonesQuery(actor).SingleOrDefaultAsync(z => z.zone_id == zoneId, ct) ?? throw ZoneNotFound();
-        var priceChanged = zone.price_per_day != request.PricePerDay;
         var hoursChanged = zone.available_from != request.AvailableFrom || zone.available_to != request.AvailableTo;
+
+        // The real total a pending application or renewal will be charged (once WARD-08/WARD-09
+        // approves it) is price-per-day PLUS every fee component -- the same formula
+        // GenerateFeeScheduleCommand uses for the real fee schedule. Comparing only price_per_day
+        // here would miss a fee-only edit entirely and under-report every price edit's delta.
+        var currentComponents = ToFeeComponentRows(zone.ZoneFeeComponents
+            .OrderBy(c => c.sort_order).ThenBy(c => c.component_id));
+        var newComponents = ToFeeComponentRows(request.FeeComponents);
+        // Component ids are server-assigned and meaningless for "did this change" -- compare only
+        // what the vendor is actually charged: name, calc basis and amount, in order.
+        var feeComponentsChanged = !currentComponents
+            .Select(c => (c.ComponentName, c.CalcBasis, c.UnitAmount))
+            .SequenceEqual(newComponents.Select(c => (c.ComponentName, c.CalcBasis, c.UnitAmount)));
+        var amountChanged = zone.price_per_day != request.PricePerDay || feeComponentsChanged;
+
         var impact = await LoadZoneImpactAsync(zoneId, ct);
 
-        var apps = impact.Applications.Select(a => new ZoneImpactItem("RENTAL_APPLICATION", a.Id, a.SlotCode, a.VendorName, a.TermDays,
-            a.TermDays * zone.price_per_day, a.TermDays * (decimal)request.PricePerDay)).ToList();
-        var renewals = impact.Renewals.Select(r => new ZoneImpactItem("RENEWAL", r.Id, r.SlotCode, r.VendorName, r.TermDays,
-            r.TermDays * zone.price_per_day, r.TermDays * (decimal)request.PricePerDay)).ToList();
+        decimal TotalFor(decimal pricePerDay, IReadOnlyList<Application.Common.Models.FeeComponentRow> components, int termDays) =>
+            FeeQuoteCalculator.Calculate(0, pricePerDay, termDays, components).Total;
 
-        var recipients = RecipientsFor(impact, priceChanged, hoursChanged);
+        var apps = impact.Applications.Select(a => new ZoneImpactItem("RENTAL_APPLICATION", a.Id, a.SlotCode, a.VendorName, a.TermDays,
+            TotalFor(zone.price_per_day, currentComponents, a.TermDays), TotalFor(request.PricePerDay, newComponents, a.TermDays))).ToList();
+        var renewals = impact.Renewals.Select(r => new ZoneImpactItem("RENEWAL", r.Id, r.SlotCode, r.VendorName, r.TermDays,
+            TotalFor(zone.price_per_day, currentComponents, r.TermDays), TotalFor(request.PricePerDay, newComponents, r.TermDays))).ToList();
+
+        var recipients = RecipientsFor(impact, amountChanged, hoursChanged);
         return new ZoneImpactPreviewDto(
-            priceChanged,
+            amountChanged,
             hoursChanged,
             apps,
             renewals,
@@ -347,6 +372,12 @@ public sealed class WardConfigurationService(
             apps.Sum(a => a.NewTotal - a.CurrentTotal) + renewals.Sum(r => r.NewTotal - r.CurrentTotal),
             recipients.Count);
     }
+
+    private static List<Application.Common.Models.FeeComponentRow> ToFeeComponentRows(IEnumerable<ZoneFeeComponent> components) =>
+        components.Select((c, i) => new Application.Common.Models.FeeComponentRow(c.component_id, c.component_name, c.calc_basis, c.unit_amount, i)).ToList();
+
+    private static List<Application.Common.Models.FeeComponentRow> ToFeeComponentRows(IEnumerable<ZoneFeeComponentInput> components) =>
+        components.Select((c, i) => new Application.Common.Models.FeeComponentRow(0, c.ComponentName, c.CalcBasis, c.UnitAmount, i)).ToList();
 
     public async Task<IReadOnlyList<ConfigHistoryEntryDto>> ListZoneHistoryAsync(WardActor actor, int zoneId, CancellationToken ct)
     {
@@ -391,7 +422,8 @@ public sealed class WardConfigurationService(
                 z.application_deadline, slots?.Total ?? 0, slots?.Active ?? 0,
                 featureCounts.FirstOrDefault(f => f.ZoneId == z.zone_id)?.Total ?? 0,
                 components.Select(c => new ZoneFeeComponentView(c.component_id, c.component_name, c.calc_basis, c.unit_amount, c.sort_order)).ToList(),
-                ZoneToken(z, components));
+                ZoneToken(z, components),
+                z.price_display_unit, z.price_per_month, z.rental_mode, z.event_start_date, z.event_end_date);
         }).ToList();
     }
 
@@ -409,12 +441,30 @@ public sealed class WardConfigurationService(
     {
         zone.zone_name = r.ZoneName.Trim();
         zone.zone_code = r.ZoneCode.Trim();
-        zone.price_per_day = r.PricePerDay;
         zone.available_from = r.AvailableFrom;
         zone.available_to = r.AvailableTo;
         zone.segment_from = NullIfBlank(r.SegmentFrom);
         zone.segment_to = NullIfBlank(r.SegmentTo);
         zone.application_deadline = r.ApplicationDeadline;
+
+        // price_per_day stays the only value FeeQuoteCalculator/FeeInstalmentPlanner read.
+        // Entering a monthly price derives it instead of taking the submitted PricePerDay
+        // as-is, so the two can never silently disagree.
+        zone.price_display_unit = r.PriceDisplayUnit;
+        if (r.PriceDisplayUnit == PriceDisplayUnits.Month)
+        {
+            zone.price_per_month = r.PricePerMonth;
+            zone.price_per_day = decimal.Round((r.PricePerMonth ?? 0) / 30m, 0, MidpointRounding.AwayFromZero);
+        }
+        else
+        {
+            zone.price_per_month = null;
+            zone.price_per_day = r.PricePerDay;
+        }
+
+        zone.rental_mode = r.RentalMode;
+        zone.event_start_date = r.RentalMode == RentalModes.Event ? r.EventStartDate : null;
+        zone.event_end_date = r.RentalMode == RentalModes.Event ? r.EventEndDate : null;
     }
 
     private void AddFeeComponents(int zoneId, IReadOnlyList<ZoneFeeComponentInput> components)
@@ -471,9 +521,11 @@ public sealed class WardConfigurationService(
         return users;
     }
 
-    private async Task<int> NotifyZoneChangeAsync(PricingZone zone, bool priceChanged, decimal oldPrice, bool hoursChanged, CancellationToken ct)
+    private async Task<int> NotifyZoneChangeAsync(
+        PricingZone zone, bool priceChanged, decimal oldPrice, bool feeComponentsChanged, bool hoursChanged, CancellationToken ct)
     {
-        if (!priceChanged && !hoursChanged) return 0;
+        var amountChanged = priceChanged || feeComponentsChanged;
+        if (!amountChanged && !hoursChanged) return 0;
         var impact = await LoadZoneImpactAsync(zone.zone_id, ct);
         var vi = CultureInfo.GetCultureInfo("vi-VN");
 
@@ -503,6 +555,14 @@ public sealed class WardConfigurationService(
                 $"Giá thuê khu vực {zone.zone_name} đổi từ {oldPrice.ToString("N0", vi)}đ lên {zone.price_per_day.ToString("N0", vi)}đ/ngày. " +
                 "Giá mới áp dụng cho đơn thuê và đơn gia hạn được duyệt từ nay; hợp đồng và biểu phí đã phát hành không thay đổi.");
         }
+        else if (feeComponentsChanged)
+        {
+            Send(impact.Applications.Select(a => a.UserId).Concat(impact.Renewals.Select(r => r.UserId)),
+                "ZONE_FEES_CHANGED",
+                $"Khu vực {zone.zone_name} thay đổi phụ phí",
+                $"Phụ phí cố định tại khu vực {zone.zone_name} vừa được cập nhật, làm thay đổi tổng số tiền phải nộp. " +
+                "Phụ phí mới áp dụng cho đơn thuê và đơn gia hạn được duyệt từ nay; hợp đồng và biểu phí đã phát hành không thay đổi.");
+        }
 
         if (hoursChanged)
         {
@@ -516,7 +576,7 @@ public sealed class WardConfigurationService(
                 $"Khung giờ kinh doanh tại khu vực {zone.zone_name} từ nay là {window}.");
         }
 
-        return RecipientsFor(impact, priceChanged, hoursChanged).Count;
+        return RecipientsFor(impact, amountChanged, hoursChanged).Count;
     }
 
     private static object ZoneSnapshot(PricingZone z, IReadOnlyList<ZoneFeeComponentInput> components) => new
@@ -776,6 +836,24 @@ public sealed class WardConfigurationService(
 
         var created = await GridSlotsQuery(actor).Where(s => ids.Contains(s.slot_id)).OrderBy(s => s.slot_code).ToListAsync(ct);
         return await ToSlotDtosAsync(created, ct);
+    }
+
+    public async Task<IReadOnlyList<ConfigHistoryEntryDto>> ListSlotHistoryAsync(WardActor actor, long slotId, CancellationToken ct)
+    {
+        // A deleted slot no longer exists, so ownership is checked against the slot row while it
+        // lives. A slot created via "rải hàng loạt" is audited once for the whole batch under its
+        // zone (SLOT_BATCH_CREATED, see CreateBatchAsync) rather than per slot, so that creation
+        // event surfaces on the zone's history, not here.
+        if (!await GridSlotsQuery(actor).AnyAsync(s => s.slot_id == slotId, ct))
+            throw SlotNotFound();
+
+        var entries = await db.AuditLogs.AsNoTracking()
+            .Where(a => a.entity_type == SlotEntity && a.entity_id == slotId)
+            .OrderByDescending(a => a.created_at).ThenByDescending(a => a.audit_id)
+            .Select(a => new { a.audit_id, a.action, a.actor_user.full_name, a.created_at, a.details })
+            .ToListAsync(ct);
+        return entries.Select(a => new ConfigHistoryEntryDto(a.audit_id, a.action, a.full_name ?? "Cán bộ phường",
+            DateTime.SpecifyKind(a.created_at, DateTimeKind.Utc), a.details)).ToList();
     }
 
     public async Task<StreetFeatureMutationResultDto> CreateFeatureAsync(WardActor actor, UpsertStreetFeatureRequest request, CancellationToken ct)
@@ -1084,6 +1162,48 @@ public sealed class WardConfigurationService(
         VersionToken.Compute(f.zone_id, f.feature_type, f.label, f.latitude, f.longitude, f.blocks_business, f.note);
 
     private static NotFoundException SlotNotFound() => new("Không tìm thấy ô sạp tại địa bàn phường của bạn.");
+    #endregion
+
+    #region WardCompliancePolicy (Phase A)
+    public async Task<WardCompliancePolicyDto> GetCompliancePolicyAsync(WardActor actor, CancellationToken ct)
+    {
+        var policy = await db.WardCompliancePolicies.AsNoTracking()
+            .Include(p => p.UserAccount)
+            .SingleOrDefaultAsync(p => p.ward_unit_id == actor.WardId, ct);
+        return ToCompliancePolicyDto(policy);
+    }
+
+    public async Task<WardCompliancePolicyDto> UpsertCompliancePolicyAsync(
+        WardActor actor, UpsertWardCompliancePolicyRequest request, CancellationToken ct)
+    {
+        await Write(async () =>
+        {
+            var policy = await db.WardCompliancePolicies.SingleOrDefaultAsync(p => p.ward_unit_id == actor.WardId, ct);
+            var before = policy is null ? null : ToCompliancePolicyDto(policy);
+            if (policy is null)
+            {
+                policy = new WardCompliancePolicy { ward_unit_id = actor.WardId, ward_unit_type = "WARD" };
+                db.WardCompliancePolicies.Add(policy);
+            }
+
+            policy.violation_threshold_count = request.ViolationThresholdCount;
+            policy.violation_window_days = request.ViolationWindowDays;
+            policy.unpaid_penalty_grace_days = request.UnpaidPenaltyGraceDays;
+            policy.updated_by = actor.UserId;
+            policy.updated_at = Now;
+
+            Audit(actor, "COMPLIANCE_POLICY_UPDATED", "WardCompliancePolicy", actor.WardId,
+                new { before, after = request });
+        }, ct);
+        return await GetCompliancePolicyAsync(actor, ct);
+    }
+
+    private static WardCompliancePolicyDto ToCompliancePolicyDto(WardCompliancePolicy? policy) =>
+        policy is null
+            ? new WardCompliancePolicyDto(null, null, null, null, null)
+            : new WardCompliancePolicyDto(
+                policy.violation_threshold_count, policy.violation_window_days, policy.unpaid_penalty_grace_days,
+                policy.updated_at, policy.UserAccount?.full_name);
     #endregion
 
     #region Shared

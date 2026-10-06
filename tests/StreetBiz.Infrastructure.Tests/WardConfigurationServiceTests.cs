@@ -35,6 +35,10 @@ public sealed class WardConfigurationServiceTests
             result.Current.LegalBasis);
         Assert.True(result.HasLegalBasis);
         Assert.Equal(1, await f.AuditCount("PENALTY_RATE_SET"));
+
+        var history = await f.Service().ListPenaltyHistoryAsync(f.Actor, "HYGIENE_LITTERING", default);
+        // The seeded UserAccounts.full_name for user_id 1, not f.Actor.Name (a separate test double).
+        Assert.Equal("Cán bộ 1", Assert.Single(history).ActorName);
     }
 
     [Fact]
@@ -289,13 +293,48 @@ public sealed class WardConfigurationServiceTests
     }
 
     [Fact]
+    public async Task A_monthly_price_is_derived_into_price_per_day_which_the_fee_engine_keeps_reading()
+    {
+        using var f = await Fixture.Create();
+        var zone = await f.Service().GetZoneAsync(f.Actor, 1, default);
+        var monthly = Edit(zone, price: 0) with { PriceDisplayUnit = "MONTH", PricePerMonth = 900_000 };
+
+        var updated = await f.Service().UpdateZoneAsync(f.Actor, 1, monthly, default);
+
+        Assert.Equal("MONTH", updated.PriceDisplayUnit);
+        Assert.Equal(900_000m, updated.PricePerMonth);
+        // 900,000 / 30 -- the only value FeeQuoteCalculator/FeeInstalmentPlanner ever read.
+        Assert.Equal(30_000m, updated.PricePerDay);
+    }
+
+    [Fact]
+    public async Task Creating_an_event_zone_stores_its_window_and_keeps_daily_pricing()
+    {
+        using var f = await Fixture.Create();
+        var request = ZoneRequest("Hội chợ Tết", "HC1-TET", 50_000) with
+        {
+            RentalMode = "EVENT",
+            EventStartDate = new DateOnly(2026, 12, 20),
+            EventEndDate = new DateOnly(2026, 12, 28),
+        };
+
+        var zone = await f.Service().CreateZoneAsync(f.Actor, request, default);
+
+        Assert.Equal("EVENT", zone.RentalMode);
+        Assert.Equal(new DateOnly(2026, 12, 20), zone.EventStartDate);
+        Assert.Equal(new DateOnly(2026, 12, 28), zone.EventEndDate);
+        Assert.Equal("DAY", zone.PriceDisplayUnit);
+        Assert.Equal(50_000m, zone.PricePerDay);
+    }
+
+    [Fact]
     public async Task Impact_preview_counts_pending_applications_and_open_renewals_at_the_new_price()
     {
         using var f = await Fixture.Create();
         var preview = await f.Service().PreviewZoneImpactAsync(f.Actor, 1,
-            new ZoneImpactPreviewRequest(40_000, new TimeOnly(5, 0), new TimeOnly(22, 0)), default);
+            new ZoneImpactPreviewRequest(40_000, new TimeOnly(5, 0), new TimeOnly(22, 0), []), default);
 
-        Assert.True(preview.PriceChanged);
+        Assert.True(preview.AmountChanged);
         Assert.False(preview.HoursChanged);
         var app = Assert.Single(preview.PendingApplications);
         Assert.Equal(30 * 30_000m, app.CurrentTotal);
@@ -304,6 +343,42 @@ public sealed class WardConfigurationServiceTests
         Assert.Equal(60 * 40_000m, renewal.NewTotal);
         Assert.Equal(30 * 10_000m + 60 * 10_000m, preview.TotalDelta);
         Assert.Equal(1, preview.VendorsToNotify);
+    }
+
+    [Fact]
+    public async Task Impact_preview_includes_fee_components_in_both_totals_and_flags_a_fee_only_change()
+    {
+        using var f = await Fixture.Create();
+        var zone = await f.Service().GetZoneAsync(f.Actor, 1, default);
+        // Give zone 1 a fee component first, same price/hours as before.
+        var withFee = await f.Service().UpdateZoneAsync(f.Actor, 1, Edit(zone, price: 30_000) with
+        {
+            FeeComponents = [new ZoneFeeComponentInput("Phí vệ sinh", "PER_DAY", 3_000)],
+        }, default);
+
+        // Same price/hours as currently stored; only the fee amount changes 3,000 -> 5,000.
+        var preview = await f.Service().PreviewZoneImpactAsync(f.Actor, 1, new ZoneImpactPreviewRequest(
+            (long)withFee.PricePerDay, withFee.AvailableFrom, withFee.AvailableTo,
+            [new ZoneFeeComponentInput("Phí vệ sinh", "PER_DAY", 5_000)]), default);
+
+        Assert.True(preview.AmountChanged);
+        Assert.False(preview.HoursChanged);
+        var app = Assert.Single(preview.PendingApplications);
+        // 30 days at 30,000 + 3,000 (current fee) vs 30,000 + 5,000 (new fee).
+        Assert.Equal(30 * 33_000m, app.CurrentTotal);
+        Assert.Equal(30 * 35_000m, app.NewTotal);
+    }
+
+    [Fact]
+    public async Task Impact_preview_is_unchanged_when_price_hours_and_fees_are_all_the_same()
+    {
+        using var f = await Fixture.Create();
+        var zone = await f.Service().GetZoneAsync(f.Actor, 1, default);
+        var preview = await f.Service().PreviewZoneImpactAsync(f.Actor, 1,
+            new ZoneImpactPreviewRequest((long)zone.PricePerDay, zone.AvailableFrom, zone.AvailableTo, []), default);
+
+        Assert.False(preview.AmountChanged);
+        Assert.False(preview.HoursChanged);
     }
 
     [Fact]
@@ -325,6 +400,22 @@ public sealed class WardConfigurationServiceTests
         Assert.Equal(30_000, details.RootElement.GetProperty("before").GetProperty("pricePerDay").GetDecimal());
         Assert.Equal(40_000, details.RootElement.GetProperty("after").GetProperty("pricePerDay").GetDecimal());
         Assert.Equal("Điều chỉnh theo quyết định mới", details.RootElement.GetProperty("reason").GetString());
+    }
+
+    [Fact]
+    public async Task A_fee_only_change_still_notifies_vendors_even_though_price_is_unchanged()
+    {
+        using var f = await Fixture.Create();
+        var zone = await f.Service().GetZoneAsync(f.Actor, 1, default);
+        await f.Service().UpdateZoneAsync(f.Actor, 1, Edit(zone, price: 30_000) with
+        {
+            FeeComponents = [new ZoneFeeComponentInput("Phí vệ sinh", "PER_DAY", 8_000)],
+        }, default);
+
+        using var db = f.NewDb();
+        var types = await db.Notifications.Where(n => n.user_id == 10).Select(n => n.notification_type).ToListAsync();
+        Assert.Contains("ZONE_FEES_CHANGED", types);
+        Assert.DoesNotContain("ZONE_PRICE_CHANGED", types);
     }
 
     [Fact]
@@ -463,6 +554,32 @@ public sealed class WardConfigurationServiceTests
     }
 
     [Fact]
+    public async Task Slot_history_lists_only_that_slots_changes_newest_first_with_reasons()
+    {
+        using var f = await Fixture.Create();
+        var service = f.Service();
+        var slot = (await service.GetSlotGridAsync(f.Actor, null, default)).Slots.Single(s => s.SlotId == 100);
+        var suspended = await service.SetSlotStatusAsync(f.Actor, 100, new SetSlotStatusRequest("SUSPENDED", "Thi công vỉa hè", slot.VersionToken), default);
+        await service.SetSlotStatusAsync(f.Actor, 100, new SetSlotStatusRequest("AVAILABLE", "Thi công xong", suspended.VersionToken), default);
+
+        var history = await service.ListSlotHistoryAsync(f.Actor, 100, default);
+
+        Assert.Equal(2, history.Count);
+        Assert.All(history, h => Assert.Equal("SLOT_STATUS_CHANGED", h.Action));
+        Assert.Contains("Thi công xong", history[0].Details);
+        Assert.Contains("Thi công vỉa hè", history[1].Details);
+        Assert.All(history, h => Assert.False(string.IsNullOrWhiteSpace(h.ActorName)));
+        Assert.Empty(await service.ListSlotHistoryAsync(f.Actor, 101, default));
+    }
+
+    [Fact]
+    public async Task Another_wards_slot_history_is_not_found()
+    {
+        using var f = await Fixture.Create();
+        await Assert.ThrowsAsync<NotFoundException>(() => f.Service().ListSlotHistoryAsync(f.OtherActor, 100, default));
+    }
+
+    [Fact]
     public async Task Moving_a_slot_that_is_not_free_is_refused()
     {
         using var f = await Fixture.Create();
@@ -559,7 +676,7 @@ public sealed class WardConfigurationServiceTests
             : new(type, "Nghị định 168/2024/NĐ-CP", "12", "5", null, "sử dụng trái phép vỉa hè để kinh doanh", min, max, from, expected);
 
     private static SanctionWardViolationRequest Sanction(int scheduleId) =>
-        new(scheduleId, "QD-2026-010", "Trần Văn Bí", "Chủ tịch UBND Phường", null);
+        new(scheduleId, "QD-2026-010", null);
 
     private static UpsertZoneRequest ZoneRequest(string name, string code, long price) =>
         new(name, code, price, new TimeOnly(6, 0), new TimeOnly(21, 0), "QĐ 15/QĐ-UBND", new DateOnly(2026, 9, 1),
@@ -608,8 +725,8 @@ public sealed class WardConfigurationServiceTests
         private IGeolocation Geolocation { get; init; } = new FakeGeolocation();
         private bool ClearanceEnabled { get; init; }
 
-        public WardActor Actor { get; } = new(1, 1, "Cán bộ phường 1");
-        public WardActor OtherActor { get; } = new(2, 2, "Cán bộ phường 2");
+        public WardActor Actor { get; } = new(1, 1, "Cán bộ phường 1", "Chủ tịch UBND Phường");
+        public WardActor OtherActor { get; } = new(2, 2, "Cán bộ phường 2", "Chủ tịch UBND Phường");
 
         public static async Task<Fixture> Create(DateTimeOffset? now = null, IGeolocation? geolocation = null, bool clearanceEnabled = false)
         {
@@ -679,7 +796,8 @@ public sealed class WardConfigurationServiceTests
                 new PermitTokenService(Options.Create(new PermitSettings { SigningKey = "test-only-signing-key-0123456789" })),
                 new NoOpAi(),
                 new Persistence.Repositories.KycResultRepository(db, new Common.DateTimeProvider()),
-                Clock);
+                Clock,
+                new Services.Documents.RegistrationDocumentGenerator());
         }
 
         public async Task<int> AuditCount(string action)

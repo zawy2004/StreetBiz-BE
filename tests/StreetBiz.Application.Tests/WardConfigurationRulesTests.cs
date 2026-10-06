@@ -1,3 +1,4 @@
+using StreetBiz.Application.Common.Security;
 using StreetBiz.Application.Features.WardConfiguration;
 
 namespace StreetBiz.Application.Tests;
@@ -81,4 +82,55 @@ public sealed class WardConfigurationRulesTests
     private static CreateWardZoneCommand Zone(TimeOnly? from, TimeOnly? to) =>
         new(new UpsertZoneRequest("Đường Bạch Đằng", "HC1-BD", 40_000, from, to, "QĐ 15/QĐ-UBND", new DateOnly(2026, 9, 1),
             "UBND phường Hải Châu", null, null, null, [], null, null));
+
+    [Fact]
+    public void A_monthly_priced_zone_needs_a_positive_monthly_price_not_a_daily_one()
+    {
+        var validator = new CreateWardZoneCommandValidator();
+        var monthly = Zone(null, null) with
+        {
+            Request = Zone(null, null).Request with { PriceDisplayUnit = PriceDisplayUnits.Month, PricePerDay = 0, PricePerMonth = 900_000 },
+        };
+        Assert.True(validator.Validate(monthly).IsValid);
+
+        var missingMonthlyPrice = Zone(null, null) with
+        {
+            Request = Zone(null, null).Request with { PriceDisplayUnit = PriceDisplayUnits.Month, PricePerDay = 0, PricePerMonth = null },
+        };
+        Assert.False(validator.Validate(missingMonthlyPrice).IsValid);
+    }
+
+    [Fact]
+    public void An_event_zone_cannot_be_priced_monthly_and_needs_coherent_event_dates()
+    {
+        var validator = new CreateWardZoneCommandValidator();
+        var eventZone = Zone(null, null) with
+        {
+            Request = Zone(null, null).Request with
+            {
+                RentalMode = RentalModes.Event,
+                EventStartDate = new DateOnly(2026, 12, 1),
+                EventEndDate = new DateOnly(2026, 12, 10),
+            },
+        };
+        Assert.True(validator.Validate(eventZone).IsValid);
+
+        var eventZoneMonthlyPriced = eventZone with
+        {
+            Request = eventZone.Request with { PriceDisplayUnit = PriceDisplayUnits.Month, PricePerMonth = 900_000 },
+        };
+        Assert.False(validator.Validate(eventZoneMonthlyPriced).IsValid);
+
+        var eventZoneNoDates = eventZone with
+        {
+            Request = eventZone.Request with { EventStartDate = null, EventEndDate = null },
+        };
+        Assert.False(validator.Validate(eventZoneNoDates).IsValid);
+
+        var eventZoneBackwardsDates = eventZone with
+        {
+            Request = eventZone.Request with { EventStartDate = new DateOnly(2026, 12, 10), EventEndDate = new DateOnly(2026, 12, 1) },
+        };
+        Assert.False(validator.Validate(eventZoneBackwardsDates).IsValid);
+    }
 }
