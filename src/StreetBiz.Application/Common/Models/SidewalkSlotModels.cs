@@ -16,13 +16,23 @@ public sealed record SlotRow(
     decimal PricePerDay,
     TimeOnly? AvailableFrom,
     TimeOnly? AvailableTo,
+    /// <summary>WARD-02's "hạn nhận đơn": null means no deadline; a past date means the zone is
+    /// closed to new applications (existing applications, renewals and contracts are unaffected).</summary>
+    DateOnly? ApplicationDeadline,
     string? ImageUrl,
     bool HasPower,
     bool HasWater,
     bool HasTrashBin,
     string? BusinessCategory,
     string? TenantName,
-    DateTime? HoldExpiresAt);
+    DateTime? HoldExpiresAt,
+    // ---- Phase B/C: the zone's rental-term model, so the vendor's apply form can offer the
+    // right input (month quick-select vs free-text days) and the right pricing caption.
+    // Defaulted so existing call sites (tests built before this feature) keep compiling. ----
+    string PriceDisplayUnit = "DAY",
+    decimal? PricePerMonth = null,
+    string RentalMode = "STANDARD",
+    DateOnly? EventEndDate = null);
 
 /// <summary>
 /// The slot search filter. The bounding box is optional in decimal degrees -- a zoneId lookup

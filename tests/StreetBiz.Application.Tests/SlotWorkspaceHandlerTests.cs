@@ -39,7 +39,7 @@ public sealed class SlotWorkspaceHandlerTests
 
     private static SlotRow Slot(string status) => new(
         SlotId, "NVL-01", 1, "Zone", 3, 16.06m, 108.21m, 2, 3, status, SlotSources.WardDefined,
-        25000, null, null, null, false, false, false, null, null, null);
+        25000, null, null, null, null, false, false, false, null, null, null);
 
     private CreateSlotHoldCommandHandler CreateHandler() =>
         new(vendorContext.Object, slots.Object, applications.Object, holds.Object, policy.Object, clock.Object);

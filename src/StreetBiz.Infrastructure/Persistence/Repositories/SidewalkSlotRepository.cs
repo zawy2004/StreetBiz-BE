@@ -109,13 +109,15 @@ public sealed class SidewalkSlotRepository(StreetBizDbContext dbContext, IDateTi
             s.slot_id, s.slot_code, s.zone_id, s.zone.zone_name, s.zone.ward_unit_id,
             s.latitude, s.longitude, s.width_meters, s.length_meters,
             s.slot_status, s.source, s.zone.price_per_day, s.zone.available_from, s.zone.available_to,
+            s.zone.application_deadline,
             s.image_url, s.has_power, s.has_water, s.has_trash_bin, s.business_category,
             s.RentalContracts
                 .Where(c => c.contract_status == ContractStatuses.Active
                          && c.application.registration.vendor_id == c.vendor_id)
                 .Select(c => c.application.registration.display_name)
                 .FirstOrDefault(),
-            s.SlotHold != null && s.SlotHold.expires_at > nowUtc ? s.SlotHold.expires_at : (DateTime?)null);
+            s.SlotHold != null && s.SlotHold.expires_at > nowUtc ? s.SlotHold.expires_at : (DateTime?)null,
+            s.zone.price_display_unit, s.zone.price_per_month, s.zone.rental_mode, s.zone.event_end_date);
 
     // proposal_review_status/proposal_photo_url are nullable in the scaffolded model (null for
     // ward-defined slots) but guaranteed set for VENDOR_PROPOSED rows by CK_SidewalkSlots_ProposalCoherent.

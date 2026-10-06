@@ -24,7 +24,11 @@ public sealed record SidewalkSlotDto(
     bool HasTrashBin,
     string? BusinessCategory,
     string? TenantName,
-    DateTime? HoldExpiresAt);
+    DateTime? HoldExpiresAt,
+    string PriceDisplayUnit,
+    decimal? PricePerMonth,
+    string RentalMode,
+    DateOnly? EventEndDate);
 
 /// <summary>Maps domain records to DTOs for the Sidewalk Slot API.</summary>
 public static class SlotMapper
@@ -35,7 +39,8 @@ public static class SlotMapper
         r.SlotStatus, r.Source, r.PricePerDay, r.AvailableFrom, r.AvailableTo,
         distanceMeters,
         r.ImageUrl, r.HasPower, r.HasWater, r.HasTrashBin, r.BusinessCategory, r.TenantName,
-        r.HoldExpiresAt is { } holdExpiresAt ? DateTime.SpecifyKind(holdExpiresAt, DateTimeKind.Utc) : null);
+        r.HoldExpiresAt is { } holdExpiresAt ? DateTime.SpecifyKind(holdExpiresAt, DateTimeKind.Utc) : null,
+        r.PriceDisplayUnit, r.PricePerMonth, r.RentalMode, r.EventEndDate);
 }
 
 public sealed record SlotProposalDto(
