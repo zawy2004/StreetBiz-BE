@@ -60,4 +60,7 @@ public interface IChatRepository
     Task<int> CountUnreadAsync(
         ChatParticipant participant,
         CancellationToken cancellationToken);
+
+    /// <summary>Who to tell about a new message in this thread, wherever they are in the app.</summary>
+    Task<ChatThreadUsers?> GetThreadUsersAsync(long conversationId, CancellationToken cancellationToken);
 }
