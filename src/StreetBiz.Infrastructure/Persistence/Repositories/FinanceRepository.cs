@@ -879,9 +879,70 @@ public sealed class FinanceRepository(
                 reminderCount++;
             }
 
+            // Phase A: remind a vendor about an UNPAID penalty once it has sat past the grace
+            // period their ward configured (WardCompliancePolicies.unpaid_penalty_grace_days).
+            // Wards that have not configured a grace period are skipped entirely -- this sweep
+            // never invents a deadline a ward did not opt into.
+            var penaltyReminderCount = 0;
+            var gracePeriods = await db.WardCompliancePolicies.AsNoTracking()
+                .Where(p => p.unpaid_penalty_grace_days != null)
+                .Select(p => new { p.ward_unit_id, GraceDays = p.unpaid_penalty_grace_days!.Value })
+                .ToListAsync(cancellationToken);
+            if (gracePeriods.Count > 0)
+            {
+                var unpaid = await db.Penalties
+                    .Include(p => p.penalty_schedule)
+                    .Include(p => p.violation)
+                    .Where(p => p.penalty_status == PenaltyStatuses.Unpaid)
+                    .ToListAsync(cancellationToken);
+
+                var remindedPenaltyIdsToday = (await db.Notifications.AsNoTracking()
+                    .Where(n => n.related_entity_type == "Penalty"
+                        && n.notification_type == FinanceNotificationTypes.PenaltyOverdue
+                        && n.sent_at >= todayStart
+                        && n.related_entity_id != null)
+                    .Select(n => n.related_entity_id!.Value)
+                    .ToListAsync(cancellationToken))
+                    .ToHashSet();
+
+                foreach (var penalty in unpaid)
+                {
+                    if (remindedPenaltyIdsToday.Contains(penalty.penalty_id)
+                        || penalty.violation.vendor_id is not { } vendorId)
+                    {
+                        continue;
+                    }
+                    var grace = gracePeriods.FirstOrDefault(g => g.ward_unit_id == penalty.penalty_schedule.ward_unit_id);
+                    if (grace is null)
+                    {
+                        continue;
+                    }
+                    var overdueSince = BusinessCalendar.Today(penalty.created_at);
+                    var daysSince = today.DayNumber - overdueSince.DayNumber;
+                    if (daysSince < grace.GraceDays)
+                    {
+                        continue;
+                    }
+
+                    var vendorUserId = await db.Vendors.AsNoTracking()
+                        .Where(v => v.vendor_id == vendorId).Select(v => v.user_id).FirstOrDefaultAsync(cancellationToken);
+                    if (vendorUserId <= 0)
+                    {
+                        continue;
+                    }
+
+                    Notify(vendorUserId, FinanceNotificationTypes.PenaltyOverdue,
+                        "Khoản phạt vi phạm chưa nộp",
+                        $"Khoản phạt {Vnd(penalty.amount)} (biên bản {penalty.violation.bien_ban_so ?? penalty.violation_id.ToString()}) "
+                            + $"đã quá {daysSince} ngày chưa nộp. Vui lòng thanh toán để tránh ảnh hưởng tới việc xem xét gia hạn/duy trì giấy phép.",
+                        "Penalty", penalty.penalty_id, now);
+                    penaltyReminderCount++;
+                }
+            }
+
             await db.SaveChangesAsync(cancellationToken);
             await transaction.CommitAsync(cancellationToken);
-            return new FeeReminderSweepResult(overdue.Count, reminderCount);
+            return new FeeReminderSweepResult(overdue.Count, reminderCount, penaltyReminderCount);
         });
     }
 
