@@ -9,7 +9,10 @@ public sealed record AppUser(
     string RoleCode,
     int? WardUnitId,
     string AccountStatus,
-    DateTime? PhoneVerifiedAt);
+    DateTime? PhoneVerifiedAt,
+    /// <summary>WARD-13: set only on officers who may sign a sanction decision (Chairman/Vice-Chairman
+    /// of the Ward People's Committee, or a written delegate). Null for everyone else.</summary>
+    string? SanctionAuthorityTitle = null);
 
 /// <summary>Data required to create a new user account.</summary>
 public sealed record NewUser(

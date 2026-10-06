@@ -27,6 +27,8 @@ public partial class UserAccount
 
     public DateTime? updated_at { get; set; }
 
+    public string? sanction_authority_title { get; set; }
+
     public virtual ICollection<AIAssistanceLog> AIAssistanceLogs { get; set; } = new List<AIAssistanceLog>();
 
     public virtual ICollection<AddressChangeRequest> AddressChangeRequests { get; set; } = new List<AddressChangeRequest>();

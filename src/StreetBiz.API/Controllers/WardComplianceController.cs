@@ -46,6 +46,19 @@ public sealed class WardComplianceController(ISender sender) : ControllerBase
         ConfirmEnrollmentIdentity request,
         CancellationToken ct) =>
         Ok(await sender.Send(new ConfirmEnrollmentIdentityCommand(id, request), ct));
+
+    /// <summary>Mẫu số 01 Phụ lục II, TT 68/2025/TT-BTC, filled with this registration's own data,
+    /// as a downloadable .docx or .pdf (?format=docx|pdf, default docx).</summary>
+    [HttpGet("enrollments/{id:long}/document")]
+    public async Task<IActionResult> GetEnrollmentDocument(
+        long id, [FromQuery] string format = "docx", CancellationToken ct = default)
+    {
+        var (content, fileName) = await sender.Send(new GenerateEnrollmentDocumentQuery(id, format), ct);
+        var contentType = format == "pdf"
+            ? "application/pdf"
+            : "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+        return File(content, contentType, fileName);
+    }
     #endregion
 
     #region Rental Applications / Temporary Usage Permits
@@ -139,12 +152,38 @@ public sealed class WardComplianceController(ISender sender) : ControllerBase
         CancellationToken ct) =>
         Ok(await sender.Send(new RecordWardViolationCommand(request), ct));
 
+    [HttpPost("violations/{id:long}/explanation")]
+    public async Task<ActionResult<WardViolationDetailDto>> RecordExplanation(
+        long id,
+        RecordExplanationRequest request,
+        CancellationToken ct) =>
+        Ok(await sender.Send(new RecordWardExplanationCommand(id, request), ct));
+
+    [HttpPost("violations/{id:long}/deliver")]
+    public async Task<ActionResult<WardViolationDetailDto>> DeliverViolation(
+        long id,
+        DeliverViolationRequest request,
+        CancellationToken ct) =>
+        Ok(await sender.Send(new DeliverWardViolationCommand(id, request), ct));
+
     [HttpPost("violations/{id:long}/sanction")]
     public async Task<ActionResult<WardViolationDetailDto>> SanctionViolation(
         long id,
         SanctionWardViolationRequest request,
         CancellationToken ct) =>
         Ok(await sender.Send(new SanctionWardViolationCommand(id, request), ct));
+
+    /// <summary>Mẫu biên bản số 01 (Điều 58 Luật XLVPHC, NĐ 118/2021/NĐ-CP), filled with this
+    /// violation's recorded data, as a downloadable .docx.</summary>
+    [HttpGet("violations/{id:long}/document")]
+    public async Task<IActionResult> GetViolationDocument(long id, CancellationToken ct)
+    {
+        var doc = await sender.Send(new GenerateViolationDocumentQuery(id), ct);
+        return File(
+            doc.Content,
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            doc.FileName);
+    }
     #endregion
 
     #region AI Assistance

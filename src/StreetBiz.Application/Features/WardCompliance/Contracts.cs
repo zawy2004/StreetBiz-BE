@@ -13,7 +13,10 @@ public sealed record WardEnrollmentListItemDto(
     string Status,
     string Address,
     DateTime CreatedAt,
-    bool FastTrack);
+    bool FastTrack,
+    /// <summary>The real vendor_id a live violation record (RecordWardViolationRequest.VendorId)
+    /// must use -- not the registration id in Id above.</summary>
+    long VendorId);
 
 public sealed record WardEvidenceDto(
     long EvidenceId,
@@ -160,7 +163,11 @@ public sealed record InspectWardPermitResult(
 
 public sealed record WardPermitActionRequest(
     string Action,
-    string Reason);
+    string Reason,
+    /// <summary>Phase A: true when the officer is acting on the advisory revoke-threshold
+    /// banner -- recorded in the AuditLog detail so there is a clear trail distinguishing a
+    /// policy-driven revoke from one based on the officer's own independent judgement.</summary>
+    bool BasedOnComplianceThreshold = false);
 #endregion
 
 #region DTOs - Violations & Sanctions
@@ -171,27 +178,57 @@ public sealed record PenaltyScheduleItemDto(
     decimal PenaltyAmount,
     string? LegalBasis);
 
+/// <summary>
+/// The violator's identity block on Mẫu 01 (họ tên, ngày sinh, số định danh, nơi ở...) is never
+/// taken from the request either: it is copied server-side from the vendor's own registration at
+/// the moment of recording (see RecordViolationAsync), the same "frozen snapshot" reasoning as the
+/// sanction signer -- a later change to that registration must not rewrite past evidence.
+/// </summary>
 public sealed record RecordWardViolationRequest(
     long? ContractId,
     long? SlotId,
     long? VendorId,
     string ViolationType,
     string Description,
-    string? EvidenceUrl);
+    string? EvidenceUrl,
+    /// <summary>Mẫu 01 mục "tại(3)": where the record is being written up. Null defaults to the
+    /// slot's own address at RecordViolationAsync time.</summary>
+    string? PreparedLocation = null,
+    /// <summary>Mẫu 01 mục 2: required only when the violator will not/cannot sign; both null is
+    /// the normal case.</summary>
+    string? WitnessName = null,
+    string? WitnessRole = null,
+    string? WitnessOccupation = null,
+    string? WitnessAddress = null,
+    /// <summary>Mẫu 01 mục 9.</summary>
+    string? ContainmentMeasures = null,
+    /// <summary>Mẫu 01 mục 10 (Điều 61 Luật XLVPHC). WitnessRole/Method null unless True.</summary>
+    bool ExplanationRequired = false,
+    string? ExplanationMethod = null);
 
+public sealed record RecordExplanationRequest(string Content);
+
+/// <summary>Mẫu 01's handover block, or the separate "Biên bản về việc không nhận quyết định..."
+/// when the violator refuses -- Refused and RefusalReason go together.</summary>
+public sealed record DeliverViolationRequest(
+    string? DeliveredToName,
+    bool Refused,
+    string? RefusalReason);
+
+/// <summary>
+/// The signer is never taken from the request: it is the authenticated officer, and only an
+/// officer whose account carries UserAccounts.sanction_authority_title (Chairman/Vice-Chairman of
+/// the Ward People's Committee, or a written delegate) may sign. The patrolling officer who filed
+/// the violation record has no such authority under the Law on Handling of Administrative Violations.
+/// </summary>
 public sealed record SanctionWardViolationRequest(
     int PenaltyScheduleId,
     string DecisionNumber,
-    /// <summary>
-    /// Self-declared name/title of the person exercising sanction authority (Chairman/
-    /// Vice-Chairman of the Ward People's Committee, or a written delegate -- the patrolling
-    /// officer who filed the violation record does not have this authority under the Law on
-    /// Handling of Administrative Violations). Not enforced via RBAC in this iteration; see
-    /// docs_system/features/ward-review-permit-compliance.md section 6.3.
-    /// </summary>
-    string SignerName,
-    string SignerTitle,
-    string? Notes);
+    string? Notes,
+    /// <summary>Required (and audited) when the violation is marked ExplanationRequired and its
+    /// explanation_deadline_at has not passed with no explanation received yet -- Điều 61 Luật
+    /// XLVPHC gives the violator that window before a decision may issue.</summary>
+    bool AcknowledgeEarlySanction = false);
 
 public sealed record WardViolationListItemDto(
     long ViolationId,
@@ -225,7 +262,48 @@ public sealed record WardViolationDetailDto(
     string? SignerTitle,
     DateTime? SanctionedAt,
     int RecentViolationCount90Days,
-    AiLegalSuggestion? AiSuggestion);
+    AiLegalSuggestion? AiSuggestion,
+    // ---- Mẫu 01 (Biên bản vi phạm hành chính, NĐ 118/2021/NĐ-CP) ----
+    string? BienBanSo,
+    string? PreparedLocation,
+    string? WitnessName,
+    string? WitnessRole,
+    string? WitnessOccupation,
+    string? WitnessAddress,
+    string? ViolatorFullName,
+    DateOnly? ViolatorDateOfBirth,
+    string? ViolatorGender,
+    string? ViolatorNationality,
+    string? ViolatorIdNumber,
+    DateOnly? ViolatorIdIssuedDate,
+    string? ViolatorIdIssuedPlace,
+    string? ViolatorAddress,
+    string? ContainmentMeasures,
+    bool ExplanationRequired,
+    string? ExplanationMethod,
+    DateTime? ExplanationDeadlineAt,
+    DateTime? ExplanationReceivedAt,
+    string? ExplanationContent,
+    DateTime? DeliveredAt,
+    string? DeliveredToName,
+    bool DeliveryRefused,
+    string? DeliveryRefusalReason,
+    // ---- Phase A: advisory-only permit-revocation flag (WardCompliancePolicies) ----
+    WardComplianceFlagDto ComplianceFlag);
+
+/// <summary>Advisory only -- never blocks or auto-triggers anything (BR-41). Null thresholds
+/// mean the ward has not configured that part of the policy, so that half of the flag never
+/// lights up. SanctionedViolationCount only counts violations with an issued sanction decision,
+/// never a bare biên bản still open or awaiting giải trình (Điều 61).</summary>
+public sealed record WardComplianceFlagDto(
+    int? ViolationThreshold,
+    int SanctionedViolationCount,
+    bool ViolationThresholdReached,
+    int? UnpaidPenaltyGraceDays,
+    bool HasOverduePenalty,
+    int? OverduePenaltyDays);
+
+public sealed record WardViolationDocumentDto(byte[] Content, string FileName);
 #endregion
 
 #region DTOs - Insights (rule-based, no LLM)
@@ -386,6 +464,10 @@ public interface IWardComplianceService
     // Enrollment / Registration
     Task<IReadOnlyList<WardEnrollmentListItemDto>> ListEnrollmentsAsync(WardActor actor, string? status, int page, CancellationToken ct);
     Task<WardEnrollmentDetailDto> GetEnrollmentDetailAsync(WardActor actor, long registrationId, CancellationToken ct);
+    /// <summary>Mẫu số 01 Phụ lục II, TT 68/2025/TT-BTC, filled with this registration's data, as
+    /// a downloadable .docx or .pdf ("docx"|"pdf") -- same content as the vendor's own copy, plus
+    /// the officer's name once approved.</summary>
+    Task<(byte[] Content, string FileName)> GenerateEnrollmentDocumentAsync(WardActor actor, long registrationId, string format, CancellationToken ct);
     Task<WardEnrollmentDetailDto> DecideEnrollmentAsync(WardActor actor, long registrationId, WardEnrollmentDecision decision, CancellationToken ct);
 
     /// <summary>
@@ -421,7 +503,14 @@ public interface IWardComplianceService
     Task<IReadOnlyList<WardViolationListItemDto>> ListViolationsAsync(WardActor actor, string? status, int page, CancellationToken ct);
     Task<WardViolationDetailDto> GetViolationDetailAsync(WardActor actor, long violationId, CancellationToken ct);
     Task<WardViolationDetailDto> RecordViolationAsync(WardActor actor, RecordWardViolationRequest request, CancellationToken ct);
+    /// <summary>Mẫu 01 mục 10: records the violator's giải trình before a sanction decision.</summary>
+    Task<WardViolationDetailDto> RecordExplanationAsync(WardActor actor, long violationId, RecordExplanationRequest request, CancellationToken ct);
+    /// <summary>Mẫu 01's handover block / the refusal-to-receive record.</summary>
+    Task<WardViolationDetailDto> DeliverViolationAsync(WardActor actor, long violationId, DeliverViolationRequest request, CancellationToken ct);
     Task<WardViolationDetailDto> SanctionViolationAsync(WardActor actor, long violationId, SanctionWardViolationRequest request, CancellationToken ct);
+    /// <summary>Fills Mẫu biên bản số 01 (Điều 58 Luật XLVPHC, NĐ 118/2021/NĐ-CP) with this
+    /// violation's recorded data and returns it as a downloadable .docx.</summary>
+    Task<WardViolationDocumentDto> GenerateViolationDocumentAsync(WardActor actor, long violationId, CancellationToken ct);
 
     // Insights (rule-based)
     Task<IReadOnlyList<WardRiskQueueItemDto>> GetRiskQueueAsync(WardActor actor, CancellationToken ct);
