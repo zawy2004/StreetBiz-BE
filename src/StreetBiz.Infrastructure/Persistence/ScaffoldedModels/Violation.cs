@@ -29,6 +29,54 @@ public partial class Violation
 
     public DateTime recorded_at { get; set; }
 
+    public string? bien_ban_so { get; set; }
+
+    public string? prepared_location { get; set; }
+
+    public string? witness_name { get; set; }
+
+    public string? witness_role { get; set; }
+
+    public string? witness_occupation { get; set; }
+
+    public string? witness_address { get; set; }
+
+    public string? violator_full_name { get; set; }
+
+    public DateOnly? violator_date_of_birth { get; set; }
+
+    public string? violator_gender { get; set; }
+
+    public string? violator_nationality { get; set; }
+
+    public string? violator_id_number { get; set; }
+
+    public DateOnly? violator_id_issued_date { get; set; }
+
+    public string? violator_id_issued_place { get; set; }
+
+    public string? violator_address { get; set; }
+
+    public string? containment_measures { get; set; }
+
+    public bool explanation_required { get; set; }
+
+    public string? explanation_method { get; set; }
+
+    public DateTime? explanation_deadline_at { get; set; }
+
+    public DateTime? explanation_received_at { get; set; }
+
+    public string? explanation_content { get; set; }
+
+    public DateTime? delivered_at { get; set; }
+
+    public string? delivered_to_name { get; set; }
+
+    public bool delivery_refused { get; set; }
+
+    public string? delivery_refusal_reason { get; set; }
+
     public virtual Penalty? Penalty { get; set; }
 
     public virtual UserAccount? UserAccount { get; set; }

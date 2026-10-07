@@ -90,6 +90,14 @@
    CHANGE LOG (newest first)
      2026-10-05  UserAccounts.failed_login_count / lockout_until: temporary account lock after
                  repeated wrong passwords (auth hardening).
+     2026-10-06  Rental-term/compliance revamp: PricingZones gets price_display_unit/
+                 price_per_month (monthly-entry convenience, price_per_day stays the only
+                 input FeeQuoteCalculator/FeeInstalmentPlanner read) and rental_mode/
+                 event_start_date/event_end_date (STANDARD vs EVENT short-term zones); new
+                 WardCompliancePolicies (ward-configured, off by default, violation-threshold
+                 + unpaid-penalty-grace advisory for permit revocation); FeeScheduleItems
+                 gains status CANCELLED (future PENDING instalments cancelled, not refunded,
+                 on a voluntary contract cancellation).
      2026-09-28  Food-safety (ATTP) certificates: FoodCategories.requires_food_safety, new tables
                  FoodSafetyApplications, FoodSafetyApplicationItems, FoodSafetyEvidence
                  (vendor -> ward -> department result recorded by the ward).
@@ -451,8 +459,31 @@ CREATE TABLE PricingZones (
     segment_from         NVARCHAR(150)  NULL,  -- street segment ends
     segment_to           NVARCHAR(150)  NULL,
     application_deadline DATE           NULL,
+    -- price_per_day stays the only value FeeQuoteCalculator/FeeInstalmentPlanner read.
+    -- price_per_month is a convenience: when an officer enters a monthly price,
+    -- price_per_day is derived from it (ROUND(price_per_month / 30, 0)) and both are kept
+    -- so re-opening the zone to edit shows back the exact figure they typed, not a rounded
+    -- day-rate reconstruction of it.
+    price_display_unit   NVARCHAR(10)   NOT NULL DEFAULT 'DAY',
+    price_per_month       DECIMAL(18,0) NULL,
+    -- EVENT zones keep the existing day-by-day rental flow unchanged (SlotApplyForm's free-
+    -- text day count); only STANDARD zones get the month-based quick-select. event_* dates
+    -- bound how long a short-term/pop-up zone accepts applications.
+    rental_mode           NVARCHAR(10)  NOT NULL DEFAULT 'STANDARD',
+    event_start_date      DATE          NULL,
+    event_end_date        DATE          NULL,
     CONSTRAINT UQ_PricingZones_NamePerWard
         UNIQUE (ward_unit_id, zone_name),
+    CONSTRAINT CK_PricingZones_PriceDisplayUnit
+        CHECK (price_display_unit IN ('DAY','MONTH')),
+    CONSTRAINT CK_PricingZones_RentalMode
+        CHECK (rental_mode IN ('STANDARD','EVENT')),
+    CONSTRAINT CK_PricingZones_EventDatesCoherent
+        CHECK (rental_mode = 'STANDARD'
+            OR (event_start_date IS NOT NULL AND event_end_date IS NOT NULL AND event_end_date > event_start_date)),
+    -- An event's day-by-day pricing has no monthly equivalent worth entering.
+    CONSTRAINT CK_PricingZones_EventIsDailyPriced
+        CHECK (rental_mode = 'STANDARD' OR price_display_unit = 'DAY'),
     CONSTRAINT FK_PricingZones_Ward
         FOREIGN KEY (ward_unit_id, ward_unit_type)
         REFERENCES AdministrativeUnits(unit_id, unit_type),
@@ -1031,11 +1062,47 @@ CREATE UNIQUE INDEX UQ_PenaltyFeeSchedules_CurrentRate
     ON PenaltyFeeSchedules(ward_unit_id, violation_type)
     WHERE effective_to IS NULL;
 
+-- One row per ward, created on first configuration (no default row seeded). NULL
+-- violation_threshold_count = feature off for that ward: no "consider revoking" banner is
+-- ever shown and no reminder sweep runs for it. A ward must opt in deliberately, same as
+-- PenaltyFeeSchedules.legal_basis being required before a rate is usable. This never gates
+-- WardComplianceService.ExecutePermitActionAsync (REVOKE/SUSPEND) itself -- it only decides
+-- whether an advisory banner + pre-filled reason appear; the officer always has to act.
+CREATE TABLE WardCompliancePolicies (
+    ward_unit_id               INT            NOT NULL PRIMARY KEY,
+    ward_unit_type             AS CAST(N'WARD' AS NVARCHAR(20)) PERSISTED,
+    -- Counted over SANCTIONED violations only (never a bare biên bản still awaiting giải
+    -- trình/a decision), within violation_window_days of each other.
+    violation_threshold_count  INT            NULL,
+    violation_window_days      INT            NULL,
+    -- Days an UNPAID Penalty may sit past its creation before the overdue reminder sweep
+    -- (and the "có khoản phạt chưa nộp" banner) picks it up. Independent of the violation
+    -- threshold -- a ward may configure one without the other.
+    unpaid_penalty_grace_days  INT            NULL,
+    updated_by                 BIGINT         NOT NULL,
+    updated_at                 DATETIME2      NOT NULL DEFAULT SYSUTCDATETIME(),
+    CONSTRAINT CK_WardCompliancePolicies_ViolationCoherent
+        CHECK (violation_threshold_count IS NULL OR violation_window_days IS NOT NULL),
+    CONSTRAINT CK_WardCompliancePolicies_Positive
+        CHECK ((violation_threshold_count IS NULL OR violation_threshold_count > 0)
+           AND (violation_window_days IS NULL OR violation_window_days > 0)
+           AND (unpaid_penalty_grace_days IS NULL OR unpaid_penalty_grace_days > 0)),
+    CONSTRAINT FK_WardCompliancePolicies_Ward
+        FOREIGN KEY (ward_unit_id, ward_unit_type)
+        REFERENCES AdministrativeUnits(unit_id, unit_type),
+    CONSTRAINT FK_WardCompliancePolicies_UpdatedBy
+        FOREIGN KEY (updated_by) REFERENCES UserAccounts(user_id)
+);
+
 -- WARD-12. A violation is recorded against whatever the officer can actually
 -- identify on the spot. Requiring contract_id would make the central case of
 -- this system unrecordable: someone occupying the sidewalk with no contract
 -- at all. VendorReports (BR-40) already accepts vendor / slot / permit, so the
 -- violation it feeds into has to accept the same shapes.
+-- Fields after CK_Violations_HasTarget mirror Mẫu số 01 (Biên bản vi phạm hành chính, Nghị định
+-- 118/2021/NĐ-CP): the record must stand on its own as a legal document, so a violator's personal
+-- details are frozen here at the time of recording rather than only ever read live through
+-- vendor_id -- a later change to their registration must not rewrite past evidence.
 CREATE TABLE Violations (
     violation_id       BIGINT IDENTITY(1,1)  PRIMARY KEY,
     contract_id        BIGINT                NULL,  -- NULL = unlicensed occupation
@@ -1049,11 +1116,56 @@ CREATE TABLE Violations (
     source             NVARCHAR(20)          NOT NULL DEFAULT 'ON_SITE',
     source_report_id   BIGINT                NULL,
     recorded_at        DATETIME2             NOT NULL DEFAULT SYSUTCDATETIME(),
+    -- Mẫu 01 "Số: .../BB-VPHC" -- set right after insert once violation_id is known
+    -- (format composed in code: NNNN/BB-VPHC-<ward code>-<year>).
+    bien_ban_so         NVARCHAR(50)          NULL,
+    -- Mẫu 01 mục "tại(3)": where the record itself was written up, which is not always the
+    -- slot's address (may be the ward office if not recorded on the spot).
+    prepared_location   NVARCHAR(255)         NULL,
+    -- Mẫu 01 mục 2 "Với sự chứng kiến của": required when the violator will not/cannot sign.
+    witness_name        NVARCHAR(150)         NULL,
+    witness_role        NVARCHAR(20)          NULL,
+    witness_occupation  NVARCHAR(150)         NULL,
+    witness_address     NVARCHAR(255)         NULL,
+    -- Mẫu 01's violator identity block, frozen as of recorded_at (see table comment above).
+    violator_full_name       NVARCHAR(150)    NULL,
+    violator_date_of_birth   DATE             NULL,
+    violator_gender          NVARCHAR(10)     NULL,
+    violator_nationality     NVARCHAR(50)     NULL,
+    violator_id_number       NVARCHAR(20)     NULL,
+    violator_id_issued_date  DATE             NULL,
+    violator_id_issued_place NVARCHAR(150)    NULL,
+    violator_address         NVARCHAR(255)    NULL,
+    -- Mẫu 01 mục 9: containment/preservation measures applied on the spot, if any.
+    containment_measures     NVARCHAR(500)    NULL,
+    -- Mẫu 01 mục 10 (Điều 61 Luật XLVPHC): the violator's right to explain before a sanction
+    -- decision is issued. Not every case requires it -- the officer marks whether this one does.
+    explanation_required     BIT              NOT NULL DEFAULT 0,
+    explanation_method       NVARCHAR(20)     NULL,  -- DIRECT (2 ngày làm việc) | WRITTEN (5 ngày làm việc)
+    explanation_deadline_at  DATETIME2        NULL,
+    explanation_received_at  DATETIME2        NULL,
+    explanation_content      NVARCHAR(1000)   NULL,
+    -- Mẫu 01 closing block + Mẫu "Biên bản về việc không nhận quyết định...": handover of the
+    -- record itself to the violator (or their guardian), and the refusal-to-receive case.
+    delivered_at              DATETIME2       NULL,
+    delivered_to_name         NVARCHAR(150)   NULL,
+    delivery_refused          BIT             NOT NULL DEFAULT 0,
+    delivery_refusal_reason   NVARCHAR(500)   NULL,
     CONSTRAINT CK_Violations_Source
         CHECK (source IN ('ON_SITE','CUSTOMER_REPORT')),
     -- must be pinned to something, or the record is not actionable
     CONSTRAINT CK_Violations_HasTarget
         CHECK (contract_id IS NOT NULL OR slot_id IS NOT NULL OR vendor_id IS NOT NULL),
+    CONSTRAINT CK_Violations_WitnessRole
+        CHECK (witness_role IS NULL OR witness_role IN ('WITNESS','WARD_REPRESENTATIVE')),
+    CONSTRAINT CK_Violations_ExplanationMethod
+        CHECK (explanation_method IS NULL OR explanation_method IN ('DIRECT','WRITTEN')),
+    -- a case marked as requiring explanation must say which kind, so the deadline can be computed
+    CONSTRAINT CK_Violations_ExplanationCoherent
+        CHECK (explanation_required = 0 OR explanation_method IS NOT NULL),
+    -- refusing to receive the record has to leave a reason behind, same as a waived penalty does
+    CONSTRAINT CK_Violations_DeliveryRefusalReason
+        CHECK (delivery_refused = 0 OR delivery_refusal_reason IS NOT NULL),
     CONSTRAINT FK_Violations_Type
         FOREIGN KEY (violation_type) REFERENCES ViolationTypes(violation_type_code),
     CONSTRAINT FK_Violations_Contract
@@ -1160,7 +1272,10 @@ CREATE TABLE FeeScheduleItems (
     item_status         NVARCHAR(20)          NOT NULL DEFAULT 'PENDING',
     paid_at              DATETIME2             NULL,
     CONSTRAINT CK_FeeScheduleItems_Status
-        CHECK (item_status IN ('PENDING','PAID','OVERDUE')),
+        -- CANCELLED: a future (not-yet-due) instalment dropped by a voluntary contract
+        -- cancellation (SIDE-07) -- never refunded, never collected; PAID instalments are
+        -- untouched (Phase D policy: paid periods are not refunded on early cancellation).
+        CHECK (item_status IN ('PENDING','PAID','OVERDUE','CANCELLED')),
     CONSTRAINT FK_FeeScheduleItems_Schedule
         FOREIGN KEY (fee_schedule_id) REFERENCES FeeSchedules(fee_schedule_id)
 );

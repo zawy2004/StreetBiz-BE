@@ -38,6 +38,7 @@ public static class DependencyInjection
         services.AddScoped<IWardSlots>(provider => provider.GetRequiredService<WardSlots>());
         services.AddScoped<IWardComplianceService, WardComplianceService>();
         services.AddScoped<StreetBiz.Application.Features.WardConfiguration.IWardConfigurationService, WardConfigurationService>();
+        services.AddScoped<StreetBiz.Application.Common.Models.IRegistrationDocumentGenerator, Services.Documents.RegistrationDocumentGenerator>();
 
         services.AddDbContext<StreetBizDbContext>(options =>
         {

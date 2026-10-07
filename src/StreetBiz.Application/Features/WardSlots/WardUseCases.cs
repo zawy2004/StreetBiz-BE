@@ -6,7 +6,7 @@ using StreetBiz.Application.Common.Security;
 
 namespace StreetBiz.Application.Features.WardSlots;
 
-public sealed record WardProfile(string UserId, int WardId, string Name);
+public sealed record WardProfile(string UserId, int WardId, string Name, string? SanctionAuthorityTitle = null);
 
 public interface IWardActorContext
 {
@@ -31,7 +31,8 @@ public sealed class WardActorResolver(IUserAccountRepository users) : IWardActor
         return new WardActor(
             user.Id,
             user.WardUnitId.Value,
-            user.FullName ?? $"Cán bộ #{user.Id}");
+            user.FullName ?? $"Cán bộ #{user.Id}",
+            string.IsNullOrWhiteSpace(user.SanctionAuthorityTitle) ? null : user.SanctionAuthorityTitle.Trim());
     }
 }
 
@@ -60,7 +61,7 @@ public sealed class GetWardProfileQueryHandler(IWardActorContext actorContext)
     {
         var actor = await actorContext.RequireAsync(cancellationToken);
         return new WardProfile(actor.UserId.ToString(System.Globalization.CultureInfo.InvariantCulture),
-            actor.WardId, actor.Name);
+            actor.WardId, actor.Name, actor.SanctionAuthorityTitle);
     }
 }
 

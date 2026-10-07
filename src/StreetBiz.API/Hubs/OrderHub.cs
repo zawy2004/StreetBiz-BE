@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.SignalR;
+using StreetBiz.Application.Common.Exceptions;
 using StreetBiz.Application.Common.Interfaces;
 using StreetBiz.Application.Common.Security;
 
@@ -13,7 +14,39 @@ public sealed class OrderHub(
 {
     public const string OrderUpdatedEvent = "OrderUpdated";
 
+    /// <summary>Any order of this seller changed: a new one was paid, one moved, one closed.</summary>
+    public const string VendorOrderChangedEvent = "VendorOrderChanged";
+
     public static string GroupName(long orderId) => $"order:{orderId}";
+
+    public static string VendorGroupName(long vendorId) => $"vendor:{vendorId}";
+
+    /// <summary>
+    /// A seller's whole board: every change to any of their orders, including
+    /// orders that did not exist when they subscribed. The vendor is read from
+    /// the caller's own token and never passed in, so nobody can listen to
+    /// another stall's orders.
+    /// </summary>
+    public async Task SubscribeVendorOrders()
+    {
+        var vendorId = await CallerVendorIdAsync()
+            ?? throw new HubException("Only a seller can follow their orders.");
+        await Groups.AddToGroupAsync(
+            Context.ConnectionId,
+            VendorGroupName(vendorId),
+            Context.ConnectionAborted);
+    }
+
+    public async Task UnsubscribeVendorOrders()
+    {
+        if (await CallerVendorIdAsync() is { } vendorId)
+        {
+            await Groups.RemoveFromGroupAsync(
+                Context.ConnectionId,
+                VendorGroupName(vendorId),
+                Context.ConnectionAborted);
+        }
+    }
 
     public async Task SubscribeOrder(long orderId)
     {
@@ -33,6 +66,24 @@ public sealed class OrderHub(
         Context.ConnectionId,
         GroupName(orderId),
         Context.ConnectionAborted);
+
+    private async Task<long?> CallerVendorIdAsync()
+    {
+        if (currentUser.RoleCode != RoleCodes.Vendor)
+        {
+            return null;
+        }
+
+        try
+        {
+            return await vendorContext.RequireVendorIdAsync(Context.ConnectionAborted);
+        }
+        catch (AppException)
+        {
+            // A vendor account with no seller profile has no board to follow.
+            return null;
+        }
+    }
 
     private async Task<bool> CanAccessOrderAsync(long orderId)
     {

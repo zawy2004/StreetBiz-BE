@@ -103,6 +103,10 @@ public sealed class WardConfigurationController(ISender sender) : ControllerBase
     public async Task<ActionResult<IReadOnlyList<WardSlotDto>>> CreateBatch(BatchCreateRequest request, CancellationToken ct) =>
         Ok(await sender.Send(new CreateWardSlotBatchCommand(request), ct));
 
+    [HttpGet("slot-grid/{id:long}/history")]
+    public async Task<ActionResult<IReadOnlyList<ConfigHistoryEntryDto>>> SlotHistory(long id, CancellationToken ct) =>
+        Ok(await sender.Send(new ListWardSlotHistoryQuery(id), ct));
+
     [HttpPost("street-features")]
     public async Task<ActionResult<StreetFeatureMutationResultDto>> CreateFeature(UpsertStreetFeatureRequest request, CancellationToken ct) =>
         Ok(await sender.Send(new CreateWardStreetFeatureCommand(request), ct));
@@ -117,5 +121,16 @@ public sealed class WardConfigurationController(ISender sender) : ControllerBase
         await sender.Send(new DeleteWardStreetFeatureCommand(id, versionToken), ct);
         return NoContent();
     }
+    #endregion
+
+    #region Phase A - Compliance policy (violation threshold / unpaid-penalty grace period)
+    [HttpGet("compliance-policy")]
+    public async Task<ActionResult<WardCompliancePolicyDto>> GetCompliancePolicy(CancellationToken ct) =>
+        Ok(await sender.Send(new GetWardCompliancePolicyQuery(), ct));
+
+    [HttpPut("compliance-policy")]
+    public async Task<ActionResult<WardCompliancePolicyDto>> UpsertCompliancePolicy(
+        UpsertWardCompliancePolicyRequest request, CancellationToken ct) =>
+        Ok(await sender.Send(new UpsertWardCompliancePolicyCommand(request), ct));
     #endregion
 }

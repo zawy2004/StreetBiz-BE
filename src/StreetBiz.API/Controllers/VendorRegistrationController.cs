@@ -4,6 +4,7 @@ using Microsoft.AspNetCore.Mvc;
 using StreetBiz.Application.Common.Security;
 using StreetBiz.Application.DTOs.VendorRegistration;
 using StreetBiz.Application.Features.VendorRegistration.FileRegistration;
+using StreetBiz.Application.Features.VendorRegistration.GenerateRegistrationDocument;
 using StreetBiz.Application.Features.VendorRegistration.GetRegistration;
 using StreetBiz.Application.Features.VendorRegistration.RemoveEvidence;
 using StreetBiz.Application.Features.VendorRegistration.SubmitEvidence;
@@ -59,6 +60,20 @@ public sealed class VendorRegistrationController(ISender sender) : ControllerBas
     [HttpGet("{registrationId:long}")]
     public async Task<ActionResult<BusinessRegistrationDetailDto>> Get(long registrationId, CancellationToken cancellationToken)
         => Ok(await sender.Send(new GetRegistrationQuery(registrationId), cancellationToken));
+
+    /// <summary>Mẫu số 01 Phụ lục II, TT 68/2025/TT-BTC, filled with this registration's own data,
+    /// as a downloadable .docx or .pdf (?format=docx|pdf, default docx).</summary>
+    [HttpGet("{registrationId:long}/document")]
+    public async Task<IActionResult> GetDocument(
+        long registrationId, [FromQuery] string format = "docx", CancellationToken cancellationToken = default)
+    {
+        var (content, fileName) = await sender.Send(
+            new GenerateRegistrationDocumentQuery(registrationId, format), cancellationToken);
+        var contentType = format == "pdf"
+            ? "application/pdf"
+            : "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+        return File(content, contentType, fileName);
+    }
 
     /// <summary>REG-02: upload an evidence document for a registration.</summary>
     [HttpPost("{registrationId:long}/evidence")]

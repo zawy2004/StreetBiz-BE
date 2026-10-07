@@ -118,6 +118,8 @@ public partial class StreetBizDbContext : DbContext
 
     public virtual DbSet<Vendor> Vendors { get; set; }
 
+    public virtual DbSet<WardCompliancePolicy> WardCompliancePolicies { get; set; }
+
     public virtual DbSet<VendorComment> VendorComments { get; set; }
 
     public virtual DbSet<VendorReport> VendorReports { get; set; }
@@ -814,6 +816,9 @@ public partial class StreetBizDbContext : DbContext
                 .HasMaxLength(30)
                 .HasComputedColumnSql("(CONVERT([nvarchar](30),N'WARD_AUTHORITY'))", true);
             entity.Property(e => e.price_per_day).HasColumnType("decimal(18, 0)");
+            entity.Property(e => e.price_per_month).HasColumnType("decimal(18, 0)");
+            entity.Property(e => e.price_display_unit).HasMaxLength(10).HasDefaultValue("DAY");
+            entity.Property(e => e.rental_mode).HasMaxLength(10).HasDefaultValue("STANDARD");
             entity.Property(e => e.regulation_ref).HasMaxLength(120);
             entity.Property(e => e.segment_from).HasMaxLength(150);
             entity.Property(e => e.segment_to).HasMaxLength(150);
@@ -1371,6 +1376,25 @@ public partial class StreetBizDbContext : DbContext
                 .HasConstraintName("FK_Vendors_User");
         });
 
+        modelBuilder.Entity<WardCompliancePolicy>(entity =>
+        {
+            entity.HasKey(e => e.ward_unit_id);
+
+            entity.Property(e => e.updated_at).HasDefaultValueSql("(sysutcdatetime())");
+            entity.Property(e => e.ward_unit_type)
+                .HasMaxLength(20)
+                .HasComputedColumnSql("(CONVERT([nvarchar](20),N'WARD'))", true);
+
+            entity.HasOne(d => d.AdministrativeUnit).WithOne()
+                .HasPrincipalKey<AdministrativeUnit>(p => new { p.unit_id, p.unit_type })
+                .HasForeignKey<WardCompliancePolicy>(d => new { d.ward_unit_id, d.ward_unit_type })
+                .HasConstraintName("FK_WardCompliancePolicies_Ward");
+
+            entity.HasOne(d => d.UserAccount).WithMany()
+                .HasForeignKey(d => d.updated_by)
+                .HasConstraintName("FK_WardCompliancePolicies_UpdatedBy");
+        });
+
         modelBuilder.Entity<VendorComment>(entity =>
         {
             entity.HasKey(e => e.comment_id).HasName("PK__VendorCo__E7957687EF3B4D7C");
@@ -1444,6 +1468,23 @@ public partial class StreetBizDbContext : DbContext
             entity.Property(e => e.description).HasMaxLength(1000);
             entity.Property(e => e.evidence_url).HasMaxLength(500);
             entity.Property(e => e.recorded_at).HasDefaultValueSql("(sysutcdatetime())");
+            entity.Property(e => e.bien_ban_so).HasMaxLength(50);
+            entity.Property(e => e.prepared_location).HasMaxLength(255);
+            entity.Property(e => e.witness_name).HasMaxLength(150);
+            entity.Property(e => e.witness_role).HasMaxLength(20);
+            entity.Property(e => e.witness_occupation).HasMaxLength(150);
+            entity.Property(e => e.witness_address).HasMaxLength(255);
+            entity.Property(e => e.violator_full_name).HasMaxLength(150);
+            entity.Property(e => e.violator_gender).HasMaxLength(10);
+            entity.Property(e => e.violator_nationality).HasMaxLength(50);
+            entity.Property(e => e.violator_id_number).HasMaxLength(20);
+            entity.Property(e => e.violator_id_issued_place).HasMaxLength(150);
+            entity.Property(e => e.violator_address).HasMaxLength(255);
+            entity.Property(e => e.containment_measures).HasMaxLength(500);
+            entity.Property(e => e.explanation_method).HasMaxLength(20);
+            entity.Property(e => e.explanation_content).HasMaxLength(1000);
+            entity.Property(e => e.delivered_to_name).HasMaxLength(150);
+            entity.Property(e => e.delivery_refusal_reason).HasMaxLength(500);
             entity.Property(e => e.recorder_role)
                 .HasMaxLength(30)
                 .HasComputedColumnSql("(CONVERT([nvarchar](30),N'WARD_AUTHORITY'))", true);

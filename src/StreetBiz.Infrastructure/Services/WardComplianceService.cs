@@ -4,8 +4,13 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Linq.Expressions;
+using DocumentFormat.OpenXml;
+using DocumentFormat.OpenXml.Packaging;
+using DocumentFormat.OpenXml.Wordprocessing;
 using Microsoft.EntityFrameworkCore;
+using static StreetBiz.Infrastructure.Services.Documents.OfficialDocumentBuilder;
 using StreetBiz.Application.Common.Exceptions;
+using StreetBiz.Application.Common.Models;
 using StreetBiz.Application.Common.Security;
 using StreetBiz.Application.Features.VendorKyc;
 using StreetBiz.Application.Features.WardCompliance;
@@ -20,7 +25,8 @@ public sealed class WardComplianceService(
     IPermitTokenService permitTokens,
     IAiComplianceService aiService,
     IKycResultRepository kycResults,
-    TimeProvider clock)
+    TimeProvider clock,
+    IRegistrationDocumentGenerator registrationDocuments)
     : IWardComplianceService
 {
     private DateTime Now => clock.GetUtcNow().UtcDateTime;
@@ -32,6 +38,8 @@ public sealed class WardComplianceService(
 
     private static DateOnly ToVnDate(DateTime utc) =>
         DateOnly.FromDateTime(TimeZoneInfo.ConvertTimeFromUtc(DateTime.SpecifyKind(utc, DateTimeKind.Utc), VietnamTimeZone));
+
+    private static string? NullIfBlank(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
     /// A violation has no ward column: it belongs to the ward of its slot, else of its
     /// contract's slot, else of the officer who recorded it (BR-45).
@@ -98,7 +106,8 @@ public sealed class WardComplianceService(
                 x.registration_status,
                 x.declared_address ?? "Chưa có địa chỉ",
                 x.created_at,
-                x.fast_track_flag))
+                x.fast_track_flag,
+                x.vendor_id))
             .ToListAsync(ct);
 
         return items;
@@ -164,6 +173,60 @@ public sealed class WardComplianceService(
             reg.identity_verified_by?.ToString(CultureInfo.InvariantCulture),
             reg.identity_verification_note,
             await kycResults.ListForRegistrationAsync(reg.registration_id, ct));
+    }
+
+    public async Task<(byte[] Content, string FileName)> GenerateEnrollmentDocumentAsync(
+        WardActor actor, long registrationId, string format, CancellationToken ct)
+    {
+        var reg = await db.BusinessRegistrations.AsNoTracking()
+            .Include(x => x.vendor).ThenInclude(v => v.user)
+            .Include(x => x.HouseholdMembers)
+            .AsSplitQuery()
+            .SingleOrDefaultAsync(x => x.registration_id == registrationId, ct);
+
+        if (reg is null || reg.ward_unit_id != actor.WardId)
+        {
+            throw new NotFoundException("Không tìm thấy hồ sơ đăng ký điểm bán tại địa bàn phường của bạn.");
+        }
+
+        var wardName = await db.AdministrativeUnits.AsNoTracking()
+            .Where(u => u.unit_id == actor.WardId).Select(u => u.unit_name).SingleOrDefaultAsync(ct)
+            ?? "UBND Phường";
+        var reviewedByName = reg.reviewed_by is { } reviewerId
+            ? await db.UserAccounts.AsNoTracking().Where(u => u.user_id == reviewerId)
+                .Select(u => u.full_name).SingleOrDefaultAsync(ct)
+            : null;
+
+        var data = new RegistrationDocumentData(
+            reg.registration_id,
+            wardName,
+            reg.vendor?.user?.full_name ?? reg.display_name,
+            reg.display_name,
+            reg.vendor_type,
+            reg.declared_address,
+            reg.registration_status,
+            reg.owner_date_of_birth,
+            reg.owner_gender,
+            reg.owner_ethnicity,
+            reg.owner_nationality,
+            reg.id_number,
+            reg.id_type,
+            reg.id_issued_date,
+            reg.id_issued_place,
+            reg.permanent_address,
+            reg.contact_address,
+            reg.business_line,
+            reg.business_line_code,
+            reg.capital_amount,
+            reg.labor_count,
+            reg.planned_start_date,
+            reg.food_safety_commitment_at,
+            reg.HouseholdMembers.Select(m => new RegistrationDocumentHouseholdMember(
+                m.full_name, m.date_of_birth, m.id_number, m.relationship_to_owner, m.capital_contribution)).ToList(),
+            reg.reviewed_at,
+            reviewedByName);
+
+        return await registrationDocuments.GenerateAsync(data, format, ct);
     }
 
     public async Task<WardEnrollmentDetailDto> ConfirmIdentityAsync(
@@ -604,6 +667,12 @@ public sealed class WardComplianceService(
             blockers.Add("Hồ sơ đăng ký điểm kinh doanh liên kết chưa được phê duyệt (BR-16).");
         }
 
+        var eventBlocker = EventZoneBlocker(app.slot.zone, app.requested_term_days, TodayVn);
+        if (eventBlocker is not null)
+        {
+            blockers.Add(eventBlocker);
+        }
+
         if (app.slot.slot_status != "AVAILABLE" && app.slot.slot_status != "PENDING_APPLICATION")
         {
             blockers.Add($"Vị trí vỉa hè hiện không khả dụng (Trạng thái: {app.slot.slot_status}).");
@@ -680,6 +749,12 @@ public sealed class WardComplianceService(
                 if (app.registration.registration_status != "APPROVED")
                 {
                     throw new DomainRuleException("Không thể cấp phép khi hồ sơ điểm bán liên kết chưa được phê duyệt (BR-16).");
+                }
+
+                var eventBlocker = EventZoneBlocker(app.slot.zone, app.requested_term_days, DateOnly.FromDateTime(Now));
+                if (eventBlocker is not null)
+                {
+                    throw new DomainRuleException(eventBlocker);
                 }
 
                 // See the same fix in GetRentalApplicationDetailAsync above.
@@ -798,6 +873,27 @@ public sealed class WardComplianceService(
         }, ct);
 
         return await GetRentalApplicationDetailAsync(actor, applicationId, ct);
+    }
+
+    /// <summary>EVENT zones (Phase C) only accept a term that fits within their event window --
+    /// unlike STANDARD zones, which have no such end date. Returns null when the zone is
+    /// STANDARD or the term fits.</summary>
+    private static string? EventZoneBlocker(PricingZone zone, int requestedTermDays, DateOnly startDate)
+    {
+        if (zone.rental_mode != RentalModes.Event)
+        {
+            return null;
+        }
+
+        if (zone.event_end_date is not { } eventEnd)
+        {
+            return "Khu vực sự kiện chưa cấu hình ngày kết thúc.";
+        }
+
+        var termEnd = startDate.AddDays(requestedTermDays - 1);
+        return termEnd > eventEnd
+            ? $"Thời hạn thuê vượt quá ngày kết thúc sự kiện ({eventEnd:dd/MM/yyyy})."
+            : null;
     }
     #endregion
 
@@ -1450,7 +1546,10 @@ public sealed class WardComplianceService(
             action = $"PERMIT_{newStatus}",
             entity_type = "DigitalPermit",
             entity_id = permit.permit_id,
-            details = $"Cán bộ {actor.Name} quyết định {newStatus} giấy phép. Lý do: {request.Reason.Trim()}",
+            details = $"Cán bộ {actor.Name} quyết định {newStatus} giấy phép. Lý do: {request.Reason.Trim()}" +
+                      (request.BasedOnComplianceThreshold
+                          ? " Thu hồi theo điều kiện giấy phép do đạt ngưỡng vi phạm phường đã cấu hình."
+                          : ""),
             created_at = Now
         });
 
@@ -1569,6 +1668,7 @@ public sealed class WardComplianceService(
         var aiSuggestion = await aiService.ClassifyAndDraftAsync(v.description, availableSchedules, ct);
 
         var status = v.Penalty?.penalty_status ?? "PENDING_SANCTION";
+        var complianceFlag = await BuildComplianceFlagAsync(actor, v.vendor_id, ct);
 
         return new WardViolationDetailDto(
             v.violation_id,
@@ -1590,7 +1690,81 @@ public sealed class WardComplianceService(
             v.Penalty?.signer_title,
             v.Penalty?.created_at,
             recentCount,
-            aiSuggestion);
+            aiSuggestion,
+            v.bien_ban_so,
+            v.prepared_location,
+            v.witness_name,
+            v.witness_role,
+            v.witness_occupation,
+            v.witness_address,
+            v.violator_full_name,
+            v.violator_date_of_birth,
+            v.violator_gender,
+            v.violator_nationality,
+            v.violator_id_number,
+            v.violator_id_issued_date,
+            v.violator_id_issued_place,
+            v.violator_address,
+            v.containment_measures,
+            v.explanation_required,
+            v.explanation_method,
+            v.explanation_deadline_at,
+            v.explanation_received_at,
+            v.explanation_content,
+            v.delivered_at,
+            v.delivered_to_name,
+            v.delivery_refused,
+            v.delivery_refusal_reason,
+            complianceFlag);
+    }
+
+    /// <summary>Phase A. Advisory only (BR-41) -- never blocks or auto-triggers REVOKE. A ward
+    /// that has not configured WardCompliancePolicies gets an all-off flag.</summary>
+    private async Task<WardComplianceFlagDto> BuildComplianceFlagAsync(WardActor actor, long? vendorId, CancellationToken ct)
+    {
+        var policy = await db.WardCompliancePolicies.AsNoTracking()
+            .SingleOrDefaultAsync(p => p.ward_unit_id == actor.WardId, ct);
+        if (policy is null || vendorId is not { } vid)
+        {
+            return new WardComplianceFlagDto(null, 0, false, null, false, null);
+        }
+
+        var sanctionedCount = 0;
+        if (policy.violation_threshold_count is { } threshold && policy.violation_window_days is { } windowDays)
+        {
+            var windowStart = Now.AddDays(-windowDays);
+            // Only a violation that has actually been SANCTIONED counts as "1 lần" -- a bare
+            // biên bản still open or awaiting giải trình (Điều 61) must not count toward a
+            // threshold that leads to losing the permit before any finding is final.
+            sanctionedCount = await db.Penalties.AsNoTracking()
+                .CountAsync(p => p.violation.vendor_id == vid && p.created_at >= windowStart, ct);
+        }
+
+        int? overdueDays = null;
+        if (policy.unpaid_penalty_grace_days is { } graceDays)
+        {
+            var oldestUnpaidCreatedAt = await db.Penalties.AsNoTracking()
+                .Where(p => p.violation.vendor_id == vid && p.penalty_status == "UNPAID")
+                .OrderBy(p => p.created_at)
+                .Select(p => (DateTime?)p.created_at)
+                .FirstOrDefaultAsync(ct);
+            if (oldestUnpaidCreatedAt is { } createdAt)
+            {
+                var days = (int)(TodayVn.DayNumber - ToVnDate(createdAt).DayNumber);
+                if (days >= graceDays)
+                {
+                    overdueDays = days;
+                }
+            }
+        }
+
+        return new WardComplianceFlagDto(
+            policy.violation_threshold_count,
+            sanctionedCount,
+            policy.violation_threshold_count is { } t && sanctionedCount >= t,
+            policy.unpaid_penalty_grace_days,
+            overdueDays is not null,
+            overdueDays);
     }
 
     public async Task<WardViolationDetailDto> RecordViolationAsync(
@@ -1607,10 +1781,14 @@ public sealed class WardComplianceService(
             throw new WardException(400, "violation_type_inactive", "Loại vi phạm không tồn tại hoặc đã ngừng sử dụng.");
         }
 
-        if (request.SlotId is { } slotId
-            && !await db.SidewalkSlots.AnyAsync(s => s.slot_id == slotId && s.zone.ward_unit_id == actor.WardId, ct))
+        string? slotLocation = null;
+        if (request.SlotId is { } slotId)
         {
-            throw new NotFoundException("Không tìm thấy ô sạp tại địa bàn phường của bạn.");
+            slotLocation = await db.SidewalkSlots.AsNoTracking()
+                .Where(s => s.slot_id == slotId && s.zone.ward_unit_id == actor.WardId)
+                .Select(s => s.slot_code + " - " + s.zone.zone_name)
+                .SingleOrDefaultAsync(ct)
+                ?? throw new NotFoundException("Không tìm thấy ô sạp tại địa bàn phường của bạn.");
         }
 
         if (request.ContractId is { } contractId
@@ -1618,6 +1796,34 @@ public sealed class WardComplianceService(
         {
             throw new NotFoundException("Không tìm thấy hợp đồng tại địa bàn phường của bạn.");
         }
+
+        // Mẫu 01's violator identity block is frozen from the vendor's own registration at this
+        // moment -- a contract points at the exact registration it was approved from; otherwise
+        // fall back to the vendor's latest approved one. Neither existing is fine (e.g. an
+        // unlicensed occupier with only a slot_id): the block just stays blank on the record.
+        BusinessRegistration? registration = request.ContractId is { } cid
+            ? await db.RentalContracts.AsNoTracking()
+                .Where(c => c.contract_id == cid)
+                .Select(c => c.application.registration)
+                .SingleOrDefaultAsync(ct)
+            : request.VendorId is { } vid
+                ? await db.BusinessRegistrations.AsNoTracking()
+                    .Where(r => r.vendor_id == vid && r.registration_status == "APPROVED")
+                    .OrderByDescending(r => r.reviewed_at)
+                    .FirstOrDefaultAsync(ct)
+                : null;
+        var violatorName = request.VendorId is { } vendorForName
+            ? await db.Vendors.AsNoTracking().Where(v => v.vendor_id == vendorForName)
+                .Select(v => v.user.full_name).SingleOrDefaultAsync(ct)
+            : null;
+
+        var explanationMethod = request.ExplanationRequired ? request.ExplanationMethod : null;
+        var explanationDeadline = explanationMethod switch
+        {
+            "DIRECT" => BusinessCalendar.StartOfDayUtc(BusinessCalendar.AddWorkingDays(TodayVn, 2)),
+            "WRITTEN" => BusinessCalendar.StartOfDayUtc(BusinessCalendar.AddWorkingDays(TodayVn, 5)),
+            _ => (DateTime?)null,
+        };
 
         var violation = new Violation
         {
@@ -1629,10 +1835,31 @@ public sealed class WardComplianceService(
             evidence_url = request.EvidenceUrl,
             recorded_by = actor.UserId,
             recorder_role = RoleCodes.WardAuthority,
-            source = "OFFICER",
-            recorded_at = Now
+            source = "ON_SITE",
+            recorded_at = Now,
+            prepared_location = NullIfBlank(request.PreparedLocation) ?? slotLocation,
+            witness_name = NullIfBlank(request.WitnessName),
+            witness_role = request.WitnessName is not null ? request.WitnessRole : null,
+            witness_occupation = NullIfBlank(request.WitnessOccupation),
+            witness_address = NullIfBlank(request.WitnessAddress),
+            violator_full_name = violatorName,
+            violator_date_of_birth = registration?.owner_date_of_birth,
+            violator_gender = registration?.owner_gender,
+            violator_nationality = registration?.owner_nationality,
+            violator_id_number = registration?.id_number,
+            violator_id_issued_date = registration?.id_issued_date,
+            violator_id_issued_place = registration?.id_issued_place,
+            violator_address = registration?.permanent_address ?? registration?.declared_address,
+            containment_measures = NullIfBlank(request.ContainmentMeasures),
+            explanation_required = request.ExplanationRequired,
+            explanation_method = explanationMethod,
+            explanation_deadline_at = explanationDeadline,
         };
         db.Violations.Add(violation);
+        await db.SaveChangesAsync(ct);
+
+        // Mẫu 01 "Số: .../BB-VPHC" -- only knowable once violation_id exists.
+        violation.bien_ban_so = $"{violation.violation_id:0000}/BB-VPHC-{TodayVn.Year}";
 
         db.AuditLogs.Add(new AuditLog
         {
@@ -1640,12 +1867,65 @@ public sealed class WardComplianceService(
             action = "VIOLATION_RECORDED",
             entity_type = "Violation",
             entity_id = violation.violation_id,
-            details = $"Cán bộ {actor.Name} lập biên bản vi phạm hành vi {request.ViolationType}: {request.Description.Trim()}",
+            details = $"Cán bộ {actor.Name} lập biên bản {violation.bien_ban_so} vi phạm hành vi {request.ViolationType}: {request.Description.Trim()}",
             created_at = Now
         });
 
         await db.SaveChangesAsync(ct);
         return await GetViolationDetailAsync(actor, violation.violation_id, ct);
+    }
+
+    public async Task<WardViolationDetailDto> RecordExplanationAsync(
+        WardActor actor, long violationId, RecordExplanationRequest request, CancellationToken ct)
+    {
+        var violation = await db.Violations.Where(InWard(actor.WardId))
+            .SingleOrDefaultAsync(v => v.violation_id == violationId, ct)
+            ?? throw new NotFoundException("Không tìm thấy biên bản vi phạm.");
+        if (!violation.explanation_required)
+        {
+            throw new WardException(400, "explanation_not_required", "Vụ việc này không thuộc diện phải giải trình.");
+        }
+
+        violation.explanation_content = request.Content.Trim();
+        violation.explanation_received_at = Now;
+        db.AuditLogs.Add(new AuditLog
+        {
+            actor_user_id = actor.UserId,
+            action = "VIOLATION_EXPLANATION_RECEIVED",
+            entity_type = "Violation",
+            entity_id = violationId,
+            details = $"Đã ghi nhận giải trình của người vi phạm cho biên bản {violation.bien_ban_so}.",
+            created_at = Now
+        });
+        await db.SaveChangesAsync(ct);
+        return await GetViolationDetailAsync(actor, violationId, ct);
+    }
+
+    public async Task<WardViolationDetailDto> DeliverViolationAsync(
+        WardActor actor, long violationId, DeliverViolationRequest request, CancellationToken ct)
+    {
+        var violation = await db.Violations.Where(InWard(actor.WardId))
+            .SingleOrDefaultAsync(v => v.violation_id == violationId, ct)
+            ?? throw new NotFoundException("Không tìm thấy biên bản vi phạm.");
+
+        violation.delivered_at = Now;
+        violation.delivery_refused = request.Refused;
+        violation.delivered_to_name = request.Refused ? null : NullIfBlank(request.DeliveredToName);
+        violation.delivery_refusal_reason = request.Refused ? NullIfBlank(request.RefusalReason) : null;
+
+        db.AuditLogs.Add(new AuditLog
+        {
+            actor_user_id = actor.UserId,
+            action = request.Refused ? "VIOLATION_DELIVERY_REFUSED" : "VIOLATION_DELIVERED",
+            entity_type = "Violation",
+            entity_id = violationId,
+            details = request.Refused
+                ? $"{request.RefusalReason?.Trim()}"
+                : $"Đã giao biên bản {violation.bien_ban_so} cho {request.DeliveredToName?.Trim()}.",
+            created_at = Now
+        });
+        await db.SaveChangesAsync(ct);
+        return await GetViolationDetailAsync(actor, violationId, ct);
     }
 
     public async Task<WardViolationDetailDto> SanctionViolationAsync(
@@ -1654,6 +1934,15 @@ public sealed class WardComplianceService(
         SanctionWardViolationRequest request,
         CancellationToken ct)
     {
+        // WARD-13 authority split: only an officer whose account carries a sanction authority title
+        // (Chairman/Vice-Chairman of the Ward People's Committee, or a written delegate) may sign.
+        // Checked first so an unauthorised officer learns nothing about the violation or the rates.
+        if (actor.SanctionAuthorityTitle is null)
+        {
+            throw new ForbiddenException(
+                "Tài khoản của bạn chưa được giao thẩm quyền ký quyết định xử phạt. Chỉ Chủ tịch, Phó Chủ tịch UBND phường hoặc người được uỷ quyền bằng văn bản mới được ký.");
+        }
+
         var violation = await db.Violations
             .Include(v => v.Penalty)
             .Where(InWard(actor.WardId))
@@ -1662,6 +1951,19 @@ public sealed class WardComplianceService(
         if (violation is null)
         {
             throw new NotFoundException("Không tìm thấy biên bản vi phạm.");
+        }
+
+        // Điều 61 Luật XLVPHC: a violation flagged as requiring giải trình gets that window
+        // before a decision issues, unless the violator already explained or the officer
+        // explicitly acknowledges signing early anyway (e.g. the violator waived it in person).
+        if (violation.explanation_required
+            && violation.explanation_received_at is null
+            && violation.explanation_deadline_at is { } deadline
+            && Now < deadline
+            && !request.AcknowledgeEarlySanction)
+        {
+            throw new WardException(400, "explanation_window_open",
+                $"Người vi phạm còn quyền giải trình đến {TimeZoneInfo.ConvertTimeFromUtc(deadline, VietnamTimeZone):dd/MM/yyyy HH:mm}. Hãy chờ hết hạn hoặc xác nhận vẫn ra quyết định ngay.");
         }
 
         // BR-33: amount always comes from the ward's configured schedule row --
@@ -1692,12 +1994,10 @@ public sealed class WardComplianceService(
             throw new ConflictException("Vi phạm này chưa có căn cứ pháp lý hoặc mức phạt hiệu lực. Vui lòng cấu hình Bảng phạt trước.");
         }
 
-        // WARD-12/13 authority split: the patrolling officer who recorded the violation
-        // does not have sanction authority under the Law on Handling of Administrative
-        // Violations -- only the Chairman/Vice-Chairman (or a written delegate) does.
-        // Self-declared for now (see Contracts.cs SanctionWardViolationRequest), not RBAC-enforced.
-        var signerName = request.SignerName.Trim();
-        var signerTitle = request.SignerTitle.Trim();
+        // Signer comes from the authenticated account, never from the request (see the
+        // UserAccounts/Penalties notes in db/StreetBiz_SQL_Server.sql).
+        var signerName = actor.Name;
+        var signerTitle = actor.SanctionAuthorityTitle;
 
         if (violation.Penalty is null)
         {
@@ -1723,6 +2023,25 @@ public sealed class WardComplianceService(
             violation.Penalty.penalty_status = "UNPAID";
         }
 
+        // Phase A: tell the vendor where this sanction puts them against the ward's own
+        // configured threshold, if any -- due-process transparency, not a warning of an
+        // automatic consequence (BR-41: the system never auto-revokes).
+        string? complianceCountNote = null;
+        if (violation.vendor_id is { } sanctionedVendorId)
+        {
+            var policy = await db.WardCompliancePolicies.AsNoTracking()
+                .SingleOrDefaultAsync(p => p.ward_unit_id == actor.WardId, ct);
+            if (policy is { violation_threshold_count: { } threshold, violation_window_days: { } windowDays })
+            {
+                var windowStart = Now.AddDays(-windowDays);
+                var priorSanctionedCount = await db.Penalties.AsNoTracking()
+                    .CountAsync(p => p.violation.vendor_id == sanctionedVendorId
+                        && p.violation_id != violation.violation_id && p.created_at >= windowStart, ct);
+                var ordinal = priorSanctionedCount + 1;
+                complianceCountNote = $" Đây là lần vi phạm thứ {ordinal}/{threshold} trong {windowDays} ngày gần nhất.";
+            }
+        }
+
         db.AuditLogs.Add(new AuditLog
         {
             actor_user_id = actor.UserId,
@@ -1730,7 +2049,10 @@ public sealed class WardComplianceService(
             entity_type = "Penalty",
             entity_id = violation.violation_id,
             details = $"{signerTitle} {signerName} ban hành Quyết định xử phạt số {request.DecisionNumber.Trim()} " +
-                      $"({schedule.legal_basis ?? schedule.violation_type}). Mức phạt: {schedule.penalty_amount:N0} VND.",
+                      $"({schedule.legal_basis ?? schedule.violation_type}). Mức phạt: {schedule.penalty_amount:N0} VND." +
+                      (request.AcknowledgeEarlySanction && violation.explanation_received_at is null
+                          ? " Ký trước khi hết hạn giải trình theo xác nhận của cán bộ."
+                          : ""),
             created_at = Now
         });
 
@@ -1749,7 +2071,8 @@ public sealed class WardComplianceService(
                     notification_type = "PENALTY_SANCTION_ISSUED",
                     title = "Thông báo Quyết định xử phạt vi phạm hành chính",
                     body = $"UBND Phường đã ban hành Quyết định xử phạt số {request.DecisionNumber.Trim()}. " +
-                           $"Số tiền phạt: {schedule.penalty_amount:N0} VND. Vui lòng nộp phạt theo quy định.",
+                           $"Số tiền phạt: {schedule.penalty_amount:N0} VND. Vui lòng nộp phạt theo quy định." +
+                           complianceCountNote,
                     related_entity_type = "Penalty",
                     related_entity_id = violation.violation_id,
                     is_read = false,
@@ -1761,6 +2084,167 @@ public sealed class WardComplianceService(
         await db.SaveChangesAsync(ct);
         return await GetViolationDetailAsync(actor, violationId, ct);
     }
+
+    public async Task<WardViolationDocumentDto> GenerateViolationDocumentAsync(
+        WardActor actor, long violationId, CancellationToken ct)
+    {
+        var v = await db.Violations.AsNoTracking()
+            .Include(x => x.Penalty)
+            .Include(x => x.violation_typeNavigation)
+            .Include(x => x.slot).ThenInclude(s => s!.zone)
+            .Include(x => x.vendor).ThenInclude(vnd => vnd!.BusinessRegistrations)
+            .Where(InWard(actor.WardId))
+            .SingleOrDefaultAsync(x => x.violation_id == violationId, ct)
+            ?? throw new NotFoundException("Không tìm thấy biên bản vi phạm.");
+
+        var wardName = await db.AdministrativeUnits.AsNoTracking()
+            .Where(u => u.unit_id == actor.WardId).Select(u => u.unit_name).SingleOrDefaultAsync(ct)
+            ?? "UBND Phường";
+        var violationTypeName = v.violation_typeNavigation?.description ?? v.violation_type;
+        var vendorName = v.violator_full_name
+            ?? v.vendor?.BusinessRegistrations.FirstOrDefault()?.display_name
+            ?? "..........................................";
+        var recordedVn = TimeZoneInfo.ConvertTimeFromUtc(v.recorded_at, VietnamTimeZone);
+
+        var content = BuildBienBanDocx(wardName, violationTypeName, vendorName, recordedVn, v);
+        return new WardViolationDocumentDto(content, $"BienBan_{(v.bien_ban_so ?? v.violation_id.ToString()).Replace('/', '-')}.docx");
+    }
+
+    /// <summary>
+    /// Composes Mẫu biên bản số 01 (Điều 58 Luật XLVPHC; NĐ 118/2021/NĐ-CP) from scratch with
+    /// this violation's data, rather than editing the government-supplied .docx binary in place
+    /// (that file has no merge fields, and DocumentFormat.OpenXml has no reliable way to locate
+    /// "blank" runs to fill). The section order, headings and numbered-item wording below mirror
+    /// that template verbatim except for footnotes (1)-(16), which are usage instructions for
+    /// whoever fills the paper form by hand and have no place in an already-filled record.
+    /// </summary>
+    private static byte[] BuildBienBanDocx(
+        string wardName, string violationTypeName, string vendorName, DateTime recordedVn, Violation v)
+    {
+        using var stream = new MemoryStream();
+        using (var doc = WordprocessingDocument.Create(stream, WordprocessingDocumentType.Document))
+        {
+            var mainPart = doc.AddMainDocumentPart();
+            mainPart.Document = new Document();
+            var body = mainPart.Document.AppendChild(new Body());
+
+            body.AppendChild(NationalHeaderTable(wardName, $"Số: {v.bien_ban_so ?? "..../BB-VPHC"}"));
+
+            body.AppendChild(P("BIÊN BẢN VI PHẠM HÀNH CHÍNH", bold: true, align: JustificationValues.Center, size: 28));
+            body.AppendChild(P($"Về {violationTypeName}", italic: true, align: JustificationValues.Center));
+            body.AppendChild(P(""));
+
+            body.AppendChild(P(
+                $"Hôm nay, hồi {recordedVn:HH} giờ {recordedVn:mm} phút, ngày {recordedVn:dd/MM/yyyy}, " +
+                $"tại {v.prepared_location ?? "…………………………………"}."));
+
+            body.AppendChild(P("Chúng tôi gồm:", bold: true));
+            body.AppendChild(P($"1. Người có thẩm quyền lập biên bản: {wardName}"));
+
+            if (!string.IsNullOrWhiteSpace(v.witness_name))
+            {
+                body.AppendChild(P("2. Với sự chứng kiến của:"));
+                var roleLabel = v.witness_role == "WARD_REPRESENTATIVE" ? "Đại diện chính quyền địa phương" : "Người chứng kiến";
+                body.AppendChild(P($"Họ và tên: {v.witness_name} ({roleLabel})"));
+                if (!string.IsNullOrWhiteSpace(v.witness_occupation))
+                {
+                    body.AppendChild(P($"Nghề nghiệp: {v.witness_occupation}"));
+                }
+                if (!string.IsNullOrWhiteSpace(v.witness_address))
+                {
+                    body.AppendChild(P($"Địa chỉ: {v.witness_address}"));
+                }
+            }
+
+            body.AppendChild(P(""));
+            body.AppendChild(P("Tiến hành lập biên bản vi phạm hành chính đối với ông (bà) có tên sau đây:", bold: true));
+            body.AppendChild(P($"Họ và tên: {vendorName}"));
+            if (v.violator_gender is not null)
+            {
+                body.AppendChild(P($"Giới tính: {(v.violator_gender == "MALE" ? "Nam" : v.violator_gender == "FEMALE" ? "Nữ" : v.violator_gender)}"));
+            }
+            if (v.violator_date_of_birth is { } dob)
+            {
+                body.AppendChild(P($"Ngày, tháng, năm sinh: {dob:dd/MM/yyyy}"));
+            }
+            if (!string.IsNullOrWhiteSpace(v.violator_nationality))
+            {
+                body.AppendChild(P($"Quốc tịch: {v.violator_nationality}"));
+            }
+            if (!string.IsNullOrWhiteSpace(v.violator_address))
+            {
+                body.AppendChild(P($"Nơi ở hiện tại: {v.violator_address}"));
+            }
+            if (!string.IsNullOrWhiteSpace(v.violator_id_number))
+            {
+                var issued = v.violator_id_issued_date is { } d ? $"; ngày cấp: {d:dd/MM/yyyy}" : "";
+                var place = !string.IsNullOrWhiteSpace(v.violator_id_issued_place) ? $"; nơi cấp: {v.violator_id_issued_place}" : "";
+                body.AppendChild(P($"Số định danh cá nhân/CMND/Hộ chiếu: {v.violator_id_number}{issued}{place}"));
+            }
+
+            body.AppendChild(P(""));
+            body.AppendChild(P("2. Đã có các hành vi vi phạm hành chính:", bold: true));
+            body.AppendChild(P(v.description ?? ""));
+
+            body.AppendChild(P("3. Quy định tại:", bold: true));
+            body.AppendChild(P(v.Penalty is { } penalty
+                ? $"Khung xử phạt đã áp dụng (mức {penalty.amount:N0} VND)."
+                : "Chưa xác định căn cứ xử phạt tại thời điểm lập biên bản này."));
+
+            if (!string.IsNullOrWhiteSpace(v.containment_measures))
+            {
+                body.AppendChild(P("9. Các biện pháp ngăn chặn và bảo đảm xử lý vi phạm hành chính được áp dụng, gồm:", bold: true));
+                body.AppendChild(P(v.containment_measures));
+            }
+
+            if (v.explanation_required)
+            {
+                var days = v.explanation_method == "DIRECT" ? "02 ngày làm việc" : "05 ngày làm việc";
+                var form = v.explanation_method == "DIRECT" ? "văn bản yêu cầu được giải trình trực tiếp" : "văn bản giải trình";
+                body.AppendChild(P("10. Quyền và thời hạn giải trình:", bold: true));
+                body.AppendChild(P(
+                    $"Trong thời hạn {days}, kể từ ngày lập biên bản này, ông (bà) {vendorName} có quyền gửi " +
+                    $"{form} đến {wardName} để thực hiện quyền giải trình."));
+                if (v.explanation_deadline_at is { } deadline)
+                {
+                    var deadlineVn = TimeZoneInfo.ConvertTimeFromUtc(deadline, VietnamTimeZone);
+                    body.AppendChild(P($"Hạn giải trình: {deadlineVn:HH:mm} ngày {deadlineVn:dd/MM/yyyy}."));
+                }
+                if (v.explanation_received_at is { } received)
+                {
+                    var receivedVn = TimeZoneInfo.ConvertTimeFromUtc(received, VietnamTimeZone);
+                    body.AppendChild(P($"Đã nhận giải trình lúc {receivedVn:HH:mm} ngày {receivedVn:dd/MM/yyyy}: {v.explanation_content}"));
+                }
+            }
+
+            body.AppendChild(P(""));
+            body.AppendChild(P(
+                $"Biên bản lập xong hồi {recordedVn:HH} giờ {recordedVn:mm} phút, ngày {recordedVn:dd/MM/yyyy}, " +
+                "được lập thành 02 bản có nội dung và giá trị như nhau; đã đọc lại cho những người có tên nêu trên " +
+                "cùng nghe, công nhận là đúng và cùng ký tên dưới đây; giao cho ông (bà) " +
+                $"{vendorName} 01 bản, 01 bản lưu hồ sơ."));
+
+            if (v.delivered_at is { } deliveredAt)
+            {
+                var deliveredVn = TimeZoneInfo.ConvertTimeFromUtc(deliveredAt, VietnamTimeZone);
+                body.AppendChild(P(
+                    $"Biên bản đã giao trực tiếp cho {v.delivered_to_name} vào hồi {deliveredVn:HH:mm} ngày {deliveredVn:dd/MM/yyyy}."));
+            }
+            else if (v.delivery_refused)
+            {
+                body.AppendChild(P($"Người vi phạm từ chối nhận biên bản. Lý do: {v.delivery_refusal_reason}"));
+            }
+
+            body.AppendChild(P(""));
+            body.AppendChild(SignatureTable(
+                ("CÁ NHÂN/NGƯỜI ĐẠI DIỆN VI PHẠM", "(Ký, ghi rõ họ và tên)"),
+                ("NGƯỜI LẬP BIÊN BẢN", "(Ký, ghi rõ chức vụ, họ và tên)")));
+
+            mainPart.Document.Save();
+        }
+        return stream.ToArray();
+    }
+
     #endregion
 
     #region Insights (rule-based, explainable -- no LLM)

@@ -162,7 +162,7 @@ public sealed record FinanceCallbackMutationResult(
     long? TransactionId);
 
 /// <summary>SYS-06/FEE-02: how many instalments a reminder sweep moved to OVERDUE and how many reminders it sent.</summary>
-public sealed record FeeReminderSweepResult(int OverdueCount, int ReminderCount);
+public sealed record FeeReminderSweepResult(int OverdueCount, int ReminderCount, int PenaltyReminderCount = 0);
 
 /// <summary>One invoice as the vendor sees it (FEE-03). <c>Kind</c> is FEE or PENALTY — never both (CK_Invoices_ExactlyOneSource).</summary>
 public sealed record InvoiceRow(

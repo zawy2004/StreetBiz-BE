@@ -17,7 +17,32 @@ public static class BusinessCalendar
     public static DateOnly Today(TimeProvider clock) =>
         DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(clock.GetUtcNow(), TimeZone).DateTime);
 
+    /// <summary>Overload for the older <c>IDateTimeProvider.UtcNow</c> (a plain UTC DateTime).</summary>
+    public static DateOnly Today(DateTime utcNow) =>
+        DateOnly.FromDateTime(TimeZoneInfo.ConvertTimeFromUtc(utcNow, TimeZone));
+
     /// <summary>The UTC instant a Vietnamese calendar day begins.</summary>
     public static DateTime StartOfDayUtc(DateOnly day) =>
         TimeZoneInfo.ConvertTimeToUtc(day.ToDateTime(TimeOnly.MinValue, DateTimeKind.Unspecified), TimeZone);
+
+    /// <summary>
+    /// WARD-12 mục 10 (Điều 61 Luật XLVPHC): the violator's "02 ngày làm việc" / "05 ngày làm
+    /// việc" giải trình window, counted in working days (Mon-Fri; no public-holiday calendar is
+    /// modelled here, so a holiday inside the window is not subtracted -- acceptable slack in the
+    /// violator's favour, never against them).
+    /// </summary>
+    public static DateOnly AddWorkingDays(DateOnly from, int workingDays)
+    {
+        var day = from;
+        var added = 0;
+        while (added < workingDays)
+        {
+            day = day.AddDays(1);
+            if (day.DayOfWeek is not (DayOfWeek.Saturday or DayOfWeek.Sunday))
+            {
+                added++;
+            }
+        }
+        return day;
+    }
 }

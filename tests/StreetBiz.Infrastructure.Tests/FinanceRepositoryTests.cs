@@ -146,6 +146,30 @@ public sealed class FinanceRepositoryTests
         Assert.False(await f.Db.FeeSchedules.AsNoTracking().AnyAsync(s => s.contract_id == 2));
     }
 
+    [Fact]
+    public async Task Cancelling_a_contract_drops_future_pending_instalments_but_never_touches_paid_ones()
+    {
+        using var f = await Fixture.Create();
+        var contracts = new RentalContractRepository(f.Db);
+
+        // Both fee schedules (the superseded revision 1 and the current revision 2) belong to
+        // contract 1 in this fixture -- contract 2 has no schedule at all.
+        await contracts.CancelAsync(contractId: 1, cancelledByUserId: 1, reason: "Vendor returned the slot", default);
+
+        var items = await f.Db.FeeScheduleItems.AsNoTracking()
+            .Where(i => i.fee_schedule.contract_id == 1).ToDictionaryAsync(i => i.fee_item_id, i => i.item_status);
+        Assert.Equal(FeeItemStatuses.Paid, items[2]); // already paid: never refunded, never touched
+        Assert.Equal("CANCELLED", items[PastDueItem]); // was PENDING, future instalment: dropped
+        Assert.Equal("CANCELLED", items[DueSoonItem]);
+        Assert.Equal("CANCELLED", items[5]);
+
+        // The superseded revision's leftover PENDING item is excluded by the same
+        // superseded_at filter every other live-debt query in this file uses -- it is not
+        // live debt, so cancelling must leave it alone.
+        Assert.Equal(FeeItemStatuses.Pending,
+            (await f.Db.FeeScheduleItems.AsNoTracking().SingleAsync(i => i.fee_item_id == SupersededItem)).item_status);
+    }
+
     private sealed class Fixture : IDisposable
     {
         private SqliteConnection Connection { get; } = new("Data Source=:memory:");

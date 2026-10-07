@@ -115,7 +115,26 @@ internal static class ZoneRules
         v.RuleFor(x => get(x).ZoneName).NotEmpty().WithMessage("Nhập tên khu vực.").MaximumLength(150);
         v.RuleFor(x => get(x).ZoneCode).NotEmpty().WithMessage("Nhập mã khu vực.").MaximumLength(20)
             .Matches("^[A-Z0-9-]+$").WithMessage("Mã khu vực chỉ gồm chữ in hoa, số và dấu gạch ngang.");
-        v.RuleFor(x => get(x).PricePerDay).GreaterThan(0).WithMessage("Giá thuê/ngày phải lớn hơn 0.");
+        v.RuleFor(x => get(x).PriceDisplayUnit).Must(u => u is PriceDisplayUnits.Day or PriceDisplayUnits.Month)
+            .WithMessage("Đơn vị giá phải là DAY hoặc MONTH.");
+        v.RuleFor(x => get(x).RentalMode).Must(m => m is RentalModes.Standard or RentalModes.Event)
+            .WithMessage("Hình thức thuê phải là STANDARD hoặc EVENT.");
+        // price_per_day stays the only value the fee engine reads -- required when the officer
+        // is entering it directly; when entering a monthly price, that one is required instead
+        // and price_per_day is derived server-side (WardConfigurationService.ApplyZoneFields).
+        v.RuleFor(x => get(x).PricePerDay).GreaterThan(0).WithMessage("Giá thuê/ngày phải lớn hơn 0.")
+            .When(x => get(x).PriceDisplayUnit == PriceDisplayUnits.Day);
+        v.RuleFor(x => get(x).PricePerMonth).NotNull().GreaterThan(0).WithMessage("Giá thuê/tháng phải lớn hơn 0.")
+            .When(x => get(x).PriceDisplayUnit == PriceDisplayUnits.Month);
+        // An event's day-by-day pricing has no monthly equivalent worth entering.
+        v.RuleFor(x => get(x).PriceDisplayUnit).Equal(PriceDisplayUnits.Day)
+            .WithMessage("Khu vực sự kiện chỉ tính giá theo ngày.")
+            .When(x => get(x).RentalMode == RentalModes.Event);
+        v.RuleFor(x => get(x))
+            .Must(r => r.EventStartDate is not null && r.EventEndDate is not null && r.EventEndDate > r.EventStartDate)
+            .WithName("EventStartDate")
+            .WithMessage("Khu vực sự kiện cần nhập đủ ngày bắt đầu và ngày kết thúc, kết thúc phải sau bắt đầu.")
+            .When(x => get(x).RentalMode == RentalModes.Event);
         v.RuleFor(x => get(x))
             .Must(r => (r.AvailableFrom is null) == (r.AvailableTo is null))
             .WithName("AvailableFrom")
@@ -214,6 +233,14 @@ public sealed class PreviewWardZoneImpactQueryValidator : AbstractValidator<Prev
     {
         RuleFor(x => x.ZoneId).GreaterThan(0);
         RuleFor(x => x.Request.PricePerDay).GreaterThan(0);
+        RuleFor(x => x.Request.FeeComponents).NotNull().Must(c => c.Count <= 20).WithMessage("Tối đa 20 khoản phụ phí.");
+        RuleForEach(x => x.Request.FeeComponents).ChildRules(c =>
+        {
+            c.RuleFor(x => x.ComponentName).NotEmpty().MaximumLength(150);
+            c.RuleFor(x => x.CalcBasis).Must(b => b is FeeBases.PerDay or FeeBases.PerTerm)
+                .WithMessage("Cách tính phụ phí phải là PER_DAY hoặc PER_TERM.");
+            c.RuleFor(x => x.UnitAmount).GreaterThanOrEqualTo(0);
+        });
     }
 }
 
@@ -440,6 +467,15 @@ public sealed class CreateWardSlotBatchCommandHandler(IWardActorContext actorCon
         await service.CreateBatchAsync(await actorContext.RequireAsync(ct), request.Request, ct);
 }
 
+public sealed record ListWardSlotHistoryQuery(long SlotId) : IRequest<IReadOnlyList<ConfigHistoryEntryDto>>;
+
+public sealed class ListWardSlotHistoryQueryHandler(IWardActorContext actorContext, IWardConfigurationService service)
+    : IRequestHandler<ListWardSlotHistoryQuery, IReadOnlyList<ConfigHistoryEntryDto>>
+{
+    public async Task<IReadOnlyList<ConfigHistoryEntryDto>> Handle(ListWardSlotHistoryQuery request, CancellationToken ct) =>
+        await service.ListSlotHistoryAsync(await actorContext.RequireAsync(ct), request.SlotId, ct);
+}
+
 internal static class FeatureRules
 {
     public static void Apply<T>(AbstractValidator<T> v, Func<T, UpsertStreetFeatureRequest> get)
@@ -506,5 +542,45 @@ public sealed class DeleteWardStreetFeatureCommandHandler(IWardActorContext acto
         await service.DeleteFeatureAsync(await actorContext.RequireAsync(ct), request.FeatureId, request.VersionToken, ct);
         return Unit.Value;
     }
+}
+#endregion
+
+#region WardCompliancePolicy (Phase A)
+public sealed record GetWardCompliancePolicyQuery : IRequest<WardCompliancePolicyDto>;
+
+public sealed class GetWardCompliancePolicyQueryHandler(IWardActorContext actorContext, IWardConfigurationService service)
+    : IRequestHandler<GetWardCompliancePolicyQuery, WardCompliancePolicyDto>
+{
+    public async Task<WardCompliancePolicyDto> Handle(GetWardCompliancePolicyQuery request, CancellationToken ct) =>
+        await service.GetCompliancePolicyAsync(await actorContext.RequireAsync(ct), ct);
+}
+
+public sealed record UpsertWardCompliancePolicyCommand(UpsertWardCompliancePolicyRequest Request) : IRequest<WardCompliancePolicyDto>;
+
+public sealed class UpsertWardCompliancePolicyCommandValidator : AbstractValidator<UpsertWardCompliancePolicyCommand>
+{
+    public UpsertWardCompliancePolicyCommandValidator()
+    {
+        RuleFor(x => x.Request.ViolationThresholdCount).GreaterThan(0)
+            .When(x => x.Request.ViolationThresholdCount is not null)
+            .WithMessage("Ngưỡng số lần vi phạm phải lớn hơn 0.");
+        RuleFor(x => x.Request.ViolationWindowDays).GreaterThan(0)
+            .When(x => x.Request.ViolationWindowDays is not null)
+            .WithMessage("Cửa sổ thời gian phải lớn hơn 0 ngày.");
+        RuleFor(x => x.Request.UnpaidPenaltyGraceDays).GreaterThan(0)
+            .When(x => x.Request.UnpaidPenaltyGraceDays is not null)
+            .WithMessage("Số ngày ân hạn phải lớn hơn 0.");
+        RuleFor(x => x.Request)
+            .Must(r => r.ViolationThresholdCount is null || r.ViolationWindowDays is not null)
+            .WithName("ViolationWindowDays")
+            .WithMessage("Đã nhập ngưỡng số lần vi phạm thì phải nhập cả cửa sổ thời gian.");
+    }
+}
+
+public sealed class UpsertWardCompliancePolicyCommandHandler(IWardActorContext actorContext, IWardConfigurationService service)
+    : IRequestHandler<UpsertWardCompliancePolicyCommand, WardCompliancePolicyDto>
+{
+    public async Task<WardCompliancePolicyDto> Handle(UpsertWardCompliancePolicyCommand request, CancellationToken ct) =>
+        await service.UpsertCompliancePolicyAsync(await actorContext.RequireAsync(ct), request.Request, ct);
 }
 #endregion
