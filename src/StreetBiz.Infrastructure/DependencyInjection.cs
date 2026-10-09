@@ -17,6 +17,7 @@ using StreetBiz.Infrastructure.Persistence.Repositories;
 using StreetBiz.Infrastructure.Security;
 using StreetBiz.Infrastructure.Services;
 using StreetBiz.Infrastructure.Storage;
+using StreetBiz.Infrastructure.Services.Chatbot;
 
 namespace StreetBiz.Infrastructure;
 
@@ -121,6 +122,7 @@ public static class DependencyInjection
         // per request), so a key-rotation counter built inline in its constructor
         // would reset every request and never actually round-robin across calls.
         services.AddSingleton<AiKeyPools>();
+        services.AddChatbotInfrastructure(configuration);
         // Shared by AiComplianceService and FptAiKycService's Gemini fallback -- see
         // GeminiVisionClient's remarks for why this was pulled out of AiComplianceService.
         services.AddHttpClient<GeminiVisionClient>(client =>
