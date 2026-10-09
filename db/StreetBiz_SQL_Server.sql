@@ -88,6 +88,8 @@
    The API never runs schema changes (docs/database.md).
 
    CHANGE LOG (newest first)
+     2026-10-06  Add isolated role-scoped assistant conversations, messages, audit,
+                 idempotency keys and generation leases (explicit SQL Server exception).
      2026-10-06  Rental-term/compliance revamp: PricingZones gets price_display_unit/
                  price_per_month (monthly-entry convenience, price_per_day stays the only
                  input FeeQuoteCalculator/FeeInstalmentPlanner read) and rental_mode/
@@ -2121,6 +2123,65 @@ GO
    AddOrderStorefrontAddressSnapshot is already part of the Orders table above.
    ProductVersion must match the EF Core version in Directory.Build.props / the csproj.
    ============================================================ */
+-- Assistant persistence is independent of person-to-person chat. No business decisions.
+CREATE TABLE ChatbotConversations (
+    conversation_id NVARCHAR(32) NOT NULL PRIMARY KEY,
+    owner_user_id BIGINT NOT NULL,
+    create_request_id NVARCHAR(36) NOT NULL,
+    scope NVARCHAR(100) NOT NULL,
+    title NVARCHAR(200) NOT NULL,
+    created_at DATETIME2 NOT NULL,
+    updated_at DATETIME2 NOT NULL,
+    deleted_at DATETIME2 NULL,
+    active_message_id NVARCHAR(32) NULL,
+    lease_until DATETIME2 NULL,
+    ordinal BIGINT NOT NULL,
+    version BIGINT NOT NULL,
+    actor_id BIGINT NOT NULL,
+    CONSTRAINT FK_ChatbotConversations_User FOREIGN KEY (owner_user_id) REFERENCES UserAccounts(user_id),
+    CONSTRAINT UQ_ChatbotConversations_Create UNIQUE (owner_user_id, create_request_id)
+);
+CREATE INDEX IX_ChatbotConversations_Owner ON ChatbotConversations(owner_user_id, updated_at);
+GO
+CREATE TABLE ChatbotMessages (
+    message_id NVARCHAR(32) NOT NULL PRIMARY KEY,
+    conversation_id NVARCHAR(32) NOT NULL,
+    request_id NVARCHAR(36) NOT NULL,
+    request_hash NVARCHAR(64) NOT NULL,
+    sender NVARCHAR(12) NOT NULL,
+    status NVARCHAR(16) NOT NULL,
+    payload_json NVARCHAR(MAX) NOT NULL,
+    provider NVARCHAR(30) NULL,
+    model_id NVARCHAR(150) NULL,
+    input_tokens INT NOT NULL,
+    output_tokens INT NOT NULL,
+    reserved_tokens INT NOT NULL,
+    ordinal BIGINT NOT NULL,
+    version BIGINT NOT NULL,
+    created_at DATETIME2 NOT NULL,
+    updated_at DATETIME2 NOT NULL,
+    actor_id BIGINT NOT NULL,
+    helpful BIT NULL,
+    feedback_reason NVARCHAR(300) NULL,
+    CONSTRAINT FK_ChatbotMessages_Conversation FOREIGN KEY (conversation_id) REFERENCES ChatbotConversations(conversation_id) ON DELETE CASCADE,
+    CONSTRAINT CK_ChatbotMessages_Sender CHECK (sender IN ('USER','ASSISTANT')),
+    CONSTRAINT CK_ChatbotMessages_Status CHECK (status IN ('GENERATING','COMPLETED','FAILED','CANCELLED','INTERRUPTED','DELETED')),
+    CONSTRAINT UQ_ChatbotMessages_Request UNIQUE (conversation_id, request_id, sender),
+    CONSTRAINT UQ_ChatbotMessages_Ordinal UNIQUE (conversation_id, ordinal)
+);
+CREATE INDEX IX_ChatbotMessages_Budget ON ChatbotMessages(actor_id, created_at);
+GO
+CREATE TABLE ChatbotAudits (
+    audit_id BIGINT IDENTITY(1,1) NOT NULL PRIMARY KEY,
+    message_id NVARCHAR(32) NOT NULL,
+    operation NVARCHAR(80) NOT NULL,
+    outcome NVARCHAR(40) NOT NULL,
+    actor_id BIGINT NOT NULL,
+    timestamp DATETIME2 NOT NULL
+);
+CREATE INDEX IX_ChatbotAudits_Message ON ChatbotAudits(message_id, timestamp);
+GO
+
 CREATE TABLE [__EFMigrationsHistory] (
     [MigrationId]    nvarchar(150) NOT NULL,
     [ProductVersion] nvarchar(32)  NOT NULL,
@@ -2134,7 +2195,7 @@ GO
 
 
 /* ============================================================
-   Table count summary
+   Table count summary (assistant adds ChatbotConversations, ChatbotMessages, ChatbotAudits)
    ------------------------------------------------------------
    Identity & Reference ......... 6  (AdministrativeUnits, Roles,
                                       UserAccounts, UserSessions,
