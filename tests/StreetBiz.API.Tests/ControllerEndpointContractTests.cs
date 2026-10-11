@@ -19,6 +19,20 @@ public sealed class ControllerEndpointContractTests
 
     private static readonly string[] ExpectedControllerOperations =
     [
+        "GET /api/chatbot/capabilities",
+        "GET /api/chatbot/briefing",
+        "POST /api/chatbot/voice/sessions",
+        "POST /api/chatbot/guest/messages",
+        "POST /api/chatbot/attachments",
+        "DELETE /api/chatbot/attachments/{id}",
+        "GET /api/chatbot/conversations",
+        "POST /api/chatbot/conversations",
+        "DELETE /api/chatbot/conversations/{id}",
+        "GET /api/chatbot/conversations/{id}/messages",
+        "POST /api/chatbot/conversations/{id}/messages",
+        "GET /api/chatbot/conversations/{id}/messages/{messageId}",
+        "POST /api/chatbot/conversations/{id}/messages/{messageId}/cancel",
+        "POST /api/chatbot/conversations/{id}/messages/{messageId}/feedback",
         "GET /api/seller/storefronts",
         "POST /api/seller/storefronts",
         "PUT /api/seller/storefronts/{storefrontId}",
