@@ -65,71 +65,21 @@
    ============================================================ */
 
 /* ============================================================
-   HOW THIS FILE IS MAINTAINED  -- read before changing the database
+   HOW THE DATABASE IS BUILT
 
-   The database is built from exactly TWO scripts, and nothing else:
+   The database is built from exactly TWO scripts, run in this order on an
+   empty database:
      db/StreetBiz_SQL_Server.sql   this file: schema + reference data
                                    (roles, wards, violation catalogue) + EF history stamp
      db/StreetBiz_Demo_Seed.sql    demo accounts and a full demo scenario (dev only)
-   scripts/setup-local-db.ps1 runs both on an empty database.
+   scripts/setup-local-db.ps1 runs both; add -Recreate to drop and rebuild.
 
-   To change the schema:
-     1. Edit the CREATE TABLE / constraint / index IN THIS FILE. Do not write an
-        ALTER script, a patch script or a "fix" script -- and do not add .sql files
-        under docs/ or anywhere else. A change that lives in a side file is invisible
-        to the next person who builds a database.
-     2. Add one line to the change log below (newest first).
-     3. If the demo data is affected, update db/StreetBiz_Demo_Seed.sql in the same
-        change. New reference data (a role, a ward, a violation type) goes in
-        section 10 of this file instead.
-     4. Verify by rebuilding an empty database: scripts/setup-local-db.ps1 -Recreate.
-     5. Say in the PR that teammates must rebuild, and mention any manual step.
-
-   The API never runs schema changes (docs/database.md).
-
-   CHANGE LOG (newest first)
-     2026-10-12  Manual money handling by the ward: SidewalkSlots.price_override (one slot's
-                 own price); FeeScheduleItems.deposit_amount/original_amount/adjusted_*
-                 (hand-corrected amount or due date, with reason); PaymentTransactions.provider
-                 gains CASH and BANK_TRANSFER (collected in person); new DepositRefunds.
-     2026-10-12  Monthly rent + quarterly discount: PricingZones.quarter_discount_percent
-                 (STANDARD only; % off the rent of a 3/6/12-month term). STANDARD whole-month
-                 terms now bill price_per_month itself. ZoneFeeComponents.calc_basis gains
-                 ONE_TIME (first contract only) and DEPOSIT (refundable, first contract only).
-                 UserAccounts.failed_login_count/lockout_until (sign-in lockout).
-     2026-10-06  Add isolated role-scoped assistant conversations, messages, audit,
-                 idempotency keys and generation leases (explicit SQL Server exception).
-     2026-10-06  Rental-term/compliance revamp: PricingZones gets price_display_unit/
-                 price_per_month (monthly-entry convenience, price_per_day stays the only
-                 input FeeQuoteCalculator/FeeInstalmentPlanner read) and rental_mode/
-                 event_start_date/event_end_date (STANDARD vs EVENT short-term zones); new
-                 WardCompliancePolicies (ward-configured, off by default, violation-threshold
-                 + unpaid-penalty-grace advisory for permit revocation); FeeScheduleItems
-                 gains status CANCELLED (future PENDING instalments cancelled, not refunded,
-                 on a voluntary contract cancellation).
-     2026-09-28  Food-safety (ATTP) certificates: FoodCategories.requires_food_safety, new tables
-                 FoodSafetyApplications, FoodSafetyApplicationItems, FoodSafetyEvidence
-                 (vendor -> ward -> department result recorded by the ward).
-     2026-09-27  Buyer/seller chat: ChatConversations and ChatMessages in section 7,
-                 after Storefronts. One thread per (storefront, customer), so a buyer
-                 can ask about a stall before any order exists.
-     2026-09-24  Indexes for the three UPDLOCK/HOLDLOCK triggers (RentalContracts.slot_id,
-                 FeeScheduleItems.fee_schedule_id, RefundTransactions.payment_transaction_id)
-                 so they lock rows instead of whole tables, plus hot foreign keys: ward queue
-                 (BusinessRegistrations.ward_unit_id), order items/payments, cart items,
-                 menu categories, business hours, invoices, transfers, complaints, reports.
-     2026-09-21  BusinessRegistrations: Mau so 01 owner/business fields, food-safety
-                 commitment, manual identity check (identity_verified_*), cached AI check
-                 (ai_check_*). New tables BusinessRegistrationHouseholdMembers and
-                 KycVerificationResults. RegistrationEvidence accepts
-                 IDENTITY_DOCUMENT_BACK and PORTRAIT_SELFIE. UserAccounts.sanction_authority_title.
-     2026-09-21  Orders.storefront_address_snapshot folded in (was post-schema-migrations.sql).
-     2026-09-20  BusinessRegistrations.id_number and biometric_consent_at,
-                 PenaltyFeeSchedules.legal_basis, Penalties.decision_number/signer_name/
-                 signer_title. Violation catalogue extended with the five legal codes.
-     2026-09-19  Slot workspace: SidewalkSlots detail columns, PricingZones/
-                 AdministrativeUnits info, ZoneFeeComponents, StreetFeatures, SlotHolds,
-                 RentalApplications.commitments_accepted_at.
+   This file is the single source of truth for the schema, and the API never
+   runs schema changes (docs/database.md). To change the schema, edit the
+   CREATE TABLE / constraint / index here -- not an ALTER or patch script in a
+   side file -- keep db/StreetBiz_Demo_Seed.sql in step, and rebuild an empty
+   database to verify. New reference data (a role, a ward, a violation type)
+   goes in section 10 of this file.
    ============================================================ */
 
 -- CREATE DATABASE StreetBizDB;
@@ -194,10 +144,10 @@ CREATE TABLE UserAccounts (
     ward_unit_type      AS CAST(N'WARD' AS NVARCHAR(20)) PERSISTED,
     account_status      NVARCHAR(20)          NOT NULL DEFAULT 'ACTIVE',
     phone_verified_at   DATETIME2             NULL,
-    -- AUTH: sign-in lockout (bae7ded) -- consecutive bad-password attempts and,
-    -- once the threshold is hit, the UTC instant the account unlocks.
+    -- AUTH: sign-in lockout -- consecutive bad-password attempts and, once the
+    -- threshold is hit, the UTC instant the account unlocks.
     failed_login_count  INT                   NOT NULL DEFAULT 0,
-    lockout_until        DATETIME2             NULL,
+    lockout_until       DATETIME2             NULL,
     created_at          DATETIME2             NOT NULL DEFAULT SYSUTCDATETIME(),
     updated_at          DATETIME2             NULL,
     -- WARD-13: fixed title printed under a sanction decision (e.g. N'Chủ tịch UBND Phường ...').
@@ -470,21 +420,21 @@ CREATE TABLE PricingZones (
     segment_from         NVARCHAR(150)  NULL,  -- street segment ends
     segment_to           NVARCHAR(150)  NULL,
     application_deadline DATE           NULL,
-    -- A STANDARD zone rents by whole months (30-day units): the rent of such a term is
-    -- price_per_month x months when an officer entered a monthly price, else
-    -- price_per_day x 30 x months. price_per_day (derived as ROUND(price_per_month / 30, 0)
-    -- when a monthly price is entered) still prices EVENT and part-month terms.
+    -- A STANDARD zone (a fixed trading location) rents by whole months of 30 days: the rent
+    -- of a term is price_per_month x months when an officer entered a monthly price, else
+    -- price_per_day x 30 x months. price_per_day is always filled (ROUND(price_per_month / 30, 0)
+    -- when a monthly price is entered) and is what an EVENT zone, rented by the day, charges.
     price_display_unit   NVARCHAR(10)   NOT NULL DEFAULT 'DAY',
-    price_per_month       DECIMAL(18,0) NULL,
+    price_per_month      DECIMAL(18,0)  NULL,
     -- % taken off the rent (never the fees) of a term that is a whole number of quarters
     -- (3/6/12 months). NULL = no discount. STANDARD zones only.
     quarter_discount_percent DECIMAL(5,2) NULL,
-    -- EVENT zones keep the existing day-by-day rental flow unchanged (SlotApplyForm's free-
-    -- text day count); only STANDARD zones get the month-based quick-select. event_* dates
-    -- bound how long a short-term/pop-up zone accepts applications.
-    rental_mode           NVARCHAR(10)  NOT NULL DEFAULT 'STANDARD',
-    event_start_date      DATE          NULL,
-    event_end_date        DATE          NULL,
+    -- STANDARD: a fixed location rented by the month (3/6/12 months earn the quarterly
+    -- discount). EVENT: a short-term / pop-up zone rented by the day. event_* dates bound
+    -- the period an EVENT zone is open for.
+    rental_mode          NVARCHAR(10)   NOT NULL DEFAULT 'STANDARD',
+    event_start_date     DATE           NULL,
+    event_end_date       DATE           NULL,
     CONSTRAINT UQ_PricingZones_NamePerWard
         UNIQUE (ward_unit_id, zone_name),
     CONSTRAINT CK_PricingZones_PriceDisplayUnit
@@ -577,9 +527,8 @@ CREATE TABLE SidewalkSlots (
 CREATE INDEX IX_SidewalkSlots_Status ON SidewalkSlots(slot_status);
 CREATE INDEX IX_SidewalkSlots_Zone   ON SidewalkSlots(zone_id);
 
--- Fee table of a zone. PER_DAY components are multiplied by the term, PER_TERM
--- ones are charged once; the vendor quote is informational (WARD-08 issues the
--- real fee schedule).
+-- Fee table of a zone. The vendor's quote, the contract total and the fee schedule
+-- (WARD-08) are all built from these rows plus the zone's rent, so they agree.
 CREATE TABLE ZoneFeeComponents (
     component_id    INT IDENTITY(1,1)  PRIMARY KEY,
     zone_id         INT                NOT NULL,
@@ -1322,7 +1271,6 @@ CREATE INDEX IX_FeeScheduleItems_DueDate ON FeeScheduleItems(due_date, item_stat
 -- Fee list per schedule, and TR_RentalContracts_NoCancelWithDebt (UPDLOCK/HOLDLOCK).
 CREATE INDEX IX_FeeScheduleItems_Schedule ON FeeScheduleItems(fee_schedule_id, item_status);
 
--- FEE-03, SYS-05: issued only after a confirmed payment (BR-32)
 -- The rental deposit handed back when a contract ends. One row per contract: the deposit is
 -- taken once (first instalment) and given back once. Money moves outside the system (cash or a
 -- bank transfer), so this is the officer's record of it; a partial refund must say why.
@@ -1347,6 +1295,8 @@ CREATE TABLE DepositRefunds (
     CONSTRAINT FK_DepositRefunds_RefundedBy
         FOREIGN KEY (refunded_by) REFERENCES UserAccounts(user_id)
 );
+
+-- FEE-03, SYS-05: issued only after a confirmed payment (BR-32)
 CREATE TABLE Invoices (
     invoice_id       BIGINT IDENTITY(1,1)  PRIMARY KEY,
     invoice_number   NVARCHAR(40)          NOT NULL UNIQUE,
@@ -1522,15 +1472,6 @@ CREATE INDEX IX_ReportExports_Requester ON ReportExports(requested_by, requested
    7. PHASE 2 — MARKETPLACE (gated by REG + SIDE, BR-48)
    ============================================================ */
 
--- BR-48 marketplace gate. contract_id was NOT NULL, which silently excluded
--- every ITINERANT vendor from Phase 2: an itinerant vendor by definition rents
--- no fixed slot, so it could never satisfy the column and could never open a
--- storefront. It is now nullable, and TR_Storefronts_Phase2Gate enforces the
--- rule that actually applies: an approved registration, plus an active rental
--- contract only where the registration is for a fixed storefront.
---
--- If the report intends to keep itinerant vendors out of the marketplace, make
--- contract_id NOT NULL again and delete the ITINERANT branch of the trigger.
 -- BR-48 marketplace gate: an APPROVED registration plus an ACTIVE rental
 -- contract. This applies to both vendor types. An itinerant vendor is not a
 -- vendor without a slot - SIDE-03B has them apply for open slots from the map
@@ -2162,14 +2103,18 @@ GO
 -- the spot and what PenaltyFeeSchedules prices. The first ten are the operational
 -- catalogue; the last five are the legal-citation set the ward compliance module and its
 -- AI classifier (AiComplianceService) map onto.
+-- NO_PERMIT and WASTE_DISPOSAL are retired from the start (is_active = 0): they duplicate
+-- UNAUTHORIZED_BUSINESS_USE (NĐ 168/2024 Đ12 k5) and HYGIENE_LITTERING (NĐ 45/2022 Đ25), which
+-- carry a legal citation. They stay in the catalogue so records that name them still resolve,
+-- but the officer's picker no longer offers them.
 INSERT INTO ViolationTypes (violation_type_code, description, is_active) VALUES
-    ('NO_PERMIT',                 N'Kinh doanh trên vỉa hè không có giấy phép',                 1),
+    ('NO_PERMIT',                 N'Kinh doanh trên vỉa hè không có giấy phép',                 0),
     ('OUTSIDE_SLOT',              N'Bày bán vượt ra ngoài phạm vi ô được thuê',                 1),
     ('OUTSIDE_HOURS',             N'Kinh doanh ngoài khung giờ cho phép của khu vực',           1),
     ('BLOCK_PEDESTRIAN',          N'Cản trở lối đi bộ dành cho người đi đường',                 1),
     ('BLOCK_EMERGENCY',           N'Cản trở lối thoát hiểm, trụ nước chữa cháy hoặc trạm điện', 1),
     ('HYGIENE_VIOLATION',         N'Vi phạm quy định vệ sinh an toàn thực phẩm',                1),
-    ('WASTE_DISPOSAL',            N'Xả rác, nước thải không đúng nơi quy định',                 1),
+    ('WASTE_DISPOSAL',            N'Xả rác, nước thải không đúng nơi quy định',                 0),
     ('NOISE_VIOLATION',           N'Gây tiếng ồn vượt mức cho phép',                            1),
     ('UNAUTHORIZED_TRANSFER',     N'Tự ý sang nhượng ô cho người khác',                         1),
     ('PERMIT_TAMPERING',          N'Sử dụng giấy phép giả mạo hoặc đã bị thu hồi',              1),
@@ -2182,12 +2127,9 @@ GO
 
 
 /* ============================================================
-   11. EF MIGRATION HISTORY
-   StreetBizDB is database-first: this file is the schema, EF never creates or alters it
-   (docs/database.md). The rows are stamped here so EF never believes it has work to do:
-   InitialBaseline has an intentionally empty Up() (the schema predates EF) and
-   AddOrderStorefrontAddressSnapshot is already part of the Orders table above.
-   ProductVersion must match the EF Core version in Directory.Build.props / the csproj.
+   11. ASSISTANT PERSISTENCE
+   Role-scoped assistant conversations, messages, audit trail, idempotency keys and
+   generation leases. Independent of the person-to-person chat in section 7.
    ============================================================ */
 -- Assistant persistence is independent of person-to-person chat. No business decisions.
 CREATE TABLE ChatbotConversations (
@@ -2248,6 +2190,15 @@ CREATE TABLE ChatbotAudits (
 CREATE INDEX IX_ChatbotAudits_Message ON ChatbotAudits(message_id, timestamp);
 GO
 
+
+/* ============================================================
+   12. EF MIGRATION HISTORY
+   StreetBizDB is database-first: this file is the schema, EF never creates or alters it
+   (docs/database.md). The rows are stamped here so EF never believes it has work to do:
+   InitialBaseline has an intentionally empty Up() (the schema predates EF) and
+   AddOrderStorefrontAddressSnapshot is already part of the Orders table above.
+   ProductVersion must match the EF Core version in Directory.Build.props / the csproj.
+   ============================================================ */
 CREATE TABLE [__EFMigrationsHistory] (
     [MigrationId]    nvarchar(150) NOT NULL,
     [ProductVersion] nvarchar(32)  NOT NULL,
@@ -2261,40 +2212,44 @@ GO
 
 
 /* ============================================================
-   Table count summary (assistant adds ChatbotConversations, ChatbotMessages, ChatbotAudits)
+   Table count summary
    ------------------------------------------------------------
-   Identity & Reference ......... 6  (AdministrativeUnits, Roles,
+   1  Identity & Reference ....... 6  (AdministrativeUnits, Roles,
                                       UserAccounts, UserSessions,
                                       OtpChallenges, UserDevices)
-   Vendor Registration ........... 5  (Vendors, BusinessRegistrations,
+   2  Vendor Registration ........ 5  (Vendors, BusinessRegistrations,
                                       RegistrationEvidence,
                                       BusinessRegistrationHouseholdMembers,
                                       KycVerificationResults)
-   Sidewalk Slot & Rental ........ 12 (PricingZones, SidewalkSlots,
+   3  Sidewalk Slot & Rental ..... 12 (PricingZones, SidewalkSlots,
                                       ZoneFeeComponents, StreetFeatures,
-                                      SlotHolds,
-                                      RentalApplications, RentalContracts,
-                                      DigitalPermits, PermitScanLogs,
-                                      SlotTransferRequests, RenewalRequests,
-                                      AddressChangeRequests)
-   Buyer Trust & Verification .... 2  (VendorComments, VendorReports)
-   Fee, Penalty & Invoicing ...... 10 (ViolationTypes, PenaltyFeeSchedules,
-                                      Violations, Penalties, FeeSchedules,
-                                      FeeScheduleItems, DepositRefunds, Invoices,
-                                      PaymentTransactions,
+                                      SlotHolds, RentalApplications,
+                                      RentalContracts, DigitalPermits,
+                                      SlotTransferRequests, PermitScanLogs,
+                                      RenewalRequests, AddressChangeRequests)
+   4  Buyer Trust & Verification . 2  (VendorComments, VendorReports)
+   5  Fee, Penalty & Invoicing ... 11 (ViolationTypes, PenaltyFeeSchedules,
+                                      WardCompliancePolicies, Violations,
+                                      Penalties, FeeSchedules,
+                                      FeeScheduleItems, DepositRefunds,
+                                      Invoices, PaymentTransactions,
                                       PaymentCallbackEvents)
-   Platform Admin & System ....... 5  (FoodCategories, Notifications,
+   6  Platform Admin & System .... 5  (FoodCategories, Notifications,
                                       AuditLogs, AIAssistanceLogs,
                                       ReportExports)
-                                      -- FoodCategories shared with Phase 2 menus/search
-   Phase 2 Marketplace ........... 11 (Storefronts, StorefrontBusinessHours,
-                                      MenuItems, ShoppingCarts,
+                                      -- FoodCategories is shared with Phase 2 menus/search
+   7  Phase 2 Marketplace ........ 17 (Storefronts, StorefrontBusinessHours,
+                                      MenuItems, FoodSafetyApplications,
+                                      FoodSafetyApplicationItems,
+                                      FoodSafetyEvidence, ShoppingCarts,
                                       ShoppingCartItems, Orders, OrderItems,
                                       OrderStatusHistory, Reviews, Complaints,
-                                      RefundTransactions)
-   Phase 2 Moderation ............ 1  (ReportedContent)
+                                      RefundTransactions, ChatConversations,
+                                      ChatMessages, ReportedContent)
+   11 Assistant Persistence ...... 3  (ChatbotConversations, ChatbotMessages,
+                                      ChatbotAudits)
    ------------------------------------------------------------
-   TOTAL: 51 tables (plus __EFMigrationsHistory), 5 triggers, 2 views
+   TOTAL: 61 tables (plus __EFMigrationsHistory), 5 triggers, 2 views
 
    Use-case coverage: the 70 Core and 31 Phase 2 use cases of the actor
    specification. AIAssistanceLogs, RegistrationEvidence.ocr_extracted_data
