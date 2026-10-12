@@ -57,7 +57,8 @@ public static class FeeInstalmentPlanner
                 periodStart,
                 periodStart,
                 startDate.AddDays(offset + daysInPeriod - 1),
-                amount));
+                amount,
+                ordinal == 1 ? Whole(quote.Deposit) : 0m));
         }
 
         return new FeePlan(total, instalments);

@@ -16,6 +16,7 @@ using StreetBiz.Application.Features.Finance;
 using StreetBiz.Application.Features.SidewalkSlots.GetSlotQuote;
 using StreetBiz.Application.Features.VendorKyc;
 using StreetBiz.Application.Features.WardCompliance;
+using StreetBiz.Application.Features.WardConfiguration;
 using StreetBiz.Application.Features.WardSlots;
 using StreetBiz.Infrastructure.Persistence;
 using StreetBiz.Infrastructure.Persistence.ScaffoldedModels;
@@ -696,7 +697,7 @@ public sealed class WardComplianceService(
         var canApprove = app.application_status is "PENDING" or "UNDER_REVIEW" && blockers.Count == 0;
 
         var appComponents = await FeeComponentsByZoneAsync([app.slot.zone.zone_id], ct);
-        var quote = QuoteTerm(app.slot.zone, appComponents[app.slot.zone.zone_id], app.requested_term_days, isRenewal: false);
+        var quote = QuoteTerm(app.slot, appComponents[app.slot.zone.zone_id], app.requested_term_days, isRenewal: false);
 
         return new WardRentalApplicationDetailDto(
             Id(app.application_id),
@@ -815,7 +816,7 @@ public sealed class WardComplianceService(
 
                 // Billed with the same calculator the vendor was quoted with (rent, quarterly
                 // discount, fees and deposit), split into 30-day instalments (SYS-03).
-                var plan = await PlanTermAsync(app.slot.zone, app.requested_term_days, startDate, isRenewal: false, ct);
+                var plan = await PlanTermAsync(app.slot, app.requested_term_days, startDate, isRenewal: false, ct);
                 var feeSchedule = new FeeSchedule
                 {
                     contract_id = contract.contract_id,
@@ -892,17 +893,20 @@ public sealed class WardComplianceService(
     /// into instalments (FeeInstalmentPlanner), so an approved contract never costs more or less
     /// than what was quoted. A renewal skips ONE_TIME fees and the deposit.</summary>
     private async Task<FeePlan> PlanTermAsync(
-        PricingZone zone, int termDays, DateOnly startDate, bool isRenewal, CancellationToken ct)
+        SidewalkSlot slot, int termDays, DateOnly startDate, bool isRenewal, CancellationToken ct)
     {
-        var components = await FeeComponentsByZoneAsync([zone.zone_id], ct);
-        return FeeInstalmentPlanner.Plan(QuoteTerm(zone, components[zone.zone_id], termDays, isRenewal), startDate);
+        var components = await FeeComponentsByZoneAsync([slot.zone.zone_id], ct);
+        return FeeInstalmentPlanner.Plan(QuoteTerm(slot, components[slot.zone.zone_id], termDays, isRenewal), startDate);
     }
 
+    /// <summary>Priced at the slot's own price when the ward set one, else its zone's.</summary>
     private static StreetBiz.Application.DTOs.Sidewalk.FeeQuoteDto QuoteTerm(
-        PricingZone zone, IReadOnlyList<FeeComponentRow> components, int termDays, bool isRenewal) =>
+        SidewalkSlot slot, IReadOnlyList<FeeComponentRow> components, int termDays, bool isRenewal) =>
         FeeQuoteCalculator.Calculate(
             0,
-            new ZonePricing(zone.price_per_day, zone.price_per_month, zone.rental_mode, zone.quarter_discount_percent),
+            new ZonePricing(
+                slot.zone.price_per_day, slot.zone.price_per_month, slot.zone.rental_mode, slot.zone.quarter_discount_percent)
+                .WithOverride(slot.price_override),
             termDays,
             components,
             isRenewal);
@@ -933,6 +937,7 @@ public sealed class WardComplianceService(
             {
                 due_date = instalment.DueDate,
                 amount = instalment.Amount,
+                deposit_amount = instalment.Deposit,
                 item_status = DebtStatuses.FeeItemPending,
             });
         }
@@ -1139,7 +1144,7 @@ public sealed class WardComplianceService(
             var zone = r.contract.slot.zone;
             var pricePerDay = zone.price_per_day;
             // What approving it will bill: the renewal quote (no one-time fee, no new deposit).
-            var totalFee = QuoteTerm(zone, componentsByZone[zone.zone_id], r.requested_term_days, isRenewal: true).Total;
+            var totalFee = QuoteTerm(r.contract.slot, componentsByZone[zone.zone_id], r.requested_term_days, isRenewal: true).Total;
 
             var vList = violations.Where(v => v.contract_id == r.contract_id || v.vendor_id == r.contract.vendor_id).ToList();
             var vCount = vList.Count;
@@ -1215,7 +1220,7 @@ public sealed class WardComplianceService(
         var pricePerDay = contract.slot.zone.price_per_day;
         var renewalComponents = await FeeComponentsByZoneAsync([contract.slot.zone.zone_id], ct);
         var totalFee = QuoteTerm(
-            contract.slot.zone, renewalComponents[contract.slot.zone.zone_id], renewal.requested_term_days, isRenewal: true).Total;
+            contract.slot, renewalComponents[contract.slot.zone.zone_id], renewal.requested_term_days, isRenewal: true).Total;
 
         var compliance = await BuildRenewalComplianceSnapshotAsync(renewal, reg, ct);
         var canApprove = (renewal.renewal_status is RenewalStatuses.Pending or RenewalStatuses.UnderReview)
@@ -1318,7 +1323,7 @@ public sealed class WardComplianceService(
                 // open schedule: superseding it would hide instalments already paid or still due
                 // for the original term.
                 var plan = await PlanTermAsync(
-                    renewal.contract.slot.zone, renewal.requested_term_days, currentEndDate.AddDays(1), isRenewal: true, ct);
+                    renewal.contract.slot, renewal.requested_term_days, currentEndDate.AddDays(1), isRenewal: true, ct);
 
                 var activeFee = await db.FeeSchedules
                     .SingleOrDefaultAsync(fs => fs.contract_id == renewal.contract_id && fs.superseded_at == null, ct);
@@ -2068,6 +2073,31 @@ public sealed class WardComplianceService(
             throw new ConflictException("Vi phạm này chưa có căn cứ pháp lý hoặc mức phạt hiệu lực. Vui lòng cấu hình Bảng phạt trước.");
         }
 
+        // BR-33 still holds: the amount is the configured rate unless the officer moves it, and
+        // then only inside the bracket the cited provision allows, with the reason on record.
+        var fineAmount = schedule.penalty_amount;
+        string? amountNote = null;
+        if (request.AmountOverride is { } requested && requested != schedule.penalty_amount)
+        {
+            var bracket = LegalBasisText.TryParseBracket(schedule.legal_basis)
+                ?? throw new WardException(400, "no_legal_bracket",
+                    "Căn cứ pháp lý của mức phạt này không ghi khung phạt nên không thể điều chỉnh số tiền.");
+            if (requested < bracket.Min || requested > bracket.Max)
+            {
+                throw new WardException(400, "amount_outside_bracket",
+                    $"Số tiền phạt phải nằm trong khung {bracket.Min:N0} - {bracket.Max:N0} đ của điều khoản đã dẫn.");
+            }
+
+            if (string.IsNullOrWhiteSpace(request.AmountReason))
+            {
+                throw new WardException(400, "amount_reason_required",
+                    "Nhập lý do khi quyết định mức phạt khác với mức đã cấu hình (tình tiết giảm nhẹ/tăng nặng).");
+            }
+
+            fineAmount = requested;
+            amountNote = $" Mức phạt điều chỉnh từ {schedule.penalty_amount:N0} thành {requested:N0} VND, lý do: {request.AmountReason.Trim()}.";
+        }
+
         // Signer comes from the authenticated account, never from the request (see the
         // UserAccounts/Penalties notes in db/StreetBiz_SQL_Server.sql).
         var signerName = actor.Name;
@@ -2079,7 +2109,7 @@ public sealed class WardComplianceService(
             {
                 violation_id = violation.violation_id,
                 penalty_schedule_id = schedule.penalty_schedule_id,
-                amount = schedule.penalty_amount,
+                amount = fineAmount,
                 penalty_status = "UNPAID",
                 decision_number = request.DecisionNumber.Trim(),
                 signer_name = signerName,
@@ -2090,7 +2120,7 @@ public sealed class WardComplianceService(
         else
         {
             violation.Penalty.penalty_schedule_id = schedule.penalty_schedule_id;
-            violation.Penalty.amount = schedule.penalty_amount;
+            violation.Penalty.amount = fineAmount;
             violation.Penalty.decision_number = request.DecisionNumber.Trim();
             violation.Penalty.signer_name = signerName;
             violation.Penalty.signer_title = signerTitle;
@@ -2123,7 +2153,8 @@ public sealed class WardComplianceService(
             entity_type = "Penalty",
             entity_id = violation.violation_id,
             details = $"{signerTitle} {signerName} ban hành Quyết định xử phạt số {request.DecisionNumber.Trim()} " +
-                      $"({schedule.legal_basis ?? schedule.violation_type}). Mức phạt: {schedule.penalty_amount:N0} VND." +
+                      $"({schedule.legal_basis ?? schedule.violation_type}). Mức phạt: {fineAmount:N0} VND." +
+                      amountNote +
                       (request.AcknowledgeEarlySanction && violation.explanation_received_at is null
                           ? " Ký trước khi hết hạn giải trình theo xác nhận của cán bộ."
                           : ""),
@@ -2145,7 +2176,7 @@ public sealed class WardComplianceService(
                     notification_type = "PENALTY_SANCTION_ISSUED",
                     title = "Thông báo Quyết định xử phạt vi phạm hành chính",
                     body = $"UBND Phường đã ban hành Quyết định xử phạt số {request.DecisionNumber.Trim()}. " +
-                           $"Số tiền phạt: {schedule.penalty_amount:N0} VND. Vui lòng nộp phạt theo quy định." +
+                           $"Số tiền phạt: {fineAmount:N0} VND. Vui lòng nộp phạt theo quy định." +
                            complianceCountNote,
                     related_entity_type = "Penalty",
                     related_entity_id = violation.violation_id,

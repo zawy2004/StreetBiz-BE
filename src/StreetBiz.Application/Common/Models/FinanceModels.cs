@@ -6,7 +6,9 @@ public sealed record FeeInstalment(
     DateOnly DueDate,
     DateOnly PeriodStart,
     DateOnly PeriodEnd,
-    decimal Amount);
+    decimal Amount,
+    /// <summary>The refundable deposit inside <c>Amount</c> (first instalment only).</summary>
+    decimal Deposit = 0m);
 
 /// <summary>A whole plan: the contract total and the instalments that add up to it exactly.</summary>
 public sealed record FeePlan(decimal Total, IReadOnlyList<FeeInstalment> Instalments);
@@ -32,9 +34,11 @@ public sealed record FeeScheduleContextRow(
     IReadOnlyList<FeeComponentRow> Components,
     decimal? PricePerMonth = null,
     string RentalMode = "STANDARD",
-    decimal? QuarterDiscountPercent = null)
+    decimal? QuarterDiscountPercent = null,
+    decimal? PriceOverride = null)
 {
-    public ZonePricing Pricing => new(PricePerDay, PricePerMonth, RentalMode, QuarterDiscountPercent);
+    public ZonePricing Pricing =>
+        new ZonePricing(PricePerDay, PricePerMonth, RentalMode, QuarterDiscountPercent).WithOverride(PriceOverride);
 }
 
 /// <summary>A fee schedule revision and its instalments.</summary>

@@ -35,9 +35,15 @@ public sealed record SlotRow(
     decimal? PricePerMonth = null,
     string RentalMode = "STANDARD",
     DateOnly? EventEndDate = null,
-    decimal? QuarterDiscountPercent = null)
+    decimal? QuarterDiscountPercent = null,
+    // The ward's manual price for this one slot (monthly for STANDARD, daily for EVENT).
+    decimal? PriceOverride = null)
 {
-    public ZonePricing Pricing => new(PricePerDay, PricePerMonth, RentalMode, QuarterDiscountPercent);
+    /// <summary>What this slot is actually priced at: the zone's price unless the ward set its own.</summary>
+    public ZonePricing Pricing =>
+        new ZonePricing(PricePerDay, PricePerMonth, RentalMode, QuarterDiscountPercent).WithOverride(PriceOverride);
+
+    public bool IsPriceOverridden => PriceOverride is not null;
 }
 
 /// <summary>
@@ -58,6 +64,27 @@ public sealed record ZonePricing(
 
     /// <summary>Day-by-day pricing with no discount -- the original quote model.</summary>
     public static ZonePricing Daily(decimal pricePerDay) => new(pricePerDay, null, RentalModes.Event);
+
+    /// <summary>
+    /// A slot the ward priced by hand. For a STANDARD zone the figure is the monthly rent (the day
+    /// rate is derived from it the same way a zone's is); for an EVENT zone it is the daily rent.
+    /// The quarterly discount of the zone still applies to a STANDARD slot.
+    /// </summary>
+    public ZonePricing WithOverride(decimal? priceOverride)
+    {
+        if (priceOverride is not { } price)
+        {
+            return this;
+        }
+
+        return BillsByMonth
+            ? this with
+            {
+                PricePerMonth = price,
+                PricePerDay = decimal.Round(price / RentalTerms.MonthDays, 0, MidpointRounding.AwayFromZero),
+            }
+            : this with { PricePerDay = price };
+    }
 }
 
 /// <summary>

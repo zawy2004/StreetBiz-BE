@@ -97,6 +97,55 @@ public sealed class WardComplianceServiceTests
     }
 
     [Fact]
+    public async Task The_officer_may_move_the_fine_inside_the_legal_bracket_with_a_reason_and_nowhere_else()
+    {
+        using var f = await Fixture.Create();
+        var service = f.NewService();
+        using (var seed = f.NewDb())
+        {
+            var schedule = await seed.PenaltyFeeSchedules.SingleAsync(s => s.penalty_schedule_id == 1);
+            schedule.legal_basis = "Nghị định 168/2024/NĐ-CP: hành vi (khung 2.000.000 - 3.000.000đ)";
+            await seed.SaveChangesAsync();
+        }
+
+        await service.RecordViolationAsync(f.Actor, new RecordWardViolationRequest(
+            ContractId: null, SlotId: 100, VendorId: 10,
+            ViolationType: "UNAUTHORIZED_BUSINESS_USE", Description: "Bày bán ngoài ranh giới ô", EvidenceUrl: null), default);
+        using var read = f.NewDb();
+        var violationId = (await read.Violations.SingleAsync()).violation_id;
+
+        var outside = await Assert.ThrowsAsync<WardException>(() => service.SanctionViolationAsync(f.Actor, violationId,
+            new SanctionWardViolationRequest(1, "QD-1", null, AmountOverride: 3_500_000, AmountReason: "Tái phạm"), default));
+        Assert.Equal("amount_outside_bracket", outside.Code);
+
+        var noReason = await Assert.ThrowsAsync<WardException>(() => service.SanctionViolationAsync(f.Actor, violationId,
+            new SanctionWardViolationRequest(1, "QD-1", null, AmountOverride: 2_200_000), default));
+        Assert.Equal("amount_reason_required", noReason.Code);
+
+        var result = await service.SanctionViolationAsync(f.Actor, violationId,
+            new SanctionWardViolationRequest(1, "QD-1", null, AmountOverride: 2_200_000, AmountReason: "Vi phạm lần đầu, tự khắc phục"),
+            default);
+        Assert.Equal(2_200_000m, result.PenaltyAmount);
+    }
+
+    [Fact]
+    public async Task A_fine_cannot_be_moved_when_the_legal_basis_states_no_bracket()
+    {
+        using var f = await Fixture.Create();
+        var service = f.NewService();
+        await service.RecordViolationAsync(f.Actor, new RecordWardViolationRequest(
+            ContractId: null, SlotId: 100, VendorId: 10,
+            ViolationType: "UNAUTHORIZED_BUSINESS_USE", Description: "Bày bán ngoài ranh giới ô", EvidenceUrl: null), default);
+        using var read = f.NewDb();
+        var violationId = (await read.Violations.SingleAsync()).violation_id;
+
+        var error = await Assert.ThrowsAsync<WardException>(() => service.SanctionViolationAsync(f.Actor, violationId,
+            new SanctionWardViolationRequest(1, "QD-2", null, AmountOverride: 2_000_000, AmountReason: "x"), default));
+
+        Assert.Equal("no_legal_bracket", error.Code);
+    }
+
+    [Fact]
     public async Task Recording_a_violation_freezes_the_violators_identity_from_their_registration()
     {
         using var f = await Fixture.Create();

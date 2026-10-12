@@ -194,6 +194,36 @@ public sealed class FeeScheduleGenerationTests
     }
 
     [Fact]
+    public void A_slots_own_monthly_price_replaces_the_zones_and_keeps_the_quarterly_discount()
+    {
+        var slotPricing = Monthly.WithOverride(1_200_000m);
+
+        var quote = FeeQuoteCalculator.Calculate(1, slotPricing, 90, []);
+
+        slotPricing.PricePerDay.Should().Be(40_000m);
+        quote.Lines[0].UnitAmount.Should().Be(1_200_000m);
+        quote.BaseFee.Should().Be(3_600_000m - 360_000m);
+    }
+
+    [Fact]
+    public void An_override_on_an_event_slot_is_a_day_price_and_no_override_changes_nothing()
+    {
+        var eventZone = new ZonePricing(60_000m, null, RentalModes.Event);
+
+        eventZone.WithOverride(80_000m).PricePerDay.Should().Be(80_000m);
+        Monthly.WithOverride(null).Should().Be(Monthly);
+    }
+
+    [Fact]
+    public void The_deposit_sits_on_the_first_instalment_only_and_is_inside_its_amount()
+    {
+        var plan = FeeInstalmentPlanner.Plan(FeeQuoteCalculator.Calculate(1, Monthly, 90, OneOffComponents()), Start);
+
+        plan.Instalments.Select(i => i.Deposit).Should().Equal(500_000m, 0m, 0m);
+        plan.Instalments[0].Amount.Should().BeGreaterThan(plan.Instalments[0].Deposit);
+    }
+
+    [Fact]
     public async Task Generation_prices_the_applied_for_term_and_stores_the_matching_total()
     {
         var finance = new Mock<IFinanceRepository>();

@@ -31,7 +31,9 @@ public sealed record SidewalkSlotDto(
     DateOnly? EventEndDate,
     /// <summary>The rent of a whole-month STANDARD term: what the slot card shows "/tháng".</summary>
     decimal MonthlyPrice,
-    decimal? QuarterDiscountPercent);
+    decimal? QuarterDiscountPercent,
+    /// <summary>True when the ward priced this one slot by hand rather than at the zone's price.</summary>
+    bool PriceOverridden = false);
 
 /// <summary>Maps domain records to DTOs for the Sidewalk Slot API.</summary>
 public static class SlotMapper
@@ -39,12 +41,12 @@ public static class SlotMapper
     public static SidewalkSlotDto ToDto(this SlotRow r, double? distanceMeters) => new(
         r.SlotId, r.SlotCode, r.ZoneId, r.ZoneName, r.WardUnitId,
         r.Latitude, r.Longitude, r.WidthMeters, r.LengthMeters,
-        r.SlotStatus, r.Source, r.PricePerDay, r.AvailableFrom, r.AvailableTo,
+        r.SlotStatus, r.Source, r.Pricing.PricePerDay, r.AvailableFrom, r.AvailableTo,
         distanceMeters,
         r.ImageUrl, r.HasPower, r.HasWater, r.HasTrashBin, r.BusinessCategory, r.TenantName,
         r.HoldExpiresAt is { } holdExpiresAt ? DateTime.SpecifyKind(holdExpiresAt, DateTimeKind.Utc) : null,
-        r.PriceDisplayUnit, r.PricePerMonth, r.RentalMode, r.EventEndDate,
-        r.Pricing.MonthlyPrice, r.QuarterDiscountPercent);
+        r.PriceDisplayUnit, r.Pricing.BillsByMonth ? r.Pricing.PricePerMonth : r.PricePerMonth, r.RentalMode, r.EventEndDate,
+        r.Pricing.MonthlyPrice, r.QuarterDiscountPercent, r.IsPriceOverridden);
 }
 
 public sealed record SlotProposalDto(

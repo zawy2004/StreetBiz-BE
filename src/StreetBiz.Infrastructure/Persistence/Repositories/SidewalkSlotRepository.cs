@@ -118,7 +118,7 @@ public sealed class SidewalkSlotRepository(StreetBizDbContext dbContext, IDateTi
                 .FirstOrDefault(),
             s.SlotHold != null && s.SlotHold.expires_at > nowUtc ? s.SlotHold.expires_at : (DateTime?)null,
             s.zone.price_display_unit, s.zone.price_per_month, s.zone.rental_mode, s.zone.event_end_date,
-            s.zone.quarter_discount_percent);
+            s.zone.quarter_discount_percent, s.price_override);
 
     // proposal_review_status/proposal_photo_url are nullable in the scaffolded model (null for
     // ward-defined slots) but guaranteed set for VENDOR_PROPOSED rows by CK_SidewalkSlots_ProposalCoherent.

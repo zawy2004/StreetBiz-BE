@@ -111,4 +111,21 @@ public interface IFinanceRepository
 
     /// <summary>FEE-05: violations recorded against the vendor, most recent first.</summary>
     Task<IReadOnlyList<VendorViolationRow>> ListVendorViolationsAsync(long vendorId, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// A ward officer recording that a fee instalment or a penalty was paid in person (cash or a
+    /// bank transfer outside the payment providers). Writes a SUCCESS PaymentTransactions row,
+    /// marks the target PAID and issues its invoice through the same path a provider callback
+    /// takes, so the books look the same whichever way the money arrived. Throws when the target
+    /// is not found, not payable any more, or does not belong to <paramref name="wardId"/>.
+    /// </summary>
+    Task<long> RecordOfflinePaymentAsync(
+        int wardId,
+        long actorUserId,
+        long? feeItemId,
+        long? penaltyId,
+        string method,
+        string? reference,
+        string? note,
+        CancellationToken cancellationToken);
 }

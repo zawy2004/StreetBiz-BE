@@ -544,6 +544,10 @@ BEGIN
         (8, 2, DATEADD(DAY, 110, CAST(SYSUTCDATETIME() AS DATE)),  900000, 'PENDING', NULL),
         (9, 2, DATEADD(DAY, 140, CAST(SYSUTCDATETIME() AS DATE)),  900000, 'PENDING', NULL);
     SET IDENTITY_INSERT FeeScheduleItems OFF;
+
+    -- The first instalment of each contract carries the 500 000 refundable deposit; it is what
+    -- the ward hands back (DepositRefunds) when the contract ends.
+    UPDATE FeeScheduleItems SET deposit_amount = 500000 WHERE fee_item_id IN (1, 4);
 END;
 GO
 
