@@ -23,6 +23,10 @@ public partial class UserAccount
 
     public DateTime? phone_verified_at { get; set; }
 
+    public int failed_login_count { get; set; }
+
+    public DateTime? lockout_until { get; set; }
+
     public DateTime created_at { get; set; }
 
     public DateTime? updated_at { get; set; }

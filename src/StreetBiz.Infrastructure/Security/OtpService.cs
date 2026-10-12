@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
 using StreetBiz.Application.Common.Exceptions;
 using StreetBiz.Application.Common.Interfaces;
 using StreetBiz.Application.Common.Security;
@@ -10,15 +11,23 @@ using StreetBiz.Infrastructure.Persistence.ScaffoldedModels;
 
 namespace StreetBiz.Infrastructure.Security;
 
-/// <summary>Phone OTP: single-use, 6 digits, 5-minute validity, 60s resend cooldown, 5-attempt lock (BR-61).</summary>
+/// <summary>
+/// Phone OTP: single-use, 6 digits, 5-minute validity, 60s resend cooldown, 5-attempt lock (BR-61),
+/// plus per-phone volume caps (5/hour, 10/day) and an HMAC-hashed code so a leaked table is useless.
+/// </summary>
 public sealed class OtpService(
     StreetBizDbContext dbContext,
     ISmsSender smsSender,
-    IDateTimeProvider clock) : IOtpService
+    IDateTimeProvider clock,
+    IOptions<OtpSettings> options) : IOtpService
 {
     private static readonly TimeSpan Validity = TimeSpan.FromMinutes(5);
     private static readonly TimeSpan ResendCooldown = TimeSpan.FromSeconds(60);
     private const byte MaxAttempts = 5;
+    private const int MaxPerHour = 5;
+    private const int MaxPerDay = 10;
+
+    private readonly byte[] hashKey = Encoding.UTF8.GetBytes(options.Value.HashKey);
 
     public async Task IssueAsync(string rawPhoneNumber, string purpose, CancellationToken cancellationToken)
     {
@@ -36,6 +45,18 @@ public sealed class OtpService(
         {
             var wait = ResendCooldown - (now - latest.created_at);
             throw new TooManyRequestsException(AppMessages.OtpCooldown, (int)Math.Ceiling(wait.TotalSeconds));
+        }
+
+        // The cooldown alone still allows a steady stream of fresh guesses; cap the volume per phone.
+        var dayAgo = now.AddDays(-1);
+        var hourAgo = now.AddHours(-1);
+        var sent = await dbContext.OtpChallenges
+            .Where(c => c.phone_number == phoneNumber && c.created_at > dayAgo)
+            .Select(c => c.created_at)
+            .ToListAsync(cancellationToken);
+        if (sent.Count >= MaxPerDay || sent.Count(t => t > hourAgo) >= MaxPerHour)
+        {
+            throw new TooManyRequestsException(AppMessages.OtpCooldown, 3600);
         }
 
         var code = RandomNumberGenerator.GetInt32(0, 1_000_000).ToString("D6");
@@ -61,6 +82,7 @@ public sealed class OtpService(
         var phoneNumber = AuthValidationRules.NormalizePhone(rawPhoneNumber);
 
         var challenge = await dbContext.OtpChallenges
+            .AsNoTracking()
             .Where(c => c.phone_number == phoneNumber && c.purpose == purpose && c.consumed_at == null)
             .OrderByDescending(c => c.created_at)
             .FirstOrDefaultAsync(cancellationToken);
@@ -75,18 +97,29 @@ public sealed class OtpService(
             throw new AuthenticationException(AppMessages.OtpLocked);
         }
 
+        var challengeId = challenge.challenge_id;
         var provided = HashCode(phoneNumber, purpose, code);
         if (!CryptographicOperations.FixedTimeEquals(provided, challenge.code_hash))
         {
-            challenge.attempt_count = (byte)(challenge.attempt_count + 1);
-            await dbContext.SaveChangesAsync(cancellationToken);
+            // Atomic, conditional increment: parallel guesses cannot slip past the attempt cap.
+            await dbContext.OtpChallenges
+                .Where(c => c.challenge_id == challengeId && c.attempt_count < c.max_attempts)
+                .ExecuteUpdateAsync(
+                    set => set.SetProperty(c => c.attempt_count, c => (byte)(c.attempt_count + 1)),
+                    cancellationToken);
             throw new AuthenticationException(AppMessages.OtpIncorrect);
         }
 
-        challenge.consumed_at = now;
-        await dbContext.SaveChangesAsync(cancellationToken);
+        // Single-use even under races: only the request that flips consumed_at wins.
+        var consumed = await dbContext.OtpChallenges
+            .Where(c => c.challenge_id == challengeId && c.consumed_at == null)
+            .ExecuteUpdateAsync(set => set.SetProperty(c => c.consumed_at, now), cancellationToken);
+        if (consumed == 0)
+        {
+            throw new AuthenticationException(AppMessages.OtpExpired);
+        }
     }
 
-    private static byte[] HashCode(string phoneNumber, string purpose, string code) =>
-        SHA256.HashData(Encoding.UTF8.GetBytes($"{phoneNumber}|{purpose}|{code}"));
+    private byte[] HashCode(string phoneNumber, string purpose, string code) =>
+        HMACSHA256.HashData(hashKey, Encoding.UTF8.GetBytes($"{phoneNumber}|{purpose}|{code}"));
 }

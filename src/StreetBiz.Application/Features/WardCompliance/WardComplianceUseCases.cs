@@ -1,12 +1,14 @@
 using FluentValidation;
 using MediatR;
+using StreetBiz.Application.Common.Exceptions;
 using StreetBiz.Application.Common.Security;
 using StreetBiz.Application.Features.WardSlots;
 
 namespace StreetBiz.Application.Features.WardCompliance;
 
 #region Enrollment / Registration Use Cases
-public sealed record ListWardEnrollmentsQuery(string? Status, int Page = 1) : IRequest<IReadOnlyList<WardEnrollmentListItemDto>>;
+public sealed record ListWardEnrollmentsQuery(string? Status, int Page = 1, string? VendorType = null)
+    : IRequest<IReadOnlyList<WardEnrollmentListItemDto>>;
 
 public sealed class ListWardEnrollmentsQueryValidator : AbstractValidator<ListWardEnrollmentsQuery>
 {
@@ -26,7 +28,8 @@ public sealed class ListWardEnrollmentsQueryHandler(
         CancellationToken cancellationToken)
     {
         var actor = await actorContext.RequireAsync(cancellationToken);
-        return await complianceService.ListEnrollmentsAsync(actor, request.Status, request.Page, cancellationToken);
+        return await complianceService.ListEnrollmentsAsync(
+            actor, request.Status, request.Page, cancellationToken, request.VendorType);
     }
 }
 
@@ -141,6 +144,20 @@ public sealed class ConfirmEnrollmentIdentityCommandHandler(
     }
 }
 #endregion
+
+public sealed record ClaimWardEnrollmentCommand(long Id) : IRequest<WardEnrollmentDetailDto>;
+
+public sealed class ClaimWardEnrollmentCommandHandler(
+    IWardActorContext actorContext,
+    IWardComplianceService complianceService)
+    : IRequestHandler<ClaimWardEnrollmentCommand, WardEnrollmentDetailDto>
+{
+    public async Task<WardEnrollmentDetailDto> Handle(ClaimWardEnrollmentCommand request, CancellationToken cancellationToken)
+    {
+        var actor = await actorContext.RequireAsync(cancellationToken);
+        return await complianceService.ClaimEnrollmentAsync(actor, request.Id, cancellationToken);
+    }
+}
 
 #region Rental Application Use Cases
 public sealed record ListWardRentalApplicationsQuery(string? Status, int Page = 1) : IRequest<IReadOnlyList<WardRentalApplicationListItemDto>>;
@@ -645,10 +662,23 @@ public sealed record GetAiEncroachmentCheckQuery(
     double? SlotLength) : IRequest<AiEncroachmentResult>;
 
 public sealed class GetAiEncroachmentCheckQueryHandler(
+    IWardActorContext actorContext,
     IAiComplianceService aiService) : IRequestHandler<GetAiEncroachmentCheckQuery, AiEncroachmentResult>
 {
-    public Task<AiEncroachmentResult> Handle(GetAiEncroachmentCheckQuery request, CancellationToken cancellationToken) =>
-        aiService.AnalyzeInspectionPhotoAsync(request.PhotoUrl, request.SlotWidth, request.SlotLength, cancellationToken);
+    public async Task<AiEncroachmentResult> Handle(GetAiEncroachmentCheckQuery request, CancellationToken cancellationToken)
+    {
+        // Ward officers only, and only photos we store ourselves (or an inline image): the URL is
+        // caller-supplied, so fetching anything else would be a server-side request forgery vector.
+        await actorContext.RequireAsync(cancellationToken);
+        if (!EvidenceFiles.TryParseUrl(request.PhotoUrl, out _, out _)
+            && request.PhotoUrl?.StartsWith("data:image/", StringComparison.OrdinalIgnoreCase) != true)
+        {
+            throw new DomainRuleException("Ảnh hiện trường phải được tải lên từ hệ thống.");
+        }
+
+        return await aiService.AnalyzeInspectionPhotoAsync(
+            request.PhotoUrl, request.SlotWidth, request.SlotLength, cancellationToken);
+    }
 }
 #endregion
 
@@ -685,3 +715,17 @@ public sealed class GetWardPatrolHeatmapQueryHandler(
     }
 }
 #endregion
+
+public sealed record CheckWardFastTrackQuery(long Id) : IRequest<FastTrackCheckDto>;
+
+public sealed class CheckWardFastTrackQueryHandler(
+    IWardActorContext actorContext,
+    IWardComplianceService complianceService)
+    : IRequestHandler<CheckWardFastTrackQuery, FastTrackCheckDto>
+{
+    public async Task<FastTrackCheckDto> Handle(CheckWardFastTrackQuery request, CancellationToken cancellationToken)
+    {
+        var actor = await actorContext.RequireAsync(cancellationToken);
+        return await complianceService.CheckFastTrackAsync(actor, request.Id, cancellationToken);
+    }
+}

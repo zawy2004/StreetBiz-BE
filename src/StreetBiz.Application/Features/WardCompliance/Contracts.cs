@@ -462,7 +462,11 @@ public sealed record WardRenewalBatchDecisionResult(
 public interface IWardComplianceService
 {
     // Enrollment / Registration
-    Task<IReadOnlyList<WardEnrollmentListItemDto>> ListEnrollmentsAsync(WardActor actor, string? status, int page, CancellationToken ct);
+    Task<IReadOnlyList<WardEnrollmentListItemDto>> ListEnrollmentsAsync(
+        WardActor actor, string? status, int page, CancellationToken ct, string? vendorType = null);
+
+    /// <summary>REG-06: which fast-track conditions a filed registration meets (advisory; the officer still decides).</summary>
+    Task<FastTrackCheckDto> CheckFastTrackAsync(WardActor actor, long registrationId, CancellationToken ct);
     Task<WardEnrollmentDetailDto> GetEnrollmentDetailAsync(WardActor actor, long registrationId, CancellationToken ct);
     /// <summary>Mẫu số 01 Phụ lục II, TT 68/2025/TT-BTC, filled with this registration's data, as
     /// a downloadable .docx or .pdf ("docx"|"pdf") -- same content as the vendor's own copy, plus
@@ -475,6 +479,7 @@ public interface IWardComplianceService
     /// DecideEnrollmentAsync refuses an APPROVE decision until this has been called.
     /// </summary>
     Task<WardEnrollmentDetailDto> ConfirmIdentityAsync(WardActor actor, long registrationId, ConfirmEnrollmentIdentity request, CancellationToken ct);
+    Task<WardEnrollmentDetailDto> ClaimEnrollmentAsync(WardActor actor, long registrationId, CancellationToken ct);
 
     /// <summary>
     /// Re-runs AI-OCR against the registration's own stored evidence (server-authoritative --
@@ -543,3 +548,9 @@ public interface IAiComplianceService
     Task<string> AnswerVendorAssistantAsync(string question, string? context, CancellationToken ct);
 }
 #endregion
+
+/// <summary>One condition of the REG-06 fast-track check.</summary>
+public sealed record FastTrackCriterionDto(string Code, string Label, bool Passed);
+
+/// <summary>Whether every fast-track condition is met. Only orders the queue; never approves.</summary>
+public sealed record FastTrackCheckDto(bool Eligible, IReadOnlyList<FastTrackCriterionDto> Criteria);

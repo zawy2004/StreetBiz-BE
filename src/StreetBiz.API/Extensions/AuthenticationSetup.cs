@@ -2,6 +2,7 @@ using System.Text;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.IdentityModel.Tokens;
 using StreetBiz.Application.Common.Interfaces;
+using StreetBiz.Application.Common.Security;
 using StreetBiz.Application.Features.WardSlots;
 
 namespace StreetBiz.API.Extensions;
@@ -112,6 +113,15 @@ public static class AuthenticationSetup
         if (session is null || session.RevokedAt is not null || session.ExpiresAt <= now)
         {
             context.Fail("The session has been signed out.");
+            return;
+        }
+
+        // A suspended or deactivated account loses access immediately, not at token expiry.
+        var users = services.GetRequiredService<IUserAccountRepository>();
+        var account = await users.GetByIdAsync(session.UserId, cancellationToken);
+        if (account is null || account.AccountStatus != AccountStatuses.Active)
+        {
+            context.Fail("The account is not active.");
             return;
         }
 

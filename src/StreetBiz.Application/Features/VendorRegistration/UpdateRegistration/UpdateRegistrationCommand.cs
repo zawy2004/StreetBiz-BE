@@ -34,49 +34,9 @@ public sealed record UpdateRegistrationCommand(
     int? LaborCount = null,
     DateOnly? PlannedStartDate = null,
     bool FoodSafetyCommitment = false,
-    IReadOnlyList<NewHouseholdMember>? HouseholdMembers = null) : IRequest<BusinessRegistrationDto>;
+    IReadOnlyList<NewHouseholdMember>? HouseholdMembers = null) : IRequest<BusinessRegistrationDto>, IRegistrationFields;
 
-public sealed class UpdateRegistrationCommandValidator : AbstractValidator<UpdateRegistrationCommand>
-{
-    public UpdateRegistrationCommandValidator()
-    {
-        RuleFor(x => x.VendorType)
-            .Must(t => VendorTypes.All.Contains(t))
-            .WithMessage(RegMessages.SelectVendorType);
-        RuleFor(x => x.DisplayName)
-            .NotEmpty().WithMessage(RegMessages.DisplayNameRequired)
-            .MaximumLength(180).WithMessage(RegMessages.DisplayNameTooLong);
-        RuleFor(x => x.DeclaredAddress)
-            .NotEmpty()
-            .When(x => x.VendorType == VendorTypes.FixedStorefront)
-            .WithMessage(RegMessages.FixedNeedsAddress);
-        RuleFor(x => x.WardUnitId).GreaterThan(0).WithMessage(AppMessages.InvalidWard);
-
-        RuleFor(x => x.OwnerDateOfBirth).NotNull().WithMessage(RegMessages.OwnerDateOfBirthRequired);
-        RuleFor(x => x.OwnerGender)
-            .Must(g => g != null && OwnerGenders.All.Contains(g))
-            .WithMessage(RegMessages.OwnerGenderRequired);
-        RuleFor(x => x.OwnerNationality).NotEmpty().WithMessage(RegMessages.OwnerNationalityRequired);
-        RuleFor(x => x.IdType)
-            .Must(t => t != null && OwnerIdTypes.All.Contains(t))
-            .WithMessage(RegMessages.IdTypeRequired);
-        RuleFor(x => x.IdIssuedDate).NotNull().WithMessage(RegMessages.IdIssuedDateRequired);
-        RuleFor(x => x.IdIssuedPlace).NotEmpty().WithMessage(RegMessages.IdIssuedPlaceRequired);
-        RuleFor(x => x.PermanentAddress).NotEmpty().WithMessage(RegMessages.PermanentAddressRequired);
-
-        RuleFor(x => x.BusinessLine).NotEmpty().WithMessage(RegMessages.BusinessLineRequired);
-        RuleFor(x => x.CapitalAmount).NotNull().GreaterThanOrEqualTo(0)
-            .WithMessage(RegMessages.CapitalAmountRequired);
-        RuleFor(x => x.LaborCount).NotNull().GreaterThanOrEqualTo(0)
-            .WithMessage(RegMessages.LaborCountRequired);
-        RuleFor(x => x.PlannedStartDate).NotNull().WithMessage(RegMessages.PlannedStartDateRequired);
-
-        RuleForEach(x => x.HouseholdMembers).ChildRules(member =>
-        {
-            member.RuleFor(m => m.FullName).NotEmpty().WithMessage(RegMessages.HouseholdMemberNameRequired);
-        });
-    }
-}
+public sealed class UpdateRegistrationCommandValidator : RegistrationFieldsValidator<UpdateRegistrationCommand>;
 
 public sealed class UpdateRegistrationCommandHandler(
     IVendorContext vendorContext,
