@@ -130,6 +130,13 @@ internal static class ZoneRules
         v.RuleFor(x => get(x).PriceDisplayUnit).Equal(PriceDisplayUnits.Day)
             .WithMessage("Khu vực sự kiện chỉ tính giá theo ngày.")
             .When(x => get(x).RentalMode == RentalModes.Event);
+        v.RuleFor(x => get(x).QuarterDiscountPercent)
+            .ExclusiveBetween(0m, 100m).WithMessage("Mức giảm khi thuê theo quý phải lớn hơn 0% và nhỏ hơn 100%.")
+            .When(x => get(x).QuarterDiscountPercent is not null);
+        // An event rents day by day, so it has no quarter to discount.
+        v.RuleFor(x => get(x).QuarterDiscountPercent).Null()
+            .WithMessage("Khu vực sự kiện không áp dụng khuyến mãi thuê theo quý.")
+            .When(x => get(x).RentalMode == RentalModes.Event);
         v.RuleFor(x => get(x))
             .Must(r => r.EventStartDate is not null && r.EventEndDate is not null && r.EventEndDate > r.EventStartDate)
             .WithName("EventStartDate")
@@ -162,8 +169,8 @@ internal static class ZoneRules
         v.RuleForEach(x => get(x).FeeComponents).ChildRules(c =>
         {
             c.RuleFor(x => x.ComponentName).NotEmpty().MaximumLength(150);
-            c.RuleFor(x => x.CalcBasis).Must(b => b is FeeBases.PerDay or FeeBases.PerTerm)
-                .WithMessage("Cách tính phụ phí phải là PER_DAY hoặc PER_TERM.");
+            c.RuleFor(x => x.CalcBasis).Must(b => FeeBases.ComponentBases.Contains(b))
+                .WithMessage("Cách tính phụ phí phải là PER_DAY, PER_TERM, ONE_TIME hoặc DEPOSIT.");
             c.RuleFor(x => x.UnitAmount).GreaterThanOrEqualTo(0);
         });
     }
@@ -237,8 +244,8 @@ public sealed class PreviewWardZoneImpactQueryValidator : AbstractValidator<Prev
         RuleForEach(x => x.Request.FeeComponents).ChildRules(c =>
         {
             c.RuleFor(x => x.ComponentName).NotEmpty().MaximumLength(150);
-            c.RuleFor(x => x.CalcBasis).Must(b => b is FeeBases.PerDay or FeeBases.PerTerm)
-                .WithMessage("Cách tính phụ phí phải là PER_DAY hoặc PER_TERM.");
+            c.RuleFor(x => x.CalcBasis).Must(b => FeeBases.ComponentBases.Contains(b))
+                .WithMessage("Cách tính phụ phí phải là PER_DAY, PER_TERM, ONE_TIME hoặc DEPOSIT.");
             c.RuleFor(x => x.UnitAmount).GreaterThanOrEqualTo(0);
         });
     }

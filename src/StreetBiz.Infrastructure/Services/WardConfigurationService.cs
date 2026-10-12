@@ -10,6 +10,7 @@ using StreetBiz.Application.Common.Exceptions;
 using StreetBiz.Application.Common.Geo;
 using StreetBiz.Application.Common.Security;
 using StreetBiz.Application.Features.SidewalkSlots.GetSlotQuote;
+using ZonePricing = StreetBiz.Application.Common.Models.ZonePricing;
 using StreetBiz.Application.Features.WardConfiguration;
 using StreetBiz.Application.Features.WardSlots;
 using StreetBiz.Infrastructure.Persistence;
@@ -284,7 +285,7 @@ public sealed class WardConfigurationService(
             var oldFeeComponents = zone.ZoneFeeComponents.OrderBy(c => c.sort_order).ThenBy(c => c.component_id)
                 .Select(c => new ZoneFeeComponentInput(c.component_name, c.calc_basis, (long)c.unit_amount)).ToList();
             var before = ZoneSnapshot(zone, oldFeeComponents);
-            var oldPrice = zone.price_per_day;
+            var oldPricing = PricingOf(zone);
             var oldFrom = zone.available_from;
             var oldTo = zone.available_to;
             // Component ids are server-assigned and irrelevant to "did this change" -- compare only
@@ -302,9 +303,12 @@ public sealed class WardConfigurationService(
             db.ZoneFeeComponents.RemoveRange(zone.ZoneFeeComponents);
             AddFeeComponents(zone.zone_id, request.FeeComponents);
 
-            var priceChanged = oldPrice != zone.price_per_day;
+            var newPricing = PricingOf(zone);
+            var priceChanged = oldPricing.PricePerDay != newPricing.PricePerDay || oldPricing.MonthlyPrice != newPricing.MonthlyPrice;
+            var discountChanged = oldPricing.QuarterDiscountPercent != newPricing.QuarterDiscountPercent;
             var hoursChanged = oldFrom != zone.available_from || oldTo != zone.available_to;
-            var notified = await NotifyZoneChangeAsync(zone, priceChanged, oldPrice, feeComponentsChanged, hoursChanged, ct);
+            var notified = await NotifyZoneChangeAsync(
+                zone, priceChanged, oldPricing, feeComponentsChanged, discountChanged, hoursChanged, ct);
 
             Audit(actor, "ZONE_UPDATED", ZoneEntity, zone.zone_id,
                 new { before, after = ZoneSnapshot(zone, request.FeeComponents), reason = request.ChangeReason, vendorsNotified = notified });
@@ -350,17 +354,36 @@ public sealed class WardConfigurationService(
         var feeComponentsChanged = !currentComponents
             .Select(c => (c.ComponentName, c.CalcBasis, c.UnitAmount))
             .SequenceEqual(newComponents.Select(c => (c.ComponentName, c.CalcBasis, c.UnitAmount)));
-        var amountChanged = zone.price_per_day != request.PricePerDay || feeComponentsChanged;
+        var currentPricing = PricingOf(zone);
+        // A client that sends no display unit only knows about the day price: keep the zone's
+        // monthly figure and discount as they are rather than reading them as removed.
+        var newPricing = request.PriceDisplayUnit is null
+            ? currentPricing with { PricePerDay = request.PricePerDay }
+            : request.PriceDisplayUnit == PriceDisplayUnits.Month
+                ? currentPricing with
+                {
+                    PricePerDay = DayPriceFromMonth(request.PricePerMonth),
+                    PricePerMonth = request.PricePerMonth,
+                    QuarterDiscountPercent = request.QuarterDiscountPercent,
+                }
+                : currentPricing with
+                {
+                    PricePerDay = request.PricePerDay,
+                    PricePerMonth = null,
+                    QuarterDiscountPercent = request.QuarterDiscountPercent,
+                };
+        var amountChanged = currentPricing != newPricing || feeComponentsChanged;
 
         var impact = await LoadZoneImpactAsync(zoneId, ct);
 
-        decimal TotalFor(decimal pricePerDay, IReadOnlyList<Application.Common.Models.FeeComponentRow> components, int termDays) =>
-            FeeQuoteCalculator.Calculate(0, pricePerDay, termDays, components).Total;
+        // Renewals are priced as renewals: no one-time fee or deposit, exactly as WARD-09 bills them.
+        decimal TotalFor(ZonePricing pricing, IReadOnlyList<Application.Common.Models.FeeComponentRow> components, int termDays, bool isRenewal) =>
+            FeeQuoteCalculator.Calculate(0, pricing, termDays, components, isRenewal).Total;
 
         var apps = impact.Applications.Select(a => new ZoneImpactItem("RENTAL_APPLICATION", a.Id, a.SlotCode, a.VendorName, a.TermDays,
-            TotalFor(zone.price_per_day, currentComponents, a.TermDays), TotalFor(request.PricePerDay, newComponents, a.TermDays))).ToList();
+            TotalFor(currentPricing, currentComponents, a.TermDays, false), TotalFor(newPricing, newComponents, a.TermDays, false))).ToList();
         var renewals = impact.Renewals.Select(r => new ZoneImpactItem("RENEWAL", r.Id, r.SlotCode, r.VendorName, r.TermDays,
-            TotalFor(zone.price_per_day, currentComponents, r.TermDays), TotalFor(request.PricePerDay, newComponents, r.TermDays))).ToList();
+            TotalFor(currentPricing, currentComponents, r.TermDays, true), TotalFor(newPricing, newComponents, r.TermDays, true))).ToList();
 
         var recipients = RecipientsFor(impact, amountChanged, hoursChanged);
         return new ZoneImpactPreviewDto(
@@ -423,7 +446,8 @@ public sealed class WardConfigurationService(
                 featureCounts.FirstOrDefault(f => f.ZoneId == z.zone_id)?.Total ?? 0,
                 components.Select(c => new ZoneFeeComponentView(c.component_id, c.component_name, c.calc_basis, c.unit_amount, c.sort_order)).ToList(),
                 ZoneToken(z, components),
-                z.price_display_unit, z.price_per_month, z.rental_mode, z.event_start_date, z.event_end_date);
+                z.price_display_unit, z.price_per_month, z.rental_mode, z.event_start_date, z.event_end_date,
+                z.quarter_discount_percent);
         }).ToList();
     }
 
@@ -454,7 +478,7 @@ public sealed class WardConfigurationService(
         if (r.PriceDisplayUnit == PriceDisplayUnits.Month)
         {
             zone.price_per_month = r.PricePerMonth;
-            zone.price_per_day = decimal.Round((r.PricePerMonth ?? 0) / 30m, 0, MidpointRounding.AwayFromZero);
+            zone.price_per_day = DayPriceFromMonth(r.PricePerMonth);
         }
         else
         {
@@ -465,7 +489,13 @@ public sealed class WardConfigurationService(
         zone.rental_mode = r.RentalMode;
         zone.event_start_date = r.RentalMode == RentalModes.Event ? r.EventStartDate : null;
         zone.event_end_date = r.RentalMode == RentalModes.Event ? r.EventEndDate : null;
+        zone.quarter_discount_percent = r.RentalMode == RentalModes.Standard ? r.QuarterDiscountPercent : null;
     }
+
+    /// <summary>An EVENT term or a part-month term is still billed by the day, so a monthly price
+    /// keeps a derived day rate; a whole-month STANDARD term bills price_per_month itself.</summary>
+    private static decimal DayPriceFromMonth(long? pricePerMonth) =>
+        decimal.Round((pricePerMonth ?? 0) / (decimal)RentalTerms.MonthDays, 0, MidpointRounding.AwayFromZero);
 
     private void AddFeeComponents(int zoneId, IReadOnlyList<ZoneFeeComponentInput> components)
     {
@@ -522,9 +552,10 @@ public sealed class WardConfigurationService(
     }
 
     private async Task<int> NotifyZoneChangeAsync(
-        PricingZone zone, bool priceChanged, decimal oldPrice, bool feeComponentsChanged, bool hoursChanged, CancellationToken ct)
+        PricingZone zone, bool priceChanged, ZonePricing oldPricing, bool feeComponentsChanged, bool discountChanged,
+        bool hoursChanged, CancellationToken ct)
     {
-        var amountChanged = priceChanged || feeComponentsChanged;
+        var amountChanged = priceChanged || feeComponentsChanged || discountChanged;
         if (!amountChanged && !hoursChanged) return 0;
         var impact = await LoadZoneImpactAsync(zone.zone_id, ct);
         var vi = CultureInfo.GetCultureInfo("vi-VN");
@@ -552,8 +583,19 @@ public sealed class WardConfigurationService(
             Send(impact.Applications.Select(a => a.UserId).Concat(impact.Renewals.Select(r => r.UserId)),
                 "ZONE_PRICE_CHANGED",
                 $"Khu vực {zone.zone_name} thay đổi giá thuê",
-                $"Giá thuê khu vực {zone.zone_name} đổi từ {oldPrice.ToString("N0", vi)}đ lên {zone.price_per_day.ToString("N0", vi)}đ/ngày. " +
+                $"Giá thuê khu vực {zone.zone_name} đổi từ {PriceText(oldPricing)} thành {PriceText(PricingOf(zone))}. " +
                 "Giá mới áp dụng cho đơn thuê và đơn gia hạn được duyệt từ nay; hợp đồng và biểu phí đã phát hành không thay đổi.");
+        }
+        else if (discountChanged)
+        {
+            var discount = zone.quarter_discount_percent is { } percent
+                ? $"giảm {percent.ToString("0.##", vi)}% tiền thuê cho thời hạn 3, 6 hoặc 12 tháng"
+                : "không còn khuyến mãi khi thuê theo quý";
+            Send(impact.Applications.Select(a => a.UserId).Concat(impact.Renewals.Select(r => r.UserId)),
+                "ZONE_FEES_CHANGED",
+                $"Khu vực {zone.zone_name} thay đổi khuyến mãi thuê theo quý",
+                $"Khu vực {zone.zone_name} từ nay {discount}. " +
+                "Áp dụng cho đơn thuê và đơn gia hạn được duyệt từ nay; hợp đồng và biểu phí đã phát hành không thay đổi.");
         }
         else if (feeComponentsChanged)
         {
@@ -577,6 +619,10 @@ public sealed class WardConfigurationService(
         }
 
         return RecipientsFor(impact, amountChanged, hoursChanged).Count;
+
+        string PriceText(ZonePricing p) => p.BillsByMonth
+            ? $"{p.MonthlyPrice.ToString("N0", vi)}đ/tháng"
+            : $"{p.PricePerDay.ToString("N0", vi)}đ/ngày";
     }
 
     private static object ZoneSnapshot(PricingZone z, IReadOnlyList<ZoneFeeComponentInput> components) => new
@@ -590,13 +636,18 @@ public sealed class WardConfigurationService(
         segmentFrom = z.segment_from,
         segmentTo = z.segment_to,
         applicationDeadline = z.application_deadline,
+        pricePerMonth = z.price_per_month,
+        quarterDiscountPercent = z.quarter_discount_percent,
         feeComponents = components,
     };
+
+    private static ZonePricing PricingOf(PricingZone z) =>
+        new(z.price_per_day, z.price_per_month, z.rental_mode, z.quarter_discount_percent);
 
     private static string ZoneToken(PricingZone z, IEnumerable<ZoneFeeComponent> components) =>
         VersionToken.Compute(
             z.zone_name, z.zone_code, z.price_per_day, z.available_from, z.available_to, z.regulation_ref,
-            z.segment_from, z.segment_to, z.application_deadline,
+            z.segment_from, z.segment_to, z.application_deadline, z.price_per_month, z.quarter_discount_percent,
             string.Join(";", components.OrderBy(c => c.sort_order).ThenBy(c => c.component_id)
                 .Select(c => VersionToken.Compute(c.component_name, c.calc_basis, c.unit_amount))));
 

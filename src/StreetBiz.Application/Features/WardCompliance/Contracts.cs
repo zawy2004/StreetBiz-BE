@@ -124,7 +124,12 @@ public sealed record WardRentalApplicationDetailDto(
     string? ReviewedBy,
     DateTime? ReviewedAt,
     bool CanApprove,
-    IReadOnlyList<string> Blockers);
+    IReadOnlyList<string> Blockers,
+    /// <summary>What approving it will bill (rent after any quarterly discount, fees, deposit) --
+    /// the same quote the vendor applied against.</summary>
+    decimal TotalFee = 0m,
+    decimal RentFee = 0m,
+    decimal Deposit = 0m);
 
 public sealed record WardRentalApplicationDecision(
     string Decision,
@@ -228,7 +233,12 @@ public sealed record SanctionWardViolationRequest(
     /// <summary>Required (and audited) when the violation is marked ExplanationRequired and its
     /// explanation_deadline_at has not passed with no explanation received yet -- Điều 61 Luật
     /// XLVPHC gives the violator that window before a decision may issue.</summary>
-    bool AcknowledgeEarlySanction = false);
+    bool AcknowledgeEarlySanction = false,
+    /// <summary>The officer's own figure, inside the legal bracket of the chosen rate (Điều 23
+    /// khoản 4 Luật XLVPHC lets the amount move with mitigating/aggravating circumstances). Null
+    /// applies the configured rate unchanged; any other figure needs <see cref="AmountReason"/>.</summary>
+    long? AmountOverride = null,
+    string? AmountReason = null);
 
 public sealed record WardViolationListItemDto(
     long ViolationId,

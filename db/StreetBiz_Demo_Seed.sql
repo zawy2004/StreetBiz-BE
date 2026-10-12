@@ -207,6 +207,8 @@ BEGIN
         (zone_id, ward_unit_id, zone_name, price_per_day, available_from, available_to,
          created_by, zone_code, regulation_ref, segment_from, segment_to, application_deadline)
     VALUES
+        -- Zone 1 is priced by the month (900 000/tháng, see the UPDATE below); 30 000/day is
+        -- its derived day rate, ROUND(900 000 / 30).
         (1, 10, N'Đường Nguyễn Văn Linh', 30000, '05:00', '22:00', 2,
             N'HC1-NVL', N'QĐ 1247/QĐ-UBND', N'Nút giao Hoàng Diệu', N'Cầu Rồng',
             DATEADD(DAY, 60, CAST(SYSUTCDATETIME() AS DATE))),
@@ -223,7 +225,32 @@ BEGIN
 END;
 GO
 
--- Fee components (SIDE-02 quote). PER_DAY multiplies by the term; PER_TERM is charged once.
+-- Zone 1 shows the monthly model: 900 000/tháng and 10% off a 3/6/12-month term.
+UPDATE PricingZones
+SET price_display_unit = 'MONTH', price_per_month = 900000, quarter_discount_percent = 10
+WHERE zone_id = 1 AND price_per_month IS NULL;
+GO
+
+-- Zone 5 shows the EVENT model: a short pop-up market rented day by day, accepting
+-- terms only up to its own end date (no monthly price, no quarterly discount).
+IF NOT EXISTS (SELECT 1 FROM PricingZones WHERE zone_id = 5)
+BEGIN
+    SET IDENTITY_INSERT PricingZones ON;
+    INSERT INTO PricingZones
+        (zone_id, ward_unit_id, zone_name, price_per_day, available_from, available_to,
+         created_by, zone_code, regulation_ref, segment_from, segment_to, application_deadline,
+         rental_mode, event_start_date, event_end_date)
+    VALUES
+        (5, 10, N'Phố đi bộ Bạch Đằng - Chợ đêm lễ hội', 60000, '17:00', '23:00', 2,
+            N'HC1-BD-EV', N'QĐ 1302/QĐ-UBND', N'Cầu Rồng', N'Cầu Sông Hàn',
+            DATEADD(DAY, 10, CAST(SYSUTCDATETIME() AS DATE)),
+            'EVENT', CAST(SYSUTCDATETIME() AS DATE), DATEADD(DAY, 20, CAST(SYSUTCDATETIME() AS DATE)));
+    SET IDENTITY_INSERT PricingZones OFF;
+END;
+GO
+
+-- Fee components (SIDE-02 quote). PER_DAY multiplies by the term; ONE_TIME and the
+-- refundable DEPOSIT are charged on the first contract only, never again on a renewal.
 IF NOT EXISTS (SELECT 1 FROM ZoneFeeComponents)
 BEGIN
     INSERT INTO ZoneFeeComponents (zone_id, component_name, calc_basis, unit_amount, sort_order)
@@ -231,8 +258,8 @@ BEGIN
     FROM PricingZones z
     CROSS JOIN (VALUES
         (N'Phí vệ sinh môi trường', 'PER_DAY',  CAST(  3000 AS DECIMAL(18,0)), 1),
-        (N'Phí quản lý hồ sơ',      'PER_TERM', CAST(150000 AS DECIMAL(18,0)), 2),
-        (N'Tiền đặt cọc',           'PER_TERM', CAST(500000 AS DECIMAL(18,0)), 3)
+        (N'Phí quản lý hồ sơ',      'ONE_TIME', CAST(150000 AS DECIMAL(18,0)), 2),
+        (N'Tiền đặt cọc',           'DEPOSIT',  CAST(500000 AS DECIMAL(18,0)), 3)
     ) AS c(component_name, calc_basis, unit_amount, sort_order);
 END;
 GO
@@ -293,7 +320,12 @@ BEGIN
         (24, 'DBP-01', 3, 16.066229, 108.205945, 2.00, 3.00, 'AVAILABLE', 'WARD_DEFINED', 1, 1, 1, 'FOOD_BEVERAGE'),
         (25, 'DBP-02', 3, 16.066369, 108.206105, 2.00, 3.00, 'AVAILABLE', 'WARD_DEFINED', 0, 0, 1, 'CRAFTS'),
         (26, 'NQ-01',  4, 16.080457, 108.234506, 2.00, 3.00, 'AVAILABLE', 'WARD_DEFINED', 1, 0, 1, 'FOOD_BEVERAGE'),
-        (27, 'NQ-02',  4, 16.080597, 108.234666, 2.00, 3.00, 'AVAILABLE', 'WARD_DEFINED', 0, 1, 1, 'RETAIL');
+        (27, 'NQ-02',  4, 16.080597, 108.234666, 2.00, 3.00, 'AVAILABLE', 'WARD_DEFINED', 0, 1, 1, 'RETAIL'),
+
+    -- The event market (zone 5) along Bạch Đằng, between Cầu Rồng and Cầu Sông Hàn.
+        (31, 'BD-EV-01', 5, 16.061300, 108.226900, 2.00, 2.00, 'AVAILABLE', 'WARD_DEFINED', 1, 0, 1, 'FOOD_BEVERAGE'),
+        (32, 'BD-EV-02', 5, 16.061430, 108.226920, 2.00, 2.00, 'AVAILABLE', 'WARD_DEFINED', 1, 0, 1, 'FOOD_BEVERAGE'),
+        (33, 'BD-EV-03', 5, 16.061560, 108.226940, 2.00, 2.00, 'AVAILABLE', 'WARD_DEFINED', 0, 0, 1, 'CRAFTS');
 
     SET IDENTITY_INSERT SidewalkSlots OFF;
 END;
@@ -448,10 +480,11 @@ BEGIN
     INSERT INTO RentalContracts
         (contract_id, application_id, slot_id, vendor_id, start_date, end_date, contract_status, created_at)
     VALUES
-        (1, 1, 1, 1, DATEADD(DAY, -30, CAST(SYSUTCDATETIME() AS DATE)),
-                     DATEADD(DAY,  60, CAST(SYSUTCDATETIME() AS DATE)), 'ACTIVE', DATEADD(DAY, -30, SYSUTCDATETIME())),
+        -- end_date is inclusive: a 90-day term runs start .. start+89.
+        (1, 1, 1, 1, DATEADD(DAY, -32, CAST(SYSUTCDATETIME() AS DATE)),
+                     DATEADD(DAY,  57, CAST(SYSUTCDATETIME() AS DATE)), 'ACTIVE', DATEADD(DAY, -30, SYSUTCDATETIME())),
         (2, 2, 8, 1, DATEADD(DAY, -10, CAST(SYSUTCDATETIME() AS DATE)),
-                     DATEADD(DAY, 170, CAST(SYSUTCDATETIME() AS DATE)), 'ACTIVE', DATEADD(DAY, -10, SYSUTCDATETIME()));
+                     DATEADD(DAY, 169, CAST(SYSUTCDATETIME() AS DATE)), 'ACTIVE', DATEADD(DAY, -10, SYSUTCDATETIME()));
     SET IDENTITY_INSERT RentalContracts OFF;
 END;
 GO
@@ -477,32 +510,44 @@ GO
 
 /* ============================================================
    6. FEES AND INVOICES (FEE-01..03)
-   Zone 1: 30 000/day + 3 000/day cleaning + 150 000 admin + 500 000 deposit.
-     contract 1  ( 90 days): 90*33 000 + 650 000 = 3 620 000
-     contract 2  (180 days): 180*33 000 + 650 000 = 6 590 000
+   Zone 1: 900 000/month, -10% on a whole-quarter term, 3 000/day cleaning,
+   150 000 one-time admin fee, 500 000 refundable deposit. Same numbers the API's
+   FeeQuoteCalculator + FeeInstalmentPlanner produce (30-day instalments, one-offs
+   on the first):
+     contract 1 ( 90 days): 2 700 000 - 270 000 + 270 000 + 650 000 = 3 350 000
+                            = 1 550 000 + 900 000 + 900 000
+     contract 2 (180 days): 5 400 000 - 540 000 + 540 000 + 650 000 = 6 050 000
+                            = 1 550 000 + 5 x 900 000
    ============================================================ */
 
 IF NOT EXISTS (SELECT 1 FROM FeeSchedules)
 BEGIN
     SET IDENTITY_INSERT FeeSchedules ON;
     INSERT INTO FeeSchedules (fee_schedule_id, contract_id, revision, total_amount, generated_at) VALUES
-        (1, 1, 1, 3620000, DATEADD(DAY, -30, SYSUTCDATETIME())),
-        (2, 2, 1, 6590000, DATEADD(DAY, -10, SYSUTCDATETIME()));
+        (1, 1, 1, 3350000, DATEADD(DAY, -30, SYSUTCDATETIME())),
+        (2, 2, 1, 6050000, DATEADD(DAY, -10, SYSUTCDATETIME()));
     SET IDENTITY_INSERT FeeSchedules OFF;
 
     SET IDENTITY_INSERT FeeScheduleItems ON;
     INSERT INTO FeeScheduleItems (fee_item_id, fee_schedule_id, due_date, amount, item_status, paid_at) VALUES
         -- Contract 1: one paid, one overdue, one upcoming -- all three states on screen.
-        (1, 1, DATEADD(DAY, -30, CAST(SYSUTCDATETIME() AS DATE)), 1540000, 'PAID',
+        (1, 1, DATEADD(DAY, -32, CAST(SYSUTCDATETIME() AS DATE)), 1550000, 'PAID',
                DATEADD(DAY, -29, SYSUTCDATETIME())),
-        (2, 1, DATEADD(DAY,  -2, CAST(SYSUTCDATETIME() AS DATE)), 1040000, 'OVERDUE', NULL),
-        (3, 1, DATEADD(DAY,  28, CAST(SYSUTCDATETIME() AS DATE)), 1040000, 'PENDING', NULL),
+        (2, 1, DATEADD(DAY,  -2, CAST(SYSUTCDATETIME() AS DATE)), 900000, 'OVERDUE', NULL),
+        (3, 1, DATEADD(DAY,  28, CAST(SYSUTCDATETIME() AS DATE)), 900000, 'PENDING', NULL),
         -- Contract 2: first instalment paid, the rest ahead.
-        (4, 2, DATEADD(DAY, -10, CAST(SYSUTCDATETIME() AS DATE)), 2630000, 'PAID',
+        (4, 2, DATEADD(DAY, -10, CAST(SYSUTCDATETIME() AS DATE)), 1550000, 'PAID',
                DATEADD(DAY,  -9, SYSUTCDATETIME())),
-        (5, 2, DATEADD(DAY,  50, CAST(SYSUTCDATETIME() AS DATE)), 1980000, 'PENDING', NULL),
-        (6, 2, DATEADD(DAY, 110, CAST(SYSUTCDATETIME() AS DATE)), 1980000, 'PENDING', NULL);
+        (5, 2, DATEADD(DAY,  20, CAST(SYSUTCDATETIME() AS DATE)),  900000, 'PENDING', NULL),
+        (6, 2, DATEADD(DAY,  50, CAST(SYSUTCDATETIME() AS DATE)),  900000, 'PENDING', NULL),
+        (7, 2, DATEADD(DAY,  80, CAST(SYSUTCDATETIME() AS DATE)),  900000, 'PENDING', NULL),
+        (8, 2, DATEADD(DAY, 110, CAST(SYSUTCDATETIME() AS DATE)),  900000, 'PENDING', NULL),
+        (9, 2, DATEADD(DAY, 140, CAST(SYSUTCDATETIME() AS DATE)),  900000, 'PENDING', NULL);
     SET IDENTITY_INSERT FeeScheduleItems OFF;
+
+    -- The first instalment of each contract carries the 500 000 refundable deposit; it is what
+    -- the ward hands back (DepositRefunds) when the contract ends.
+    UPDATE FeeScheduleItems SET deposit_amount = 500000 WHERE fee_item_id IN (1, 4);
 END;
 GO
 
@@ -510,8 +555,8 @@ GO
 IF NOT EXISTS (SELECT 1 FROM Invoices)
 BEGIN
     INSERT INTO Invoices (invoice_number, fee_item_id, penalty_id, vendor_id, amount, issued_at) VALUES
-        (N'HD-2026-000001', 1, NULL, 1, 1540000, DATEADD(DAY, -29, SYSUTCDATETIME())),
-        (N'HD-2026-000002', 4, NULL, 1, 2630000, DATEADD(DAY,  -9, SYSUTCDATETIME()));
+        (N'HD-2026-000001', 1, NULL, 1, 1550000, DATEADD(DAY, -29, SYSUTCDATETIME())),
+        (N'HD-2026-000002', 4, NULL, 1, 1550000, DATEADD(DAY,  -9, SYSUTCDATETIME()));
 END;
 GO
 
@@ -1124,8 +1169,8 @@ BEGIN
         (3, N'seed-order-3',   'ORDER',      NULL, NULL, 3, 'MOMO',    N'MOMO-SEED-0003', 45000,   'SUCCESS', DATEADD(MINUTE,-24, SYSUTCDATETIME()), DATEADD(MINUTE,-25, SYSUTCDATETIME())),
         (4, N'seed-order-4',   'ORDER',      NULL, NULL, 4, 'MOMO',    NULL,              50000,   'PENDING', NULL,                                DATEADD(MINUTE, -5, SYSUTCDATETIME())),
         (5, N'seed-order-5',   'ORDER',      NULL, NULL, 5, 'ZALOPAY', N'ZP-SEED-0005',   25000,   'SUCCESS', DATEADD(DAY,  -2, SYSUTCDATETIME()), DATEADD(DAY,  -2, SYSUTCDATETIME())),
-        (6, N'seed-fee-1',     'RENTAL_FEE', 1,    NULL, NULL, 'MOMO', N'MOMO-SEED-F001', 1540000, 'SUCCESS', DATEADD(DAY, -29, SYSUTCDATETIME()), DATEADD(DAY, -29, SYSUTCDATETIME())),
-        (7, N'seed-fee-4',     'RENTAL_FEE', 4,    NULL, NULL, 'ZALOPAY', N'ZP-SEED-F004', 2630000, 'SUCCESS', DATEADD(DAY,  -9, SYSUTCDATETIME()), DATEADD(DAY,  -9, SYSUTCDATETIME())),
+        (6, N'seed-fee-1',     'RENTAL_FEE', 1,    NULL, NULL, 'MOMO', N'MOMO-SEED-F001', 1550000, 'SUCCESS', DATEADD(DAY, -29, SYSUTCDATETIME()), DATEADD(DAY, -29, SYSUTCDATETIME())),
+        (7, N'seed-fee-4',     'RENTAL_FEE', 4,    NULL, NULL, 'ZALOPAY', N'ZP-SEED-F004', 1550000, 'SUCCESS', DATEADD(DAY,  -9, SYSUTCDATETIME()), DATEADD(DAY,  -9, SYSUTCDATETIME())),
         (8, N'seed-penalty-2', 'PENALTY',    NULL, 2,    NULL, 'MOMO', N'MOMO-SEED-P002',  500000, 'SUCCESS', DATEADD(DAY, -33, SYSUTCDATETIME()), DATEADD(DAY, -33, SYSUTCDATETIME()));
     SET IDENTITY_INSERT PaymentTransactions OFF;
 END;
@@ -1137,7 +1182,7 @@ IF NOT EXISTS (SELECT 1 FROM PaymentCallbackEvents)
         (provider, provider_reference, transaction_id, raw_payload, signature_valid, processing_result, received_at)
     VALUES
         ('MOMO',    N'MOMO-SEED-0001', 1, N'{"seed":true,"resultCode":0,"amount":60000}',   1, 'APPLIED',  DATEADD(DAY,  -6, SYSUTCDATETIME())),
-        ('MOMO',    N'MOMO-SEED-F001', 6, N'{"seed":true,"resultCode":0,"amount":1540000}', 1, 'APPLIED',  DATEADD(DAY, -29, SYSUTCDATETIME())),
+        ('MOMO',    N'MOMO-SEED-F001', 6, N'{"seed":true,"resultCode":0,"amount":1550000}', 1, 'APPLIED',  DATEADD(DAY, -29, SYSUTCDATETIME())),
         ('MOMO',    N'MOMO-SEED-P002', 8, N'{"seed":true,"resultCode":0,"amount":500000}',  1, 'APPLIED',  DATEADD(DAY, -33, SYSUTCDATETIME())),
         ('MOMO',    N'MOMO-SEED-P002', 8, N'{"seed":true,"resultCode":0,"amount":500000}',  1, 'DUPLICATE', DATEADD(DAY, -33, SYSUTCDATETIME())),
         ('ZALOPAY', N'ZP-UNKNOWN-0001', NULL, N'{"seed":true,"note":"unsigned callback"}',  0, 'REJECTED', DATEADD(DAY,  -1, SYSUTCDATETIME()));
@@ -1217,10 +1262,10 @@ BEGIN
     VALUES
         -- The two instalments that were already PAID, now with the payments behind them.
         (N'SEED-TXN-FEE-0001', 'RENTAL_FEE', 1, NULL, NULL, 'MOMO',
-            N'MOMO-SEED-0001', 1540000, 'SUCCESS',
+            N'MOMO-SEED-0001', 1550000, 'SUCCESS',
             DATEADD(DAY, -29, SYSUTCDATETIME()), DATEADD(DAY, -29, SYSUTCDATETIME())),
         (N'SEED-TXN-FEE-0002', 'RENTAL_FEE', 4, NULL, NULL, 'ZALOPAY',
-            N'ZALO-SEED-0002', 2630000, 'SUCCESS',
+            N'ZALO-SEED-0002', 1550000, 'SUCCESS',
             DATEADD(DAY, -9, SYSUTCDATETIME()), DATEADD(DAY, -9, SYSUTCDATETIME())),
         -- The paid penalty.
         (N'SEED-TXN-PEN-0001', 'PENALTY', NULL, 1, NULL, 'MOMO',
@@ -1228,11 +1273,11 @@ BEGIN
             DATEADD(DAY, -18, SYSUTCDATETIME()), DATEADD(DAY, -18, SYSUTCDATETIME())),
         -- A failed attempt on the OVERDUE instalment: the vendor must be able to retry.
         (N'SEED-TXN-FEE-0003', 'RENTAL_FEE', 2, NULL, NULL, 'MOMO',
-            N'MOMO-SEED-0004', 1040000, 'FAILED',
+            N'MOMO-SEED-0004', 900000, 'FAILED',
             DATEADD(DAY, -1, SYSUTCDATETIME()), DATEADD(DAY, -1, SYSUTCDATETIME())),
         -- Checkout started, callback not back yet.
         (N'SEED-TXN-FEE-0004', 'RENTAL_FEE', 3, NULL, NULL, 'ZALOPAY',
-            NULL, 1040000, 'PENDING', NULL, DATEADD(MINUTE, -20, SYSUTCDATETIME()));
+            NULL, 900000, 'PENDING', NULL, DATEADD(MINUTE, -20, SYSUTCDATETIME()));
 END;
 GO
 
@@ -1247,17 +1292,17 @@ BEGIN
            v.signature_valid, v.processing_result, v.received_at
     FROM (VALUES
         ('MOMO',    N'MOMO-SEED-0001', N'SEED-TXN-FEE-0001',
-            N'{"providerReference":"MOMO-SEED-0001","idempotencyKey":"SEED-TXN-FEE-0001","amount":1540000,"status":"SUCCESS"}',
+            N'{"providerReference":"MOMO-SEED-0001","idempotencyKey":"SEED-TXN-FEE-0001","amount":1550000,"status":"SUCCESS"}',
             CAST(1 AS BIT), 'APPLIED',   DATEADD(DAY, -29, SYSUTCDATETIME())),
         ('ZALOPAY', N'ZALO-SEED-0002', N'SEED-TXN-FEE-0002',
-            N'{"providerReference":"ZALO-SEED-0002","idempotencyKey":"SEED-TXN-FEE-0002","amount":2630000,"status":"SUCCESS"}',
+            N'{"providerReference":"ZALO-SEED-0002","idempotencyKey":"SEED-TXN-FEE-0002","amount":1550000,"status":"SUCCESS"}',
             CAST(1 AS BIT), 'APPLIED',   DATEADD(DAY, -9, SYSUTCDATETIME())),
         ('MOMO',    N'MOMO-SEED-0003', N'SEED-TXN-PEN-0001',
             N'{"providerReference":"MOMO-SEED-0003","idempotencyKey":"SEED-TXN-PEN-0001","amount":500000,"status":"SUCCESS"}',
             CAST(1 AS BIT), 'APPLIED',   DATEADD(DAY, -18, SYSUTCDATETIME())),
         -- Replay of an already-settled payment.
         ('MOMO',    N'MOMO-SEED-0001', N'SEED-TXN-FEE-0001',
-            N'{"providerReference":"MOMO-SEED-0001","idempotencyKey":"SEED-TXN-FEE-0001","amount":1540000,"status":"SUCCESS"}',
+            N'{"providerReference":"MOMO-SEED-0001","idempotencyKey":"SEED-TXN-FEE-0001","amount":1550000,"status":"SUCCESS"}',
             CAST(1 AS BIT), 'DUPLICATE', DATEADD(DAY, -29, SYSUTCDATETIME())),
         -- Bad signature: recorded, never applied.
         ('MOMO',    N'MOMO-SEED-FAKE', NULL,
@@ -1276,10 +1321,10 @@ BEGIN
         (user_id, notification_type, title, body, related_entity_type, related_entity_id, is_read, sent_at)
     VALUES
         (5, 'FEE', N'Phí thuê ô đã quá hạn',
-            N'Kỳ phí 1.040.000 đ của ô NVL-01 đã quá hạn thanh toán.',
+            N'Kỳ phí 900.000 đ của ô NVL-01 đã quá hạn thanh toán.',
             'FeeScheduleItem', 2, 0, DATEADD(DAY, -2, SYSUTCDATETIME())),
         (5, 'FEE', N'Sắp đến hạn đóng phí',
-            N'Kỳ phí 1.040.000 đ của ô NVL-01 sẽ đến hạn trong 28 ngày.',
+            N'Kỳ phí 900.000 đ của ô NVL-01 sẽ đến hạn trong 28 ngày.',
             'FeeScheduleItem', 3, 0, DATEADD(DAY, -1, SYSUTCDATETIME()));
 END;
 GO

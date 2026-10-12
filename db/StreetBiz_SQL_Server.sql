@@ -88,6 +88,15 @@
    The API never runs schema changes (docs/database.md).
 
    CHANGE LOG (newest first)
+     2026-10-12  Manual money handling by the ward: SidewalkSlots.price_override (one slot's
+                 own price); FeeScheduleItems.deposit_amount/original_amount/adjusted_*
+                 (hand-corrected amount or due date, with reason); PaymentTransactions.provider
+                 gains CASH and BANK_TRANSFER (collected in person); new DepositRefunds.
+     2026-10-12  Monthly rent + quarterly discount: PricingZones.quarter_discount_percent
+                 (STANDARD only; % off the rent of a 3/6/12-month term). STANDARD whole-month
+                 terms now bill price_per_month itself. ZoneFeeComponents.calc_basis gains
+                 ONE_TIME (first contract only) and DEPOSIT (refundable, first contract only).
+                 UserAccounts.failed_login_count/lockout_until (sign-in lockout).
      2026-10-06  Add isolated role-scoped assistant conversations, messages, audit,
                  idempotency keys and generation leases (explicit SQL Server exception).
      2026-10-06  Rental-term/compliance revamp: PricingZones gets price_display_unit/
@@ -461,13 +470,15 @@ CREATE TABLE PricingZones (
     segment_from         NVARCHAR(150)  NULL,  -- street segment ends
     segment_to           NVARCHAR(150)  NULL,
     application_deadline DATE           NULL,
-    -- price_per_day stays the only value FeeQuoteCalculator/FeeInstalmentPlanner read.
-    -- price_per_month is a convenience: when an officer enters a monthly price,
-    -- price_per_day is derived from it (ROUND(price_per_month / 30, 0)) and both are kept
-    -- so re-opening the zone to edit shows back the exact figure they typed, not a rounded
-    -- day-rate reconstruction of it.
+    -- A STANDARD zone rents by whole months (30-day units): the rent of such a term is
+    -- price_per_month x months when an officer entered a monthly price, else
+    -- price_per_day x 30 x months. price_per_day (derived as ROUND(price_per_month / 30, 0)
+    -- when a monthly price is entered) still prices EVENT and part-month terms.
     price_display_unit   NVARCHAR(10)   NOT NULL DEFAULT 'DAY',
     price_per_month       DECIMAL(18,0) NULL,
+    -- % taken off the rent (never the fees) of a term that is a whole number of quarters
+    -- (3/6/12 months). NULL = no discount. STANDARD zones only.
+    quarter_discount_percent DECIMAL(5,2) NULL,
     -- EVENT zones keep the existing day-by-day rental flow unchanged (SlotApplyForm's free-
     -- text day count); only STANDARD zones get the month-based quick-select. event_* dates
     -- bound how long a short-term/pop-up zone accepts applications.
@@ -486,6 +497,9 @@ CREATE TABLE PricingZones (
     -- An event's day-by-day pricing has no monthly equivalent worth entering.
     CONSTRAINT CK_PricingZones_EventIsDailyPriced
         CHECK (rental_mode = 'STANDARD' OR price_display_unit = 'DAY'),
+    CONSTRAINT CK_PricingZones_QuarterDiscount
+        CHECK (quarter_discount_percent IS NULL
+            OR (rental_mode = 'STANDARD' AND quarter_discount_percent > 0 AND quarter_discount_percent < 100)),
     CONSTRAINT FK_PricingZones_Ward
         FOREIGN KEY (ward_unit_id, ward_unit_type)
         REFERENCES AdministrativeUnits(unit_id, unit_type),
@@ -522,6 +536,11 @@ CREATE TABLE SidewalkSlots (
     has_water                     BIT                   NOT NULL DEFAULT 0,
     has_trash_bin                 BIT                   NOT NULL DEFAULT 0,
     business_category             NVARCHAR(30)          NULL,  -- advisory, never enforced on applications
+    -- Manual price for this one slot, set by the ward (audited). STANDARD: the monthly rent;
+    -- EVENT: the daily rent. NULL = the zone's price applies.
+    price_override                DECIMAL(18,0)         NULL,
+    CONSTRAINT CK_SidewalkSlots_PriceOverride
+        CHECK (price_override IS NULL OR price_override > 0),
     CONSTRAINT CK_SidewalkSlots_Status
         CHECK (slot_status IN ('AVAILABLE','PENDING_APPLICATION','ACTIVE','SUSPENDED')),
     CONSTRAINT CK_SidewalkSlots_Source
@@ -569,7 +588,9 @@ CREATE TABLE ZoneFeeComponents (
     unit_amount     DECIMAL(18,0)      NOT NULL,
     sort_order      INT                NOT NULL DEFAULT 0,
     CONSTRAINT CK_ZoneFeeComponents_Basis
-        CHECK (calc_basis IN ('PER_DAY','PER_TERM')),
+        -- PER_DAY x term days; PER_TERM once per term (again on renewal); ONE_TIME and
+        -- DEPOSIT once on the first contract only, DEPOSIT being refundable and not a fee.
+        CHECK (calc_basis IN ('PER_DAY','PER_TERM','ONE_TIME','DEPOSIT')),
     CONSTRAINT CK_ZoneFeeComponents_Amount
         CHECK (unit_amount >= 0),
     CONSTRAINT FK_ZoneFeeComponents_Zone
@@ -1273,6 +1294,22 @@ CREATE TABLE FeeScheduleItems (
     amount             DECIMAL(18,0)         NOT NULL,
     item_status         NVARCHAR(20)          NOT NULL DEFAULT 'PENDING',
     paid_at              DATETIME2             NULL,
+    -- The refundable deposit inside this instalment's amount (first instalment only). Kept so
+    -- a refund is computed from what was actually paid, not from the zone's price today.
+    deposit_amount       DECIMAL(18,0)         NOT NULL DEFAULT 0,
+    -- Set when a ward officer corrected the amount or due date by hand: what it was, who
+    -- changed it, when and why (the audit log keeps the full trail).
+    original_amount      DECIMAL(18,0)         NULL,
+    adjusted_by          BIGINT                NULL,
+    adjusted_at          DATETIME2             NULL,
+    adjustment_reason    NVARCHAR(500)         NULL,
+    CONSTRAINT CK_FeeScheduleItems_DepositNotNegative
+        CHECK (deposit_amount >= 0),
+    CONSTRAINT CK_FeeScheduleItems_AdjustmentEvidence
+        CHECK (adjusted_at IS NULL
+               OR (adjusted_by IS NOT NULL AND adjustment_reason IS NOT NULL)),
+    CONSTRAINT FK_FeeScheduleItems_AdjustedBy
+        FOREIGN KEY (adjusted_by) REFERENCES UserAccounts(user_id),
     CONSTRAINT CK_FeeScheduleItems_Status
         -- CANCELLED: a future (not-yet-due) instalment dropped by a voluntary contract
         -- cancellation (SIDE-07) -- never refunded, never collected; PAID instalments are
@@ -1286,6 +1323,30 @@ CREATE INDEX IX_FeeScheduleItems_DueDate ON FeeScheduleItems(due_date, item_stat
 CREATE INDEX IX_FeeScheduleItems_Schedule ON FeeScheduleItems(fee_schedule_id, item_status);
 
 -- FEE-03, SYS-05: issued only after a confirmed payment (BR-32)
+-- The rental deposit handed back when a contract ends. One row per contract: the deposit is
+-- taken once (first instalment) and given back once. Money moves outside the system (cash or a
+-- bank transfer), so this is the officer's record of it; a partial refund must say why.
+CREATE TABLE DepositRefunds (
+    refund_id         BIGINT IDENTITY(1,1)  PRIMARY KEY,
+    contract_id       BIGINT                NOT NULL UNIQUE,
+    deposit_paid      DECIMAL(18,0)         NOT NULL,
+    amount            DECIMAL(18,0)         NOT NULL,
+    deduction_reason  NVARCHAR(500)         NULL,
+    method            NVARCHAR(20)          NOT NULL,
+    reference         NVARCHAR(100)         NULL,
+    refunded_by       BIGINT                NOT NULL,
+    refunded_at       DATETIME2             NOT NULL DEFAULT SYSUTCDATETIME(),
+    CONSTRAINT CK_DepositRefunds_Amount
+        CHECK (amount >= 0 AND amount <= deposit_paid),
+    CONSTRAINT CK_DepositRefunds_DeductionReason
+        CHECK (amount = deposit_paid OR deduction_reason IS NOT NULL),
+    CONSTRAINT CK_DepositRefunds_Method
+        CHECK (method IN ('CASH','BANK_TRANSFER')),
+    CONSTRAINT FK_DepositRefunds_Contract
+        FOREIGN KEY (contract_id) REFERENCES RentalContracts(contract_id),
+    CONSTRAINT FK_DepositRefunds_RefundedBy
+        FOREIGN KEY (refunded_by) REFERENCES UserAccounts(user_id)
+);
 CREATE TABLE Invoices (
     invoice_id       BIGINT IDENTITY(1,1)  PRIMARY KEY,
     invoice_number   NVARCHAR(40)          NOT NULL UNIQUE,
@@ -1328,7 +1389,8 @@ CREATE TABLE PaymentTransactions (
     CONSTRAINT CK_PaymentTransactions_Purpose
         CHECK (payment_purpose IN ('RENTAL_FEE','PENALTY','ORDER')),
     CONSTRAINT CK_PaymentTransactions_Provider
-        CHECK (provider IN ('MOMO','ZALOPAY')),
+        -- CASH / BANK_TRANSFER: a fee or penalty a ward officer recorded as collected in person.
+        CHECK (provider IN ('MOMO','ZALOPAY','CASH','BANK_TRANSFER')),
     CONSTRAINT CK_PaymentTransactions_Status
         CHECK (transaction_status IN ('PENDING','SUCCESS','FAILED')),
     -- payment_purpose must agree with which target column is filled; without
@@ -2216,9 +2278,9 @@ GO
                                       SlotTransferRequests, RenewalRequests,
                                       AddressChangeRequests)
    Buyer Trust & Verification .... 2  (VendorComments, VendorReports)
-   Fee, Penalty & Invoicing ...... 9  (ViolationTypes, PenaltyFeeSchedules,
+   Fee, Penalty & Invoicing ...... 10 (ViolationTypes, PenaltyFeeSchedules,
                                       Violations, Penalties, FeeSchedules,
-                                      FeeScheduleItems, Invoices,
+                                      FeeScheduleItems, DepositRefunds, Invoices,
                                       PaymentTransactions,
                                       PaymentCallbackEvents)
    Platform Admin & System ....... 5  (FoodCategories, Notifications,

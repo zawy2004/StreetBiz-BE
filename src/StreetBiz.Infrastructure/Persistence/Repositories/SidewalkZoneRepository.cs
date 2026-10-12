@@ -16,6 +16,7 @@ public sealed class SidewalkZoneRepository(StreetBizDbContext dbContext) : ISide
                 z.application_deadline, z.ward_unit_id, WardName = z.AdministrativeUnit!.unit_name,
                 ContactName = z.AdministrativeUnit.contact_name, ContactPhone = z.AdministrativeUnit.contact_phone,
                 z.price_per_day, z.available_from, z.available_to,
+                z.price_per_month, z.rental_mode, z.quarter_discount_percent,
             })
             .FirstOrDefaultAsync(cancellationToken);
         if (zone is null)
@@ -34,7 +35,8 @@ public sealed class SidewalkZoneRepository(StreetBizDbContext dbContext) : ISide
             zone.zone_id, zone.zone_name, zone.zone_code, zone.regulation_ref, zone.segment_from, zone.segment_to,
             zone.application_deadline, zone.ward_unit_id, zone.WardName, zone.ContactName, zone.ContactPhone,
             zone.price_per_day, zone.available_from, zone.available_to,
-            await ListFeeComponentsAsync(zoneId, cancellationToken), features);
+            await ListFeeComponentsAsync(zoneId, cancellationToken), features,
+            new ZonePricing(zone.price_per_day, zone.price_per_month, zone.rental_mode, zone.quarter_discount_percent));
     }
 
     public async Task<IReadOnlyList<FeeComponentRow>> ListFeeComponentsAsync(int zoneId, CancellationToken cancellationToken) =>

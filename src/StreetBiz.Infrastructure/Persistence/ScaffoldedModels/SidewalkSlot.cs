@@ -7,6 +7,9 @@ public partial class SidewalkSlot
 {
     public long slot_id { get; set; }
 
+    /// <summary>The ward's manual price for this one slot (monthly for STANDARD, daily for EVENT); null = the zone's.</summary>
+    public decimal? price_override { get; set; }
+
     public string slot_code { get; set; } = null!;
 
     public int zone_id { get; set; }

@@ -19,9 +19,9 @@ public static class BusinessCategories
     public const string General = "GENERAL";
 }
 
-/// <summary>PricingZones.price_display_unit values (DB CHECK). price_per_day is always the
-/// value FeeQuoteCalculator/FeeInstalmentPlanner read; MONTH only changes how an officer
-/// enters/sees the price.</summary>
+/// <summary>PricingZones.price_display_unit values (DB CHECK). MONTH means the officer entered
+/// price_per_month, which a STANDARD zone's whole-month terms are billed at (ZonePricing);
+/// price_per_day is derived from it for EVENT and part-month terms.</summary>
 public static class PriceDisplayUnits
 {
     public const string Day = "DAY";
@@ -37,14 +37,39 @@ public static class RentalModes
     public const string Event = "EVENT";
 }
 
-/// <summary>ZoneFeeComponents.calc_basis values (DB CHECK).</summary>
+/// <summary>ZoneFeeComponents.calc_basis values (DB CHECK), plus PER_MONTH, which only ever
+/// appears on a quote's RENT/DISCOUNT line of a STANDARD zone.</summary>
 public static class FeeBases
 {
     /// <summary>Multiplied by the term in days.</summary>
     public const string PerDay = "PER_DAY";
 
-    /// <summary>Charged once per term.</summary>
+    /// <summary>Charged once per term -- again on every renewal.</summary>
     public const string PerTerm = "PER_TERM";
+
+    /// <summary>Charged once, on the first contract only; a renewal does not charge it again.</summary>
+    public const string OneTime = "ONE_TIME";
+
+    /// <summary>A refundable deposit: taken on the first contract only, never counted as a fee.</summary>
+    public const string Deposit = "DEPOSIT";
+
+    /// <summary>Quote lines only: the rent of a STANDARD zone, billed by the month.</summary>
+    public const string PerMonth = "PER_MONTH";
+
+    public static readonly string[] ComponentBases = [PerDay, PerTerm, OneTime, Deposit];
+
+    /// <summary>Lines charged in full on the first instalment rather than spread over the term.</summary>
+    public static bool IsOneOff(string basis) => basis is PerTerm or OneTime or Deposit;
+}
+
+/// <summary>Term arithmetic shared by the quote, the apply form and the fee schedule.</summary>
+public static class RentalTerms
+{
+    /// <summary>A STANDARD zone rents by whole months of this many days (1/3/6/12 months).</summary>
+    public const int MonthDays = 30;
+
+    /// <summary>Terms that are a whole number of quarters earn the zone's quarterly discount.</summary>
+    public const int QuarterDays = 90;
 }
 
 /// <summary>SidewalkSlots.source values (DB CHECK).</summary>

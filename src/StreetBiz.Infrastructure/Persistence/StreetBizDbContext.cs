@@ -42,6 +42,8 @@ public partial class StreetBizDbContext : DbContext
 
     public virtual DbSet<FeeScheduleItem> FeeScheduleItems { get; set; }
 
+    public virtual DbSet<DepositRefund> DepositRefunds { get; set; }
+
     public virtual DbSet<FoodCategory> FoodCategories { get; set; }
 
     public virtual DbSet<FoodSafetyApplication> FoodSafetyApplications { get; set; }
@@ -398,6 +400,9 @@ public partial class StreetBizDbContext : DbContext
             entity.HasIndex(e => new { e.due_date, e.item_status }, "IX_FeeScheduleItems_DueDate");
 
             entity.Property(e => e.amount).HasColumnType("decimal(18, 0)");
+            entity.Property(e => e.deposit_amount).HasColumnType("decimal(18, 0)").HasDefaultValue(0m);
+            entity.Property(e => e.original_amount).HasColumnType("decimal(18, 0)");
+            entity.Property(e => e.adjustment_reason).HasMaxLength(500);
             entity.Property(e => e.item_status)
                 .HasMaxLength(20)
                 .HasDefaultValue("PENDING");
@@ -406,6 +411,25 @@ public partial class StreetBizDbContext : DbContext
                 .HasForeignKey(d => d.fee_schedule_id)
                 .OnDelete(DeleteBehavior.ClientSetNull)
                 .HasConstraintName("FK_FeeScheduleItems_Schedule");
+        });
+
+        modelBuilder.Entity<DepositRefund>(entity =>
+        {
+            entity.HasKey(e => e.refund_id);
+
+            entity.HasIndex(e => e.contract_id, "UQ_DepositRefunds_Contract").IsUnique();
+
+            entity.Property(e => e.deposit_paid).HasColumnType("decimal(18, 0)");
+            entity.Property(e => e.amount).HasColumnType("decimal(18, 0)");
+            entity.Property(e => e.deduction_reason).HasMaxLength(500);
+            entity.Property(e => e.method).HasMaxLength(20);
+            entity.Property(e => e.reference).HasMaxLength(100);
+            entity.Property(e => e.refunded_at).HasDefaultValueSql("(sysutcdatetime())");
+
+            entity.HasOne(d => d.contract).WithMany()
+                .HasForeignKey(d => d.contract_id)
+                .OnDelete(DeleteBehavior.ClientSetNull)
+                .HasConstraintName("FK_DepositRefunds_Contract");
         });
 
         modelBuilder.Entity<FoodCategory>(entity =>
@@ -817,6 +841,7 @@ public partial class StreetBizDbContext : DbContext
                 .HasComputedColumnSql("(CONVERT([nvarchar](30),N'WARD_AUTHORITY'))", true);
             entity.Property(e => e.price_per_day).HasColumnType("decimal(18, 0)");
             entity.Property(e => e.price_per_month).HasColumnType("decimal(18, 0)");
+            entity.Property(e => e.quarter_discount_percent).HasColumnType("decimal(5, 2)");
             entity.Property(e => e.price_display_unit).HasMaxLength(10).HasDefaultValue("DAY");
             entity.Property(e => e.rental_mode).HasMaxLength(10).HasDefaultValue("STANDARD");
             entity.Property(e => e.regulation_ref).HasMaxLength(120);
@@ -1131,6 +1156,7 @@ public partial class StreetBizDbContext : DbContext
             entity.HasIndex(e => e.slot_code, "UQ__Sidewalk__5D19A1A4F1795837").IsUnique();
 
             entity.Property(e => e.business_category).HasMaxLength(30);
+            entity.Property(e => e.price_override).HasColumnType("decimal(18, 0)");
             entity.Property(e => e.created_at).HasDefaultValueSql("(sysutcdatetime())");
             entity.Property(e => e.has_power).HasDefaultValue(false);
             entity.Property(e => e.has_trash_bin).HasDefaultValue(false);
