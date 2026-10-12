@@ -185,6 +185,10 @@ CREATE TABLE UserAccounts (
     ward_unit_type      AS CAST(N'WARD' AS NVARCHAR(20)) PERSISTED,
     account_status      NVARCHAR(20)          NOT NULL DEFAULT 'ACTIVE',
     phone_verified_at   DATETIME2             NULL,
+    -- AUTH: sign-in lockout (bae7ded) -- consecutive bad-password attempts and,
+    -- once the threshold is hit, the UTC instant the account unlocks.
+    failed_login_count  INT                   NOT NULL DEFAULT 0,
+    lockout_until        DATETIME2             NULL,
     created_at          DATETIME2             NOT NULL DEFAULT SYSUTCDATETIME(),
     updated_at          DATETIME2             NULL,
     -- WARD-13: fixed title printed under a sanction decision (e.g. N'Chủ tịch UBND Phường ...').
