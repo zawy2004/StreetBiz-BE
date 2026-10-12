@@ -12,6 +12,7 @@ public static class ChatbotTelemetry
     public static readonly Counter<long> Fallbacks = Meter.CreateCounter<long>("chatbot.fallbacks");
     public static readonly Counter<long> Turns = Meter.CreateCounter<long>("chatbot.turns");
     public static readonly Counter<long> ProviderErrors = Meter.CreateCounter<long>("chatbot.provider.errors");
+    public static readonly Counter<long> OutOfScope = Meter.CreateCounter<long>("chatbot.out_of_scope");
     public static readonly Histogram<double> VoiceReplySeconds = Meter.CreateHistogram<double>("chatbot.voice.reply.seconds", "s");
     public static readonly Histogram<double> VoiceSessionSeconds = Meter.CreateHistogram<double>("chatbot.voice.session.seconds", "s");
     public static readonly Counter<long> VoiceTokens = Meter.CreateCounter<long>("chatbot.voice.tokens");

@@ -88,6 +88,9 @@ public static class ChatbotFoodPhoto
 
     public static string SynonymsVersion => Synonyms.Value.Version;
 
+    /// <summary>Every curated dish name, for the scope gate: a bare "bún chả" is a food question.</summary>
+    public static IReadOnlyList<string> KnownDishNames() => Synonyms.Value.Groups.SelectMany(g => g).ToArray();
+
     /// <summary>Other curated names for exactly this dish; a query that only contains a name is not expanded.</summary>
     public static IReadOnlyList<string> OtherNames(string query)
     {
