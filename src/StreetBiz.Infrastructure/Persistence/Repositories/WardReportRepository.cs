@@ -130,6 +130,71 @@ public sealed class WardReportRepository(StreetBizDbContext db) : IWardReportRep
             openViolations);
     }
 
+    public async Task<ReportPeriodFacts> GetPeriodFactsAsync(
+        int wardUnitId, DateOnly from, DateOnly to, CancellationToken cancellationToken)
+    {
+        var fromUtc = BusinessCalendar.StartOfDayUtc(from);
+        var toExclusiveUtc = BusinessCalendar.StartOfDayUtc(to.AddDays(1));
+
+        // The period's violations, scoped to the ward through the slot like the rest of this class.
+        var violations = await db.Violations.AsNoTracking()
+            .Where(violation => violation.slot != null && violation.slot.zone.ward_unit_id == wardUnitId
+                && violation.recorded_at >= fromUtc && violation.recorded_at < toExclusiveUtc)
+            .Select(violation => new
+            {
+                violation.violation_type,
+                Label = violation.violation_typeNavigation.description,
+                PenaltyStatus = violation.Penalty != null ? violation.Penalty.penalty_status : null,
+                PenaltyAmount = violation.Penalty != null ? violation.Penalty.amount : (decimal?)null,
+            })
+            .ToListAsync(cancellationToken);
+
+        // A waived or cancelled penalty is not a decision that stands, so it is not "issued".
+        var issued = violations
+            .Where(v => v.PenaltyStatus == PenaltyStatuses.Unpaid || v.PenaltyStatus == PenaltyStatuses.Paid)
+            .ToList();
+        var topTypes = violations
+            .GroupBy(v => v.violation_type)
+            .Select(g => new ViolationTypeCountRow(g.Key, g.First().Label, g.Count()))
+            .OrderByDescending(row => row.Count).ThenBy(row => row.Label)
+            .Take(3)
+            .ToList();
+
+        // On time = paid on or before the due day, judged on the Vietnamese calendar date.
+        var paid = await WardFeeItems(wardUnitId)
+            .Where(item => item.item_status == FeeItemStatuses.Paid
+                && item.paid_at >= fromUtc && item.paid_at < toExclusiveUtc)
+            .Select(item => new { item.due_date, item.paid_at })
+            .ToListAsync(cancellationToken);
+        var paidOnTime = paid.Count(item =>
+            BusinessCalendar.Today(DateTime.SpecifyKind(item.paid_at!.Value, DateTimeKind.Utc)) <= item.due_date);
+
+        var overdue = await OwedFeeItems(wardUnitId, FeeItemStatuses.Overdue)
+            .Select(item => new
+            {
+                item.fee_schedule.contract.vendor_id,
+                VendorName = item.fee_schedule.contract.vendor.user.full_name,
+                item.amount,
+            })
+            .ToListAsync(cancellationToken);
+        var debtor = overdue
+            .GroupBy(item => item.vendor_id)
+            .Select(g => new OverdueDebtorRow(g.First().VendorName ?? "Hộ kinh doanh", g.Sum(item => item.amount)))
+            .OrderByDescending(row => row.Amount)
+            .FirstOrDefault();
+
+        return new ReportPeriodFacts(
+            violations.Count,
+            issued.Count,
+            issued.Sum(v => v.PenaltyAmount ?? 0m),
+            topTypes,
+            paid.Count,
+            paidOnTime,
+            overdue.Count,
+            overdue.Select(item => item.vendor_id).Distinct().Count(),
+            debtor);
+    }
+
     private IQueryable<ScaffoldedModels.FeeScheduleItem> WardFeeItems(int wardUnitId) =>
         db.FeeScheduleItems.AsNoTracking()
             .Where(item => item.fee_schedule.contract.slot.zone.ward_unit_id == wardUnitId);
