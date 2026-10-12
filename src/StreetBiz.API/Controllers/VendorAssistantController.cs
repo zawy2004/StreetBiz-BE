@@ -5,6 +5,7 @@ using Microsoft.AspNetCore.RateLimiting;
 using StreetBiz.Application.Common.Exceptions;
 using StreetBiz.Application.Common.Interfaces;
 using StreetBiz.Application.Common.Security;
+using StreetBiz.Application.Features.Chatbot;
 using StreetBiz.Application.Features.WardCompliance;
 
 namespace StreetBiz.API.Controllers;
@@ -50,6 +51,12 @@ public sealed class VendorAssistantController(ICurrentUser currentUser, IAiCompl
         if (errors.Count > 0)
         {
             throw new ValidationAppException(errors);
+        }
+
+        // The same scope as the main assistant: StreetBiz only, and no paid model call for anything else.
+        if (!ChatbotScope.InScope(request.Question))
+        {
+            return Ok(new VendorAssistantResponse(ChatbotScope.Refusal("VENDOR"), false));
         }
 
         var answer = await aiService.AnswerVendorAssistantAsync(request.Question.Trim(), request.Context, ct);
