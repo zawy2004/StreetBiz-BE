@@ -65,7 +65,8 @@ public sealed record WardZoneDto(
     decimal? PricePerMonth,
     string RentalMode,
     DateOnly? EventStartDate,
-    DateOnly? EventEndDate);
+    DateOnly? EventEndDate,
+    decimal? QuarterDiscountPercent = null);
 
 /// <summary>
 /// Regulation parts are composed server-side into regulation_ref. On update, leaving all three
@@ -86,9 +87,9 @@ public sealed record UpsertZoneRequest(
     IReadOnlyList<ZoneFeeComponentInput> FeeComponents,
     string? ChangeReason,
     string? VersionToken,
-    /// <summary>"DAY" (default) or "MONTH". When MONTH, PricePerMonth is required and
-    /// PricePerDay is derived from it (ROUND(PricePerMonth / 30, 0)) rather than taken as-is --
-    /// price_per_day stays the sole input FeeQuoteCalculator/FeeInstalmentPlanner read.</summary>
+    /// <summary>"DAY" (default) or "MONTH". When MONTH, PricePerMonth is required, whole-month
+    /// terms are billed at it, and PricePerDay is derived from it (ROUND(PricePerMonth / 30, 0))
+    /// for EVENT and part-month terms rather than taken as-is.</summary>
     string PriceDisplayUnit = "DAY",
     long? PricePerMonth = null,
     /// <summary>"STANDARD" (default, long-term) or "EVENT" (short-term/pop-up, keeps the
@@ -96,13 +97,20 @@ public sealed record UpsertZoneRequest(
     /// not use PriceDisplayUnit MONTH.</summary>
     string RentalMode = "STANDARD",
     DateOnly? EventStartDate = null,
-    DateOnly? EventEndDate = null);
+    DateOnly? EventEndDate = null,
+    /// <summary>STANDARD only: % taken off the rent of a 3/6/12-month term; null = no discount.</summary>
+    decimal? QuarterDiscountPercent = null);
 
+/// <summary>The pricing fields default to "unchanged" so older clients that only send a day
+/// price keep previewing exactly what they did before.</summary>
 public sealed record ZoneImpactPreviewRequest(
     long PricePerDay,
     TimeOnly? AvailableFrom,
     TimeOnly? AvailableTo,
-    IReadOnlyList<ZoneFeeComponentInput> FeeComponents);
+    IReadOnlyList<ZoneFeeComponentInput> FeeComponents,
+    string? PriceDisplayUnit = null,
+    long? PricePerMonth = null,
+    decimal? QuarterDiscountPercent = null);
 
 public sealed record ZoneImpactItem(string Kind, long Id, string SlotCode, string VendorName, int TermDays, decimal CurrentTotal, decimal NewTotal);
 

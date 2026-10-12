@@ -28,7 +28,10 @@ public sealed record SidewalkSlotDto(
     string PriceDisplayUnit,
     decimal? PricePerMonth,
     string RentalMode,
-    DateOnly? EventEndDate);
+    DateOnly? EventEndDate,
+    /// <summary>The rent of a whole-month STANDARD term: what the slot card shows "/tháng".</summary>
+    decimal MonthlyPrice,
+    decimal? QuarterDiscountPercent);
 
 /// <summary>Maps domain records to DTOs for the Sidewalk Slot API.</summary>
 public static class SlotMapper
@@ -40,7 +43,8 @@ public static class SlotMapper
         distanceMeters,
         r.ImageUrl, r.HasPower, r.HasWater, r.HasTrashBin, r.BusinessCategory, r.TenantName,
         r.HoldExpiresAt is { } holdExpiresAt ? DateTime.SpecifyKind(holdExpiresAt, DateTimeKind.Utc) : null,
-        r.PriceDisplayUnit, r.PricePerMonth, r.RentalMode, r.EventEndDate);
+        r.PriceDisplayUnit, r.PricePerMonth, r.RentalMode, r.EventEndDate,
+        r.Pricing.MonthlyPrice, r.QuarterDiscountPercent);
 }
 
 public sealed record SlotProposalDto(

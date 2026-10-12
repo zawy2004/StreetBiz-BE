@@ -29,7 +29,13 @@ public sealed record FeeScheduleContextRow(
     string ContractStatus,
     int TermDays,
     decimal PricePerDay,
-    IReadOnlyList<FeeComponentRow> Components);
+    IReadOnlyList<FeeComponentRow> Components,
+    decimal? PricePerMonth = null,
+    string RentalMode = "STANDARD",
+    decimal? QuarterDiscountPercent = null)
+{
+    public ZonePricing Pricing => new(PricePerDay, PricePerMonth, RentalMode, QuarterDiscountPercent);
+}
 
 /// <summary>A fee schedule revision and its instalments.</summary>
 public sealed record FeeScheduleRow(

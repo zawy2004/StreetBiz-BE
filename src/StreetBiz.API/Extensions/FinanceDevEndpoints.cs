@@ -7,10 +7,10 @@ using StreetBiz.Application.Features.Finance.FeeReminders;
 namespace StreetBiz.API.Extensions;
 
 /// <summary>
-/// Development-only shortcuts for the finance module. WARD-08 (approve a rental application,
-/// which is what creates a contract and publishes
-/// <see cref="RentalContractApprovedEvent"/>) does not exist yet, so without these there is no
-/// way to exercise SYS-03 against a real database. They are never mapped outside Development.
+/// Development-only shortcuts for the finance module. WARD-08/09 approval now writes the fee
+/// schedule itself (WardComplianceService.PlanTermAsync, same calculator and planner); these
+/// remain for regenerating the schedule of a seeded contract through
+/// <see cref="RentalContractApprovedEvent"/>. They are never mapped outside Development.
 /// </summary>
 public static class FinanceDevEndpoints
 {

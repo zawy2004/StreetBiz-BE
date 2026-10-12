@@ -45,6 +45,8 @@ public partial class PricingZone
 
     public DateOnly? event_end_date { get; set; }
 
+    public decimal? quarter_discount_percent { get; set; }
+
     public virtual AdministrativeUnit? AdministrativeUnit { get; set; }
 
     public virtual ICollection<SidewalkSlot> SidewalkSlots { get; set; } = new List<SidewalkSlot>();

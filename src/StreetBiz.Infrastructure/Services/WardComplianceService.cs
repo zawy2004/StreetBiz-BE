@@ -12,6 +12,8 @@ using static StreetBiz.Infrastructure.Services.Documents.OfficialDocumentBuilder
 using StreetBiz.Application.Common.Exceptions;
 using StreetBiz.Application.Common.Models;
 using StreetBiz.Application.Common.Security;
+using StreetBiz.Application.Features.Finance;
+using StreetBiz.Application.Features.SidewalkSlots.GetSlotQuote;
 using StreetBiz.Application.Features.VendorKyc;
 using StreetBiz.Application.Features.WardCompliance;
 using StreetBiz.Application.Features.WardSlots;
@@ -693,6 +695,9 @@ public sealed class WardComplianceService(
 
         var canApprove = app.application_status is "PENDING" or "UNDER_REVIEW" && blockers.Count == 0;
 
+        var appComponents = await FeeComponentsByZoneAsync([app.slot.zone.zone_id], ct);
+        var quote = QuoteTerm(app.slot.zone, appComponents[app.slot.zone.zone_id], app.requested_term_days, isRenewal: false);
+
         return new WardRentalApplicationDetailDto(
             Id(app.application_id),
             app.application_method,
@@ -713,7 +718,10 @@ public sealed class WardComplianceService(
             app.reviewed_by?.ToString(CultureInfo.InvariantCulture),
             app.reviewed_at,
             canApprove,
-            blockers);
+            blockers,
+            quote.Total,
+            quote.BaseFee,
+            quote.Deposit);
     }
 
     public async Task<WardRentalApplicationDetailDto> DecideRentalApplicationAsync(
@@ -769,7 +777,8 @@ public sealed class WardComplianceService(
                 }
 
                 var startDate = DateOnly.FromDateTime(Now);
-                var endDate = startDate.AddDays(app.requested_term_days);
+                // end_date is inclusive: a 90-day term runs start .. start+89 (same as EventZoneBlocker).
+                var endDate = startDate.AddDays(app.requested_term_days - 1);
 
                 app.application_status = "APPROVED";
                 app.reviewed_by = actor.UserId;
@@ -804,14 +813,18 @@ public sealed class WardComplianceService(
                     issued_at = Now
                 });
 
-                var totalFee = app.requested_term_days * app.slot.zone.price_per_day;
-                db.FeeSchedules.Add(new FeeSchedule
+                // Billed with the same calculator the vendor was quoted with (rent, quarterly
+                // discount, fees and deposit), split into 30-day instalments (SYS-03).
+                var plan = await PlanTermAsync(app.slot.zone, app.requested_term_days, startDate, isRenewal: false, ct);
+                var feeSchedule = new FeeSchedule
                 {
                     contract_id = contract.contract_id,
                     revision = 1,
-                    total_amount = totalFee,
+                    total_amount = plan.Total,
                     generated_at = Now
-                });
+                };
+                AddInstalments(feeSchedule, plan);
+                db.FeeSchedules.Add(feeSchedule);
 
                 db.AuditLogs.Add(new AuditLog
                 {
@@ -873,6 +886,56 @@ public sealed class WardComplianceService(
         }, ct);
 
         return await GetRentalApplicationDetailAsync(actor, applicationId, ct);
+    }
+
+    /// <summary>Prices a term exactly as the vendor's quote did (FeeQuoteCalculator) and splits it
+    /// into instalments (FeeInstalmentPlanner), so an approved contract never costs more or less
+    /// than what was quoted. A renewal skips ONE_TIME fees and the deposit.</summary>
+    private async Task<FeePlan> PlanTermAsync(
+        PricingZone zone, int termDays, DateOnly startDate, bool isRenewal, CancellationToken ct)
+    {
+        var components = await FeeComponentsByZoneAsync([zone.zone_id], ct);
+        return FeeInstalmentPlanner.Plan(QuoteTerm(zone, components[zone.zone_id], termDays, isRenewal), startDate);
+    }
+
+    private static StreetBiz.Application.DTOs.Sidewalk.FeeQuoteDto QuoteTerm(
+        PricingZone zone, IReadOnlyList<FeeComponentRow> components, int termDays, bool isRenewal) =>
+        FeeQuoteCalculator.Calculate(
+            0,
+            new ZonePricing(zone.price_per_day, zone.price_per_month, zone.rental_mode, zone.quarter_discount_percent),
+            termDays,
+            components,
+            isRenewal);
+
+    /// <summary>Every listed zone gets an entry, empty when it has no fee components.</summary>
+    private async Task<Dictionary<int, IReadOnlyList<FeeComponentRow>>> FeeComponentsByZoneAsync(
+        IReadOnlyCollection<int> zoneIds, CancellationToken ct)
+    {
+        var rows = await db.ZoneFeeComponents.AsNoTracking()
+            .Where(c => zoneIds.Contains(c.zone_id))
+            .OrderBy(c => c.sort_order).ThenBy(c => c.component_id)
+            .Select(c => new
+            {
+                c.zone_id,
+                Row = new FeeComponentRow(c.component_id, c.component_name, c.calc_basis, c.unit_amount, c.sort_order),
+            })
+            .ToListAsync(ct);
+        return zoneIds.Distinct().ToDictionary(
+            id => id,
+            id => (IReadOnlyList<FeeComponentRow>)rows.Where(r => r.zone_id == id).Select(r => r.Row).ToList());
+    }
+
+    private static void AddInstalments(FeeSchedule schedule, FeePlan plan)
+    {
+        foreach (var instalment in plan.Instalments.OrderBy(i => i.Ordinal))
+        {
+            schedule.FeeScheduleItems.Add(new FeeScheduleItem
+            {
+                due_date = instalment.DueDate,
+                amount = instalment.Amount,
+                item_status = DebtStatuses.FeeItemPending,
+            });
+        }
     }
 
     /// <summary>EVENT zones (Phase C) only accept a term that fits within their event window --
@@ -1063,6 +1126,9 @@ public sealed class WardComplianceService(
             .Distinct()
             .ToListAsync(ct)).ToHashSet();
 
+        var componentsByZone = await FeeComponentsByZoneAsync(
+            renewals.Select(r => r.contract.slot.zone.zone_id).ToList(), ct);
+
         var result = new List<WardRenewalListItemDto>();
         foreach (var r in renewals)
         {
@@ -1070,8 +1136,10 @@ public sealed class WardComplianceService(
             var vendorName = reg.display_name;
             var currentEnd = r.contract.end_date;
             var proposedEnd = currentEnd.AddDays(r.requested_term_days);
-            var pricePerDay = r.contract.slot.zone.price_per_day;
-            var totalFee = r.requested_term_days * pricePerDay;
+            var zone = r.contract.slot.zone;
+            var pricePerDay = zone.price_per_day;
+            // What approving it will bill: the renewal quote (no one-time fee, no new deposit).
+            var totalFee = QuoteTerm(zone, componentsByZone[zone.zone_id], r.requested_term_days, isRenewal: true).Total;
 
             var vList = violations.Where(v => v.contract_id == r.contract_id || v.vendor_id == r.contract.vendor_id).ToList();
             var vCount = vList.Count;
@@ -1145,7 +1213,9 @@ public sealed class WardComplianceService(
         var proposedEndDate = currentEndDate.AddDays(renewal.requested_term_days);
 
         var pricePerDay = contract.slot.zone.price_per_day;
-        var totalFee = renewal.requested_term_days * pricePerDay;
+        var renewalComponents = await FeeComponentsByZoneAsync([contract.slot.zone.zone_id], ct);
+        var totalFee = QuoteTerm(
+            contract.slot.zone, renewalComponents[contract.slot.zone.zone_id], renewal.requested_term_days, isRenewal: true).Total;
 
         var compliance = await BuildRenewalComplianceSnapshotAsync(renewal, reg, ct);
         var canApprove = (renewal.renewal_status is RenewalStatuses.Pending or RenewalStatuses.UnderReview)
@@ -1243,28 +1313,32 @@ public sealed class WardComplianceService(
 
                 renewal.contract.end_date = newEndDate;
 
-                // Mark current active fee schedule superseded
-                var feeSchedules = await db.FeeSchedules
-                    .Where(fs => fs.contract_id == renewal.contract_id)
-                    .ToListAsync(ct);
+                // The renewal term is billed as a renewal (no one-time fee, no second deposit) from
+                // the day after the old end date. Its instalments are appended to the contract's
+                // open schedule: superseding it would hide instalments already paid or still due
+                // for the original term.
+                var plan = await PlanTermAsync(
+                    renewal.contract.slot.zone, renewal.requested_term_days, currentEndDate.AddDays(1), isRenewal: true, ct);
 
-                var activeFee = feeSchedules.FirstOrDefault(fs => fs.superseded_at == null);
-                if (activeFee != null)
+                var activeFee = await db.FeeSchedules
+                    .SingleOrDefaultAsync(fs => fs.contract_id == renewal.contract_id && fs.superseded_at == null, ct);
+                if (activeFee is null)
                 {
-                    activeFee.superseded_at = Now;
+                    var highestRevision = await db.FeeSchedules
+                        .Where(fs => fs.contract_id == renewal.contract_id)
+                        .MaxAsync(fs => (int?)fs.revision, ct) ?? 0;
+                    activeFee = new FeeSchedule
+                    {
+                        contract_id = renewal.contract_id,
+                        revision = highestRevision + 1,
+                        total_amount = 0m,
+                        generated_at = Now
+                    };
+                    db.FeeSchedules.Add(activeFee);
                 }
 
-                var nextRev = feeSchedules.Count > 0 ? feeSchedules.Max(fs => fs.revision) + 1 : 1;
-                var pricePerDay = renewal.contract.slot.zone.price_per_day;
-                var totalFee = renewal.requested_term_days * pricePerDay;
-
-                db.FeeSchedules.Add(new FeeSchedule
-                {
-                    contract_id = renewal.contract_id,
-                    revision = nextRev,
-                    total_amount = totalFee,
-                    generated_at = Now
-                });
+                activeFee.total_amount += plan.Total;
+                AddInstalments(activeFee, plan);
 
                 db.AuditLogs.Add(new AuditLog
                 {

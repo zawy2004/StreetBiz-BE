@@ -49,7 +49,7 @@ public sealed class GenerateFeeScheduleCommandHandler(IFinanceRepository finance
         // Same calculator as the SIDE-02 quote, so the schedule cannot drift from the price the
         // vendor applied against.
         var quote = FeeQuoteCalculator.Calculate(
-            context.SlotId, context.PricePerDay, context.TermDays, context.Components);
+            context.SlotId, context.Pricing, context.TermDays, context.Components);
 
         var plan = FeeInstalmentPlanner.Plan(quote, context.StartDate);
 

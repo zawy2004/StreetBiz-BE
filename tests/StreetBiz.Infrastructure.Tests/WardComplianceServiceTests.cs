@@ -286,6 +286,42 @@ public sealed class WardComplianceServiceTests
     }
 
     [Fact]
+    public async Task Approving_an_application_bills_exactly_what_the_vendor_was_quoted()
+    {
+        using var f = await Fixture.Create();
+        using (var seed = f.NewDb())
+        {
+            var zone = await seed.PricingZones.SingleAsync(z => z.zone_id == 1);
+            zone.price_display_unit = "MONTH";
+            zone.price_per_month = 1_000_000;
+            zone.price_per_day = 33_333;
+            zone.quarter_discount_percent = 10;
+            seed.ZoneFeeComponents.AddRange(
+                new ZoneFeeComponent { zone_id = 1, component_name = "Phí vệ sinh", calc_basis = "PER_DAY", unit_amount = 3_000, sort_order = 0 },
+                new ZoneFeeComponent { zone_id = 1, component_name = "Phí hồ sơ", calc_basis = "ONE_TIME", unit_amount = 150_000, sort_order = 1 },
+                new ZoneFeeComponent { zone_id = 1, component_name = "Tiền đặt cọc", calc_basis = "DEPOSIT", unit_amount = 500_000, sort_order = 2 });
+            var app = await seed.RentalApplications.SingleAsync(a => a.application_id == 1);
+            app.requested_term_days = 90;
+            await seed.SaveChangesAsync();
+        }
+
+        await f.NewService().DecideRentalApplicationAsync(
+            f.Actor, 1, new WardRentalApplicationDecision("APPROVE", "Đạt yêu cầu", "PENDING"), default);
+
+        using var verify = f.NewDb();
+        var contract = await verify.RentalContracts.SingleAsync();
+        // Inclusive end date: 90 days run start .. start+89.
+        Assert.Equal(contract.start_date.AddDays(89), contract.end_date);
+
+        var schedule = await verify.FeeSchedules.Include(fs => fs.FeeScheduleItems)
+            .SingleAsync(fs => fs.contract_id == contract.contract_id);
+        // 3 x 1 000 000 - 10% + 90 x 3 000 + 150 000 + 500 000 deposit -- not 90 x 33 333.
+        Assert.Equal(3_620_000, schedule.total_amount);
+        Assert.Equal(3, schedule.FeeScheduleItems.Count);
+        Assert.Equal(schedule.total_amount, schedule.FeeScheduleItems.Sum(i => i.amount));
+    }
+
+    [Fact]
     public async Task Revoking_a_permit_from_the_compliance_banner_is_tagged_in_the_audit_log()
     {
         using var f = await Fixture.Create();
@@ -884,7 +920,7 @@ public sealed class WardComplianceServiceTests
     }
 
     [Fact]
-    public async Task Approving_renewal_extends_contract_end_date_and_creates_new_fee_schedule_revision()
+    public async Task Approving_renewal_extends_contract_end_date_and_appends_the_renewal_term_to_the_open_schedule()
     {
         using var f = await Fixture.Create();
         var today = DateOnly.FromDateTime(DateTime.UtcNow);
@@ -951,12 +987,16 @@ public sealed class WardComplianceServiceTests
         Assert.Equal(initialEndDate.AddDays(30), renewal.new_end_date);
         Assert.Equal(1, renewal.reviewed_by);
 
-        var oldFee = await verify.FeeSchedules.SingleAsync(fs => fs.fee_schedule_id == 501);
-        Assert.NotNull(oldFee.superseded_at);
-
-        var newFee = await verify.FeeSchedules.SingleAsync(fs => fs.contract_id == 501 && fs.revision == 2);
-        Assert.Equal(1500000, newFee.total_amount);
-        Assert.Null(newFee.superseded_at);
+        // The original term's schedule stays open (its instalments may already be paid); the
+        // renewal's 30 days (one month at 50 000 x 30) are added to it from the day after the old end.
+        var schedule = await verify.FeeSchedules.Include(fs => fs.FeeScheduleItems)
+            .SingleAsync(fs => fs.contract_id == 501);
+        Assert.Equal(501, schedule.fee_schedule_id);
+        Assert.Null(schedule.superseded_at);
+        Assert.Equal(3_000_000, schedule.total_amount);
+        var renewalItem = Assert.Single(schedule.FeeScheduleItems);
+        Assert.Equal(initialEndDate.AddDays(1), renewalItem.due_date);
+        Assert.Equal(1_500_000, renewalItem.amount);
 
         var audit = await verify.AuditLogs.SingleAsync(a => a.action == "RENEWAL_APPROVED");
         Assert.Equal(601, audit.entity_id);

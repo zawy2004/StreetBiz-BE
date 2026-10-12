@@ -28,6 +28,6 @@ public sealed class GetSlotQuoteQueryHandler(ISidewalkSlotRepository slots, ISid
 
         var components = await zones.ListFeeComponentsAsync(slot.ZoneId, cancellationToken);
 
-        return FeeQuoteCalculator.Calculate(slot.SlotId, slot.PricePerDay, request.TermDays, components);
+        return FeeQuoteCalculator.Calculate(slot.SlotId, slot.Pricing, request.TermDays, components);
     }
 }

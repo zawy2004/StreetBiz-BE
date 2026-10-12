@@ -4,6 +4,7 @@ using StreetBiz.Application.Common.Exceptions;
 using StreetBiz.Application.Common.Interfaces;
 using StreetBiz.Application.Common.Models;
 using StreetBiz.Application.Common.Security;
+using StreetBiz.Application.DTOs.Sidewalk;
 using StreetBiz.Application.Features.Finance;
 using StreetBiz.Application.Features.Finance.GenerateFeeSchedule;
 using StreetBiz.Application.Features.SidewalkSlots.GetSlotQuote;
@@ -117,6 +118,79 @@ public sealed class FeeScheduleGenerationTests
 
         plan.Instalments.Sum(instalment => instalment.Amount).Should().Be(plan.Total);
         plan.Instalments.Should().OnlyContain(instalment => instalment.Amount == Math.Round(instalment.Amount, 0));
+    }
+
+    // ---- STANDARD zones: monthly rent, quarterly discount, one-off fees ----
+
+    private static readonly ZonePricing Monthly = new(33_333m, 1_000_000m, RentalModes.Standard, 10m);
+
+    private static IReadOnlyList<FeeComponentRow> OneOffComponents() =>
+    [
+        new(1, "Phí vệ sinh môi trường", FeeBases.PerDay, 3_000m, 1),
+        new(2, "Phí quản lý hồ sơ", FeeBases.OneTime, 150_000m, 2),
+        new(3, "Tiền đặt cọc", FeeBases.Deposit, 500_000m, 3),
+    ];
+
+    [Fact]
+    public void A_whole_month_term_bills_the_monthly_price_not_a_rounded_day_rate()
+    {
+        var quote = FeeQuoteCalculator.Calculate(1, Monthly, 30, []);
+
+        quote.Lines.Should().ContainSingle();
+        quote.Lines[0].Should().Be(new FeeQuoteLineDto("RENT", null, FeeBases.PerMonth, 1_000_000m, 1, 1_000_000m));
+        quote.BaseFee.Should().Be(1_000_000m);
+    }
+
+    [Theory]
+    [InlineData(90, 3)]
+    [InlineData(180, 6)]
+    [InlineData(360, 12)]
+    public void Every_whole_quarter_term_takes_the_discount_off_the_rent(int termDays, int months)
+    {
+        var quote = FeeQuoteCalculator.Calculate(1, Monthly, termDays, []);
+
+        var rent = 1_000_000m * months;
+        quote.Lines.Should().Contain(l => l.Kind == "DISCOUNT" && l.Amount == -rent / 10);
+        quote.BaseFee.Should().Be(rent * 0.9m);
+    }
+
+    [Fact]
+    public void One_month_has_no_discount_and_an_event_zone_never_has_one()
+    {
+        FeeQuoteCalculator.Calculate(1, Monthly, 30, []).Lines.Should().NotContain(l => l.Kind == "DISCOUNT");
+        FeeQuoteCalculator.Calculate(1, Monthly with { RentalMode = RentalModes.Event }, 90, [])
+            .Lines.Should().NotContain(l => l.Kind == "DISCOUNT");
+    }
+
+    [Fact]
+    public void The_discount_never_touches_the_fees_and_the_deposit_is_not_a_fee()
+    {
+        var quote = FeeQuoteCalculator.Calculate(1, Monthly, 90, OneOffComponents());
+
+        quote.BaseFee.Should().Be(2_700_000m);
+        quote.ReferenceFees.Should().Be(270_000m + 150_000m);
+        quote.Deposit.Should().Be(500_000m);
+        quote.Total.Should().Be(3_620_000m);
+        quote.IsReferenceOnly.Should().BeFalse();
+    }
+
+    [Fact]
+    public void A_renewal_charges_neither_the_one_time_fee_nor_a_second_deposit()
+    {
+        var quote = FeeQuoteCalculator.Calculate(1, Monthly, 90, OneOffComponents(), isRenewal: true);
+
+        quote.Lines.Should().NotContain(l => l.CalcBasis == FeeBases.OneTime || l.Kind == "DEPOSIT");
+        quote.Total.Should().Be(2_700_000m + 270_000m);
+    }
+
+    [Fact]
+    public void A_discounted_term_is_spread_evenly_with_one_offs_on_the_first_instalment()
+    {
+        var plan = FeeInstalmentPlanner.Plan(FeeQuoteCalculator.Calculate(1, Monthly, 90, OneOffComponents()), Start);
+
+        // (2 700 000 + 270 000) / 3 = 990 000 a month, plus 650 000 once.
+        plan.Instalments.Select(i => i.Amount).Should().Equal(1_640_000m, 990_000m, 990_000m);
+        plan.Instalments.Sum(i => i.Amount).Should().Be(plan.Total);
     }
 
     [Fact]

@@ -817,6 +817,7 @@ public partial class StreetBizDbContext : DbContext
                 .HasComputedColumnSql("(CONVERT([nvarchar](30),N'WARD_AUTHORITY'))", true);
             entity.Property(e => e.price_per_day).HasColumnType("decimal(18, 0)");
             entity.Property(e => e.price_per_month).HasColumnType("decimal(18, 0)");
+            entity.Property(e => e.quarter_discount_percent).HasColumnType("decimal(5, 2)");
             entity.Property(e => e.price_display_unit).HasMaxLength(10).HasDefaultValue("DAY");
             entity.Property(e => e.rental_mode).HasMaxLength(10).HasDefaultValue("STANDARD");
             entity.Property(e => e.regulation_ref).HasMaxLength(120);

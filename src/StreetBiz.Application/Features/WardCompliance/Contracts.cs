@@ -124,7 +124,12 @@ public sealed record WardRentalApplicationDetailDto(
     string? ReviewedBy,
     DateTime? ReviewedAt,
     bool CanApprove,
-    IReadOnlyList<string> Blockers);
+    IReadOnlyList<string> Blockers,
+    /// <summary>What approving it will bill (rent after any quarterly discount, fees, deposit) --
+    /// the same quote the vendor applied against.</summary>
+    decimal TotalFee = 0m,
+    decimal RentFee = 0m,
+    decimal Deposit = 0m);
 
 public sealed record WardRentalApplicationDecision(
     string Decision,

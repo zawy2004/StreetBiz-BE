@@ -51,7 +51,10 @@ public sealed class FinanceRepository(
                         component.calc_basis,
                         component.unit_amount,
                         component.sort_order))
-                    .ToList()))
+                    .ToList(),
+                contract.slot.zone.price_per_month,
+                contract.slot.zone.rental_mode,
+                contract.slot.zone.quarter_discount_percent))
             .FirstOrDefaultAsync(cancellationToken);
 
     public async Task<FeeScheduleRow> ReplaceFeeScheduleAsync(

@@ -88,6 +88,11 @@
    The API never runs schema changes (docs/database.md).
 
    CHANGE LOG (newest first)
+     2026-10-12  Monthly rent + quarterly discount: PricingZones.quarter_discount_percent
+                 (STANDARD only; % off the rent of a 3/6/12-month term). STANDARD whole-month
+                 terms now bill price_per_month itself. ZoneFeeComponents.calc_basis gains
+                 ONE_TIME (first contract only) and DEPOSIT (refundable, first contract only).
+                 UserAccounts.failed_login_count/lockout_until (sign-in lockout).
      2026-10-06  Add isolated role-scoped assistant conversations, messages, audit,
                  idempotency keys and generation leases (explicit SQL Server exception).
      2026-10-06  Rental-term/compliance revamp: PricingZones gets price_display_unit/
@@ -461,13 +466,15 @@ CREATE TABLE PricingZones (
     segment_from         NVARCHAR(150)  NULL,  -- street segment ends
     segment_to           NVARCHAR(150)  NULL,
     application_deadline DATE           NULL,
-    -- price_per_day stays the only value FeeQuoteCalculator/FeeInstalmentPlanner read.
-    -- price_per_month is a convenience: when an officer enters a monthly price,
-    -- price_per_day is derived from it (ROUND(price_per_month / 30, 0)) and both are kept
-    -- so re-opening the zone to edit shows back the exact figure they typed, not a rounded
-    -- day-rate reconstruction of it.
+    -- A STANDARD zone rents by whole months (30-day units): the rent of such a term is
+    -- price_per_month x months when an officer entered a monthly price, else
+    -- price_per_day x 30 x months. price_per_day (derived as ROUND(price_per_month / 30, 0)
+    -- when a monthly price is entered) still prices EVENT and part-month terms.
     price_display_unit   NVARCHAR(10)   NOT NULL DEFAULT 'DAY',
     price_per_month       DECIMAL(18,0) NULL,
+    -- % taken off the rent (never the fees) of a term that is a whole number of quarters
+    -- (3/6/12 months). NULL = no discount. STANDARD zones only.
+    quarter_discount_percent DECIMAL(5,2) NULL,
     -- EVENT zones keep the existing day-by-day rental flow unchanged (SlotApplyForm's free-
     -- text day count); only STANDARD zones get the month-based quick-select. event_* dates
     -- bound how long a short-term/pop-up zone accepts applications.
@@ -486,6 +493,9 @@ CREATE TABLE PricingZones (
     -- An event's day-by-day pricing has no monthly equivalent worth entering.
     CONSTRAINT CK_PricingZones_EventIsDailyPriced
         CHECK (rental_mode = 'STANDARD' OR price_display_unit = 'DAY'),
+    CONSTRAINT CK_PricingZones_QuarterDiscount
+        CHECK (quarter_discount_percent IS NULL
+            OR (rental_mode = 'STANDARD' AND quarter_discount_percent > 0 AND quarter_discount_percent < 100)),
     CONSTRAINT FK_PricingZones_Ward
         FOREIGN KEY (ward_unit_id, ward_unit_type)
         REFERENCES AdministrativeUnits(unit_id, unit_type),
@@ -569,7 +579,9 @@ CREATE TABLE ZoneFeeComponents (
     unit_amount     DECIMAL(18,0)      NOT NULL,
     sort_order      INT                NOT NULL DEFAULT 0,
     CONSTRAINT CK_ZoneFeeComponents_Basis
-        CHECK (calc_basis IN ('PER_DAY','PER_TERM')),
+        -- PER_DAY x term days; PER_TERM once per term (again on renewal); ONE_TIME and
+        -- DEPOSIT once on the first contract only, DEPOSIT being refundable and not a fee.
+        CHECK (calc_basis IN ('PER_DAY','PER_TERM','ONE_TIME','DEPOSIT')),
     CONSTRAINT CK_ZoneFeeComponents_Amount
         CHECK (unit_amount >= 0),
     CONSTRAINT FK_ZoneFeeComponents_Zone

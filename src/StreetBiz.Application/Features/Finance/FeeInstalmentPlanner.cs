@@ -12,9 +12,10 @@ namespace StreetBiz.Application.Features.Finance;
 ///
 /// BR-18 fixes the inputs (start date + vendor-selected term) but leaves the cadence open. The
 /// rule chosen for this project: instalments cover <see cref="PeriodDays"/>-day periods counted
-/// from the contract start date; PER_TERM components (admin fee, deposit) fall entirely on the
-/// first instalment; the final instalment absorbs rounding so the instalments always sum to the
-/// total that FeeSchedules.total_amount stores.
+/// from the contract start date; one-off lines (PER_TERM / ONE_TIME fees, the deposit) fall
+/// entirely on the first instalment; everything else (rent after discount, PER_DAY fees) is spread
+/// over the periods in proportion to their days; the final instalment absorbs rounding so the
+/// instalments always sum to the total that FeeSchedules.total_amount stores.
 /// </summary>
 public static class FeeInstalmentPlanner
 {
@@ -29,9 +30,10 @@ public static class FeeInstalmentPlanner
         }
 
         var termDays = quote.TermDays;
-        var dailyRate = quote.Lines.Where(line => line.CalcBasis == FeeBases.PerDay).Sum(line => line.UnitAmount);
-        var oneOff = quote.Lines.Where(line => line.CalcBasis == FeeBases.PerTerm).Sum(line => line.UnitAmount);
         var total = Whole(quote.Total);
+        // The DISCOUNT line shares the rent's basis, so it is never mistaken for a one-off.
+        var oneOff = quote.Lines.Where(line => FeeBases.IsOneOff(line.CalcBasis)).Sum(line => line.Amount);
+        var recurring = total - Whole(oneOff);
 
         var count = (termDays + PeriodDays - 1) / PeriodDays;
         var instalments = new List<FeeInstalment>(count);
@@ -47,7 +49,7 @@ public static class FeeInstalmentPlanner
                 // The last instalment is the remainder, so rounding can never leave the
                 // instalments disagreeing with the stored total.
                 ? total - allocated
-                : Whole(dailyRate * daysInPeriod) + (ordinal == 1 ? Whole(oneOff) : 0m);
+                : Whole(recurring * daysInPeriod / termDays) + (ordinal == 1 ? Whole(oneOff) : 0m);
 
             allocated += amount;
             instalments.Add(new FeeInstalment(
