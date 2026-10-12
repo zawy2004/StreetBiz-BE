@@ -994,7 +994,9 @@ GO
    (1, 9, 10) were confirmed by an officer against the physical CCCD; 2 and 4 were
    not, so the ward still has to confirm identity before it can approve them.
    Registration 3 is left blank on purpose to show an incomplete form. The ID
-   numbers are fictional.
+   numbers are fictional. Registration 4 deliberately carries registration 2's
+   number under a different account, so the ward's duplicate check (AIC-03) has
+   a real finding to show.
    ============================================================ */
 
 UPDATE BusinessRegistrations SET
@@ -1052,7 +1054,7 @@ UPDATE BusinessRegistrations SET
 WHERE registration_id = 10 AND id_number IS NULL;
 
 UPDATE BusinessRegistrations SET
-    id_type = 'CCCD', id_number = '048090000004', id_issued_date = '2021-09-09',
+    id_type = 'CCCD', id_number = '048079000002', id_issued_date = '2021-09-09',
     id_issued_place = N'Cục Cảnh sát QLHC về TTXH', owner_date_of_birth = '1990-07-25',
     owner_gender = N'Nam', owner_ethnicity = N'Kinh',
     permanent_address = N'9 Trần Phú, Phường Hải Châu 1, Đà Nẵng',
@@ -1074,7 +1076,8 @@ IF NOT EXISTS (SELECT 1 FROM BusinessRegistrationHouseholdMembers)
 GO
 
 -- Recorded outcomes of the AI checks (decision support only, BR-41). Registration 2 matches;
--- registration 4 does not, which the ward screen should flag without deciding anything.
+-- registration 4 does not: the card reads a different number than the one declared (which is
+-- registration 2's) and the face is not the card's. The ward screen should flag it without deciding.
 IF NOT EXISTS (SELECT 1 FROM KycVerificationResults)
     INSERT INTO KycVerificationResults
         (user_id, registration_id, check_type, provider, is_match, similarity_percent,

@@ -126,6 +126,7 @@ public static class DependencyInjection
         services.AddScoped<IPlatformAdministrationRepository, PlatformAdministrationRepository>();
         services.AddScoped<IFinanceRepository, FinanceRepository>();
         services.AddScoped<IWardReportRepository, WardReportRepository>();
+        services.AddScoped<StreetBiz.Application.Features.RegistrationIntegrity.IRegistrationIntegrityReader, RegistrationIntegrityReader>();
         services.Configure<FeeReminderOptions>(configuration.GetSection(FeeReminderOptions.SectionName));
         services.AddHostedService<FeeReminderHostedService>();
         services.AddScoped<ICommerceRepository, CommerceRepository>();
