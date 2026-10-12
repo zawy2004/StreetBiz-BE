@@ -42,18 +42,19 @@ This is the rule for everyone working in this repo:
    Do not write an `ALTER` script, a patch, a "fix" script or a feature-specific `.sql`
    file, and do not put SQL under `docs/`. A change that lives in a side file is
    invisible to the next person who builds a database.
-2. Add one line to the **change log** at the top of that file (newest first).
-3. If demo data is affected, update `db/StreetBiz_Demo_Seed.sql` in the same change.
-   New reference data (a role, a ward, a violation type) goes in section 10 of the
-   schema file instead. Seed rows that need an account must use the demo accounts
-   below; never invent a password hash (see the last section).
-4. Update the EF model to match: the scaffolded types in
+2. If demo data is affected, update `db/StreetBiz_Demo_Seed.sql` in the same change,
+   putting each value in the `INSERT` of its row (no `UPDATE` afterwards to patch
+   rows the same script just created). New reference data (a role, a ward, a
+   violation type) goes in section 10 of the schema file instead. Seed rows that need
+   an account must use the demo accounts below; never invent a password hash (see the
+   last section).
+3. Update the EF model to match: the scaffolded types in
    `src/StreetBiz.Infrastructure/Persistence/ScaffoldedModels` and
    `StreetBizDbContext.cs` (hand-edit, or re-scaffold and review the diff). The
    Infrastructure tests build their SQLite schema from this model.
-5. Verify on an empty database: `scripts/setup-local-db.ps1 -Recreate`, then run the
+4. Verify on an empty database: `scripts/setup-local-db.ps1 -Recreate`, then run the
    tests and start the API.
-6. In the PR, tell the team they must rebuild their local database.
+5. In the PR, tell the team they must rebuild their local database.
 
 Keep the seed idempotent (guard each block) so re-running it is harmless.
 
