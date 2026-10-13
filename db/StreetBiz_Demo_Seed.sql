@@ -397,6 +397,25 @@ BEGIN
 END;
 GO
 
+/* Registration 10: a second, APPROVED registration for vendor 2 (no contract of its
+   own). It lives here, not with the sidewalk workflows below, because the AIC-07
+   occupancy history files rental applications against it and a foreign key needs the
+   registration to exist first. */
+IF NOT EXISTS (SELECT 1 FROM BusinessRegistrations WHERE registration_id = 10)
+BEGIN
+    SET IDENTITY_INSERT BusinessRegistrations ON;
+    INSERT INTO BusinessRegistrations
+        (registration_id, vendor_id, vendor_type, display_name, declared_address,
+         address_latitude, address_longitude, ward_unit_id, registration_status,
+         fast_track_flag, reviewed_by, review_decision_reason, reviewed_at, created_at)
+    VALUES
+        (10, 2, 'ITINERANT', N'Xe nước ép Tám Ù', NULL, NULL, NULL, 10,
+            'APPROVED', 0, 2, N'Hồ sơ đầy đủ, đủ điều kiện kinh doanh lưu động.',
+            DATEADD(DAY, -8, SYSUTCDATETIME()), DATEADD(DAY, -12, SYSUTCDATETIME()));
+    SET IDENTITY_INSERT BusinessRegistrations OFF;
+END;
+GO
+
 /* Evidence (REG-02).
    EvidenceTypes.RequiredFor(): IDENTITY_DOCUMENT always, plus BUSINESS_LICENSE for
    a fixed storefront. Registration 3 is deliberately left with none so the ward
@@ -780,20 +799,8 @@ GO
    vendor who can hold a slot and apply for one (BR-06 allows several).
    ============================================================ */
 
-IF NOT EXISTS (SELECT 1 FROM BusinessRegistrations WHERE registration_id = 10)
-BEGIN
-    SET IDENTITY_INSERT BusinessRegistrations ON;
-    INSERT INTO BusinessRegistrations
-        (registration_id, vendor_id, vendor_type, display_name, declared_address,
-         address_latitude, address_longitude, ward_unit_id, registration_status,
-         fast_track_flag, reviewed_by, review_decision_reason, reviewed_at, created_at)
-    VALUES
-        (10, 2, 'ITINERANT', N'Xe nước ép Tám Ù', NULL, NULL, NULL, 10,
-            'APPROVED', 0, 2, N'Hồ sơ đầy đủ, đủ điều kiện kinh doanh lưu động.',
-            DATEADD(DAY, -8, SYSUTCDATETIME()), DATEADD(DAY, -12, SYSUTCDATETIME()));
-    SET IDENTITY_INSERT BusinessRegistrations OFF;
-END;
-GO
+-- Registration 10 itself is created with the other registrations, above: the AIC-07
+-- occupancy history files rental applications against it before this section runs.
 
 -- Evidence for registration 10, and the CCCD back / portrait for registration 2 (eKYC).
 -- The files are the placeholders scripts/setup-local-db.ps1 writes; several rows share one.
