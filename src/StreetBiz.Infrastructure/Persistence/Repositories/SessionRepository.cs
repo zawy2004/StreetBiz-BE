@@ -67,6 +67,15 @@ public sealed class SessionRepository(
         await dbContext.SaveChangesAsync(cancellationToken);
     }
 
+    public async Task<bool> TryRevokeAsync(long sessionId, CancellationToken cancellationToken)
+    {
+        var now = clock.UtcNow;
+        var rows = await dbContext.UserSessions
+            .Where(s => s.session_id == sessionId && s.revoked_at == null)
+            .ExecuteUpdateAsync(set => set.SetProperty(s => s.revoked_at, now), cancellationToken);
+        return rows == 1;
+    }
+
     public async Task RevokeAllForUserAsync(long userId, CancellationToken cancellationToken)
     {
         var now = clock.UtcNow;

@@ -777,6 +777,7 @@ public sealed class AiComplianceService : IAiComplianceService
             1. Trả lời bằng tiếng Việt lịch sự, rõ ràng, dễ hiểu cho người bán hàng rong và hộ kinh doanh nhỏ.
             2. Trích dẫn đúng tên luật và nghị định khi liên quan đến quyền lợi hoặc xử phạt.
             3. Luôn lưu ý rằng các ý kiến tư vấn mang tính chất hướng dẫn, quyết định cấp phép và xử phạt thuộc thẩm quyền của UBND Phường.
+            4. Chỉ trả lời nội dung liên quan đến StreetBiz và việc kinh doanh trên vỉa hè. Chủ đề khác thì từ chối lịch sự và nói rõ chỉ hỗ trợ StreetBiz.
             """;
 
         var userPrompt = string.IsNullOrWhiteSpace(context)

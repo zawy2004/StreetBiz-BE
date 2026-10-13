@@ -30,3 +30,22 @@ public sealed record WardDashboardRow(
     decimal RevenueCollected,
     decimal OutstandingDebt,
     int OpenViolations);
+
+/// <summary>
+/// What the AIC-08 summary needs beyond the WARD-14/15 totals: how the period's violations break
+/// down, how many paid instalments arrived on time, and who owes the most right now.
+/// </summary>
+public sealed record ReportPeriodFacts(
+    int ViolationCount,
+    int PenaltiesIssued,
+    decimal PenaltiesIssuedAmount,
+    IReadOnlyList<ViolationTypeCountRow> TopViolationTypes,
+    int FeeItemsPaid,
+    int FeeItemsPaidOnTime,
+    int OverdueItemCount,
+    int OverdueVendorCount,
+    OverdueDebtorRow? LargestDebtor);
+
+public sealed record ViolationTypeCountRow(string ViolationType, string Label, int Count);
+
+public sealed record OverdueDebtorRow(string VendorName, decimal Amount);

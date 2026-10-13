@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Microsoft.OpenApi.Models;
@@ -50,6 +51,7 @@ builder.Services.AddProblemDetails();
 builder.Services.AddWardApi();
 builder.Services.AddCommunityApi();
 builder.Services.AddAuthRateLimits(builder.Environment);
+builder.Services.AddChatbotApi();
 // ai/vendor-assistant calls a paid LLM per request; an earlier draft left it [AllowAnonymous]
 // with no limit. Now [Authorize]-only, plus this per-account cap.
 builder.Services.AddRateLimiter(options =>
@@ -127,6 +129,7 @@ var app = builder.Build();
 // actually received (a validation failure is a 400, not a 500).
 app.UseSerilogRequestLogging();
 app.UseExceptionHandler();
+app.UseMiddleware<ChatbotEnvelopeMiddleware>();
 
 if (app.Environment.IsDevelopment())
 {
@@ -141,12 +144,30 @@ if (!app.Environment.IsDevelopment())
     app.UseHttpsRedirection();
 }
 
+// Behind a reverse proxy every client shares the proxy IP, so the per-IP auth limits would
+// become one global bucket. Only trust X-Forwarded-For from proxies listed in config.
+if (app.Configuration.GetSection("ForwardedHeaders:KnownProxies").Get<string[]>() is { Length: > 0 } proxies)
+{
+    var forwarded = new ForwardedHeadersOptions { ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto };
+    forwarded.KnownProxies.Clear();
+    forwarded.KnownNetworks.Clear();
+    foreach (var proxy in proxies)
+    {
+        forwarded.KnownProxies.Add(System.Net.IPAddress.Parse(proxy));
+    }
+
+    app.UseForwardedHeaders(forwarded);
+}
+
 app.UseCors(CorsSetup.PolicyName);
 app.UseAuthentication();
 app.UseAuthorization();
 app.UseRateLimiter();
+// SignalR adds this for its own hubs; the chatbot voice relay is a plain WebSocket endpoint.
+app.UseWebSockets(new WebSocketOptions { KeepAliveInterval = TimeSpan.FromSeconds(20) });
 
 app.MapControllers();
+app.MapChatbotApi();
 app.MapWardApi();
 app.MapFinanceDevApi();
 app.MapHub<OrderHub>("/hubs/orders");

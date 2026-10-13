@@ -504,6 +504,9 @@ public sealed class WardAiInsightsTests
         public Task<StreetFeatureMutationResultDto> CreateFeatureAsync(WardActor actor, UpsertStreetFeatureRequest request, CancellationToken ct) => throw new NotImplementedException();
         public Task<StreetFeatureMutationResultDto> UpdateFeatureAsync(WardActor actor, int featureId, UpsertStreetFeatureRequest request, CancellationToken ct) => throw new NotImplementedException();
         public Task DeleteFeatureAsync(WardActor actor, int featureId, string versionToken, CancellationToken ct) => throw new NotImplementedException();
+        public Task<IReadOnlyList<ConfigHistoryEntryDto>> ListSlotHistoryAsync(WardActor actor, long slotId, CancellationToken ct) => throw new NotImplementedException();
+        public Task<WardCompliancePolicyDto> GetCompliancePolicyAsync(WardActor actor, CancellationToken ct) => throw new NotImplementedException();
+        public Task<WardCompliancePolicyDto> UpsertCompliancePolicyAsync(WardActor actor, UpsertWardCompliancePolicyRequest request, CancellationToken ct) => throw new NotImplementedException();
     }
 
     /// <summary>Counts and controls AIC-04/06/07 provider calls; the AIC-01/02/03 members are

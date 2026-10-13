@@ -1,3 +1,5 @@
+using StreetBiz.Application.Common.Security;
+
 namespace StreetBiz.Application.Common.Models;
 
 /// <summary>Application-facing projection of a sidewalk slot, joined with its pricing zone.</summary>
@@ -16,13 +18,74 @@ public sealed record SlotRow(
     decimal PricePerDay,
     TimeOnly? AvailableFrom,
     TimeOnly? AvailableTo,
+    /// <summary>WARD-02's "hạn nhận đơn": null means no deadline; a past date means the zone is
+    /// closed to new applications (existing applications, renewals and contracts are unaffected).</summary>
+    DateOnly? ApplicationDeadline,
     string? ImageUrl,
     bool HasPower,
     bool HasWater,
     bool HasTrashBin,
     string? BusinessCategory,
     string? TenantName,
-    DateTime? HoldExpiresAt);
+    DateTime? HoldExpiresAt,
+    // ---- Phase B/C: the zone's rental-term model, so the vendor's apply form can offer the
+    // right input (month quick-select vs free-text days) and the right pricing caption.
+    // Defaulted so existing call sites (tests built before this feature) keep compiling. ----
+    string PriceDisplayUnit = "DAY",
+    decimal? PricePerMonth = null,
+    string RentalMode = "STANDARD",
+    DateOnly? EventEndDate = null,
+    decimal? QuarterDiscountPercent = null,
+    // The ward's manual price for this one slot (monthly for STANDARD, daily for EVENT).
+    decimal? PriceOverride = null)
+{
+    /// <summary>What this slot is actually priced at: the zone's price unless the ward set its own.</summary>
+    public ZonePricing Pricing =>
+        new ZonePricing(PricePerDay, PricePerMonth, RentalMode, QuarterDiscountPercent).WithOverride(PriceOverride);
+
+    public bool IsPriceOverridden => PriceOverride is not null;
+}
+
+/// <summary>
+/// What a zone charges for rent. A STANDARD zone bills whole months at <see cref="MonthlyPrice"/>
+/// (the officer's own monthly figure when they entered one, so it is never a rounded day rate
+/// times 30) and takes <c>QuarterDiscountPercent</c> off the rent of a term that is a whole number
+/// of quarters. An EVENT zone stays day by day.
+/// </summary>
+public sealed record ZonePricing(
+    decimal PricePerDay,
+    decimal? PricePerMonth = null,
+    string RentalMode = "STANDARD",
+    decimal? QuarterDiscountPercent = null)
+{
+    public bool BillsByMonth => RentalMode == RentalModes.Standard;
+
+    public decimal MonthlyPrice => PricePerMonth ?? PricePerDay * RentalTerms.MonthDays;
+
+    /// <summary>Day-by-day pricing with no discount -- the original quote model.</summary>
+    public static ZonePricing Daily(decimal pricePerDay) => new(pricePerDay, null, RentalModes.Event);
+
+    /// <summary>
+    /// A slot the ward priced by hand. For a STANDARD zone the figure is the monthly rent (the day
+    /// rate is derived from it the same way a zone's is); for an EVENT zone it is the daily rent.
+    /// The quarterly discount of the zone still applies to a STANDARD slot.
+    /// </summary>
+    public ZonePricing WithOverride(decimal? priceOverride)
+    {
+        if (priceOverride is not { } price)
+        {
+            return this;
+        }
+
+        return BillsByMonth
+            ? this with
+            {
+                PricePerMonth = price,
+                PricePerDay = decimal.Round(price / RentalTerms.MonthDays, 0, MidpointRounding.AwayFromZero),
+            }
+            : this with { PricePerDay = price };
+    }
+}
 
 /// <summary>
 /// The slot search filter. The bounding box is optional in decimal degrees -- a zoneId lookup
@@ -75,7 +138,8 @@ public sealed record ZoneDetailRow(
     TimeOnly? AvailableFrom,
     TimeOnly? AvailableTo,
     IReadOnlyList<FeeComponentRow> FeeComponents,
-    IReadOnlyList<StreetFeatureRow> Features);
+    IReadOnlyList<StreetFeatureRow> Features,
+    ZonePricing? Pricing = null);
 
 /// <summary>One line of a zone's fee table. <c>CalcBasis</c> is PER_DAY or PER_TERM.</summary>
 public sealed record FeeComponentRow(

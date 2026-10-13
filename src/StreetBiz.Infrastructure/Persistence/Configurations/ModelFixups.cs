@@ -13,6 +13,7 @@ public partial class StreetBizDbContext
 {
     partial void OnModelCreatingPartial(ModelBuilder modelBuilder)
     {
+        ConfigureChatbot(modelBuilder);
         // The scaffold uses --use-database-names, so property names already equal
         // column names. Keep the commerce table names explicit so a future DbSet
         // rename cannot silently redirect order/payment mappings.
@@ -45,6 +46,10 @@ public partial class StreetBizDbContext
         // Schema: see db/StreetBiz_SQL_Server.sql.
         modelBuilder.Entity<BusinessRegistration>()
             .Property(e => e.capital_amount).HasColumnType("decimal(18,0)");
+
+        // Schema: see db/StreetBiz_SQL_Server.sql (UserAccounts). Who may sign a WARD-13 sanction.
+        modelBuilder.Entity<UserAccount>()
+            .Property(e => e.sanction_authority_title).HasMaxLength(100);
 
         // UQ_DigitalPermits_LivePerContract filters WHERE permit_status <> 'REVOKED': a
         // contract may accumulate a REVOKED permit plus a replacement (SIDE-08, BR-19/20).

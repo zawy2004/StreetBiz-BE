@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Options;
 using StreetBiz.Application.Common.Interfaces;
 using StreetBiz.Application.Common.Security;
@@ -17,6 +18,7 @@ using StreetBiz.Infrastructure.Persistence.Repositories;
 using StreetBiz.Infrastructure.Security;
 using StreetBiz.Infrastructure.Services;
 using StreetBiz.Infrastructure.Storage;
+using StreetBiz.Infrastructure.Services.Chatbot;
 
 namespace StreetBiz.Infrastructure;
 
@@ -39,6 +41,8 @@ public static class DependencyInjection
         services.AddScoped<StreetBiz.Application.Features.WardConfiguration.IWardConfigurationService, WardConfigurationService>();
         services.AddScoped<StreetBiz.Application.Features.AiAssistance.IAiAssistanceLogs, AiAssistanceLogs>();
         services.AddScoped<StreetBiz.Application.Features.AiAssistance.IWardAiInsights, WardAiInsights>();
+        services.AddScoped<StreetBiz.Application.Features.WardFinance.IWardFinanceService, WardFinanceService>();
+        services.AddScoped<StreetBiz.Application.Common.Models.IRegistrationDocumentGenerator, Services.Documents.RegistrationDocumentGenerator>();
 
         services.AddDbContext<StreetBizDbContext>(options =>
         {
@@ -58,13 +62,51 @@ public static class DependencyInjection
         services.AddSingleton<IDateTimeProvider, DateTimeProvider>();
         services.AddSingleton<IPasswordHasher, PasswordHasher>();
         services.AddSingleton<IJwtTokenService, JwtTokenService>();
-        services.AddSingleton<ISmsSender, LoggingSmsSender>();
+        services.Configure<SmsSettings>(configuration.GetSection(SmsSettings.SectionName));
+        services.AddHttpClient<HttpSmsSender>(client => client.Timeout = TimeSpan.FromSeconds(15));
+        // OTP codes must never reach production logs: the logging sender is Development-only,
+        // and any other environment refuses to start without a real provider and an OTP hash key.
+        services.AddSingleton<ISmsSender>(sp =>
+        {
+            var env = sp.GetRequiredService<IHostEnvironment>();
+            var sms = sp.GetRequiredService<IOptions<SmsSettings>>().Value;
+            if (env.IsDevelopment() && !string.Equals(sms.Provider, "Http", StringComparison.OrdinalIgnoreCase))
+            {
+                return ActivatorUtilities.CreateInstance<LoggingSmsSender>(sp);
+            }
+
+            if (!string.Equals(sms.Provider, "Http", StringComparison.OrdinalIgnoreCase)
+                || string.IsNullOrWhiteSpace(sms.Endpoint))
+            {
+                throw new InvalidOperationException(
+                    "Sms:Provider must be \"Http\" with Sms:Endpoint set outside Development.");
+            }
+
+            return sp.GetRequiredService<HttpSmsSender>();
+        });
+        services.AddOptions<OtpSettings>()
+            .Bind(configuration.GetSection(OtpSettings.SectionName))
+            .PostConfigure<IHostEnvironment>((settings, env) =>
+            {
+                if (!string.IsNullOrWhiteSpace(settings.HashKey))
+                {
+                    return;
+                }
+
+                if (!env.IsDevelopment())
+                {
+                    throw new InvalidOperationException("Otp:HashKey must be configured (user-secrets / env var).");
+                }
+
+                settings.HashKey = "dev-only-otp-hash-key";
+            });
         services.AddSingleton<IFileStorage, LocalFileStorage>();
         services.AddHttpClient(MomoGateway.HttpClientName, client => client.Timeout = TimeSpan.FromSeconds(30));
         services.AddSingleton<IPaymentGateway, ConfiguredPaymentGateway>();
         services.AddSingleton<IRefundGateway, ConfiguredRefundGateway>();
 
         services.AddScoped<IOtpService, OtpService>();
+        services.AddScoped<ISecurityEvents, SecurityEvents>();
         services.AddScoped<IUserAccountRepository, UserAccountRepository>();
         services.AddScoped<ISessionRepository, SessionRepository>();
         services.AddScoped<IVendorRepository, VendorRepository>();
@@ -86,6 +128,7 @@ public static class DependencyInjection
         services.AddScoped<IPlatformAdministrationRepository, PlatformAdministrationRepository>();
         services.AddScoped<IFinanceRepository, FinanceRepository>();
         services.AddScoped<IWardReportRepository, WardReportRepository>();
+        services.AddScoped<StreetBiz.Application.Features.RegistrationIntegrity.IRegistrationIntegrityReader, RegistrationIntegrityReader>();
         services.Configure<FeeReminderOptions>(configuration.GetSection(FeeReminderOptions.SectionName));
         services.AddHostedService<FeeReminderHostedService>();
         services.AddScoped<ICommerceRepository, CommerceRepository>();
@@ -122,6 +165,7 @@ public static class DependencyInjection
         // per request), so a key-rotation counter built inline in its constructor
         // would reset every request and never actually round-robin across calls.
         services.AddSingleton<AiKeyPools>();
+        services.AddChatbotInfrastructure(configuration);
         // Shared by AiComplianceService and FptAiKycService's Gemini fallback -- see
         // GeminiVisionClient's remarks for why this was pulled out of AiComplianceService.
         services.AddHttpClient<GeminiVisionClient>(client =>

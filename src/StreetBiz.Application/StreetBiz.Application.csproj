@@ -17,4 +17,8 @@
     <ProjectReference Include="..\StreetBiz.Domain\StreetBiz.Domain.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <EmbeddedResource Include="Features\Chatbot\dish-synonyms.json" LogicalName="StreetBiz.Chatbot.DishSynonyms.json" />
+  </ItemGroup>
+
 </Project>

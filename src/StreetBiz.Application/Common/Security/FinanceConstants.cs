@@ -84,6 +84,8 @@ public static class FinanceNotificationTypes
     public const string Fee = "FEE";
     public const string Penalty = "PENALTY";
     public const string Invoice = "INVOICE";
+    /// <summary>Phase A: an UNPAID penalty past the ward's configured grace period.</summary>
+    public const string PenaltyOverdue = "PENALTY_OVERDUE";
 }
 
 /// <summary>FEE-02: how many days ahead of the due date a reminder goes out.</summary>

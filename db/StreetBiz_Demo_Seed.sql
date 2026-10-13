@@ -20,9 +20,9 @@
    Prerequisite: db/StreetBiz_SQL_Server.sql (schema + reference data: roles, wards,
    violation types). scripts/setup-local-db.ps1 runs both files in order.
 
-   This is the ONLY seed file. Demo data that other seed scripts used to carry (the
-   Nguyen Van Linh corridor, contracts, storefronts, ward compliance rates) lives here.
-   When a schema change needs demo rows, add them to the matching section below.
+   This is the only seed file: every demo row lives here, in the section for its
+   subject. When the schema gains a column that demo rows should fill, put the value
+   in that section's INSERT.
 
    Do not run against a shared or production database.
    ============================================================ */
@@ -45,6 +45,9 @@ GO
    One per role, plus four vendors to carry the registration scenarios.
    ward_unit_id is NULL only for the platform administrator: a WARD_AUTHORITY
    without a ward is rejected by WardActorResolver, so every officer gets one.
+   WARD-13: a sanction decision is signed by the ward chairman, so each officer
+   carries that title (sanction_authority_title) -- it is fixed on the account and
+   never typed on the sanction form.
    ============================================================ */
 
 IF NOT EXISTS (SELECT 1 FROM UserAccounts)
@@ -52,35 +55,46 @@ BEGIN
     SET IDENTITY_INSERT UserAccounts ON;
 
     INSERT INTO UserAccounts
-        (user_id, phone_number, password_hash, full_name, role_code, ward_unit_id, account_status, phone_verified_at)
+        (user_id, phone_number, password_hash, full_name, role_code, ward_unit_id, account_status, phone_verified_at,
+         sanction_authority_title)
     VALUES
         -- Platform administrator (ADM-xx). No ward: they are not a ward actor.
         ( 1, '0900000001', '$2a$12$JKEHknbT9p45.1ftBRU.tu8AydaqFuuPI4NTNUPRdnBbOlfviRTx2',
-             N'Trần Quản Trị',      'PLATFORM_ADMIN', NULL, 'ACTIVE', SYSUTCDATETIME()),
+             N'Trần Quản Trị',      'PLATFORM_ADMIN', NULL, 'ACTIVE', SYSUTCDATETIME(),
+             NULL),
 
         -- Ward officers (WARD-xx, REG-06). scripts/e2e-auth-onboarding.sh signs in as the first.
         ( 2, '0983000001', '$2a$12$Zi2yzfahgQFN8mvwwJyNr.wud3D8giLWQA7E7qXWeuILXQ0K2qvTm',
-             N'Nguyễn Thị Hồng Vân', 'WARD_AUTHORITY', 10, 'ACTIVE', SYSUTCDATETIME()),
+             N'Nguyễn Thị Hồng Vân', 'WARD_AUTHORITY', 10, 'ACTIVE', SYSUTCDATETIME(),
+             N'Chủ tịch UBND Phường Hải Châu 1'),
         ( 3, '0983000002', '$2a$12$vY2IB4IXX7MGXwtZ1H0AkuJpjTTo6AUZJuLtPdBzVmQHu89gqdjMO',
-             N'Trần Quốc Bảo',       'WARD_AUTHORITY', 11, 'ACTIVE', SYSUTCDATETIME()),
+             N'Trần Quốc Bảo',       'WARD_AUTHORITY', 11, 'ACTIVE', SYSUTCDATETIME(),
+             N'Chủ tịch UBND Phường Thanh Khê Đông'),
         ( 4, '0983000003', '$2a$12$kZXarpH37Bj0GR.rPlbvneEH0wrgAlJ/wZkClm.eF3eMmH2GwL0Fq',
-             N'Lê Thị Minh Thu',     'WARD_AUTHORITY', 12, 'ACTIVE', SYSUTCDATETIME()),
+             N'Lê Thị Minh Thu',     'WARD_AUTHORITY', 12, 'ACTIVE', SYSUTCDATETIME(),
+             N'Chủ tịch UBND Phường An Hải Bắc'),
 
         -- Vendors (REG-xx, SIDE-xx). Each carries a different registration scenario.
         ( 5, '0905000101', '$2a$12$mUw/sNqNV5nanEk0.nVzeuXkFfbMefF568bBRklyTeaUoBCrBeVt.',
-             N'Phạm Thị Lan',        'VENDOR', 10, 'ACTIVE', SYSUTCDATETIME()),
+             N'Phạm Thị Lan',        'VENDOR', 10, 'ACTIVE', SYSUTCDATETIME(),
+             NULL),
         ( 6, '0905000102', '$2a$12$TtGD6V0G8dFyTmbi.Mzs9.ZvGiDl2nM7KtMWI8Q8JneRojLJYC4Am',
-             N'Hoàng Văn Tám',       'VENDOR', 10, 'ACTIVE', SYSUTCDATETIME()),
+             N'Hoàng Văn Tám',       'VENDOR', 10, 'ACTIVE', SYSUTCDATETIME(),
+             NULL),
         ( 7, '0905000103', '$2a$12$KVMF6ASbLWS0UiFp2dp7i.Gq8NApv94LV8J5evGVX/rpIeOdMDc7m',
-             N'Đỗ Thị Mai',          'VENDOR', 11, 'ACTIVE', SYSUTCDATETIME()),
+             N'Đỗ Thị Mai',          'VENDOR', 11, 'ACTIVE', SYSUTCDATETIME(),
+             NULL),
         ( 8, '0905000104', '$2a$12$hRJFILqTiDNqwes4DvQ9HemEqUkA7UI7/M6tK6MBhYJl4jw08zefy',
-             N'Vũ Minh Khôi',        'VENDOR', 10, 'ACTIVE', SYSUTCDATETIME()),
+             N'Vũ Minh Khôi',        'VENDOR', 10, 'ACTIVE', SYSUTCDATETIME(),
+             NULL),
 
         -- Customers (BUY-xx, DISC-xx).
         ( 9, '0905000201', '$2a$12$.ONxPZji9PcRb.t0P5Mzv.vSJZQrEX2yQ8LA29QfqDzRDAFJfFLKO',
-             N'Nguyễn Khách Hàng',   'CUSTOMER', 10, 'ACTIVE', SYSUTCDATETIME()),
+             N'Nguyễn Khách Hàng',   'CUSTOMER', 10, 'ACTIVE', SYSUTCDATETIME(),
+             NULL),
         (10, '0905000202', '$2a$12$RcLiX4dVUY9WIa80ipW22.jxVeB5pq670Iu6dajDGCZSs76Vi26Rq',
-             N'Lý Thu Hà',           'CUSTOMER', 12, 'ACTIVE', SYSUTCDATETIME());
+             N'Lý Thu Hà',           'CUSTOMER', 12, 'ACTIVE', SYSUTCDATETIME(),
+             NULL);
 
     SET IDENTITY_INSERT UserAccounts OFF;
 END;
@@ -171,22 +185,7 @@ BEGIN
 END;
 GO
 
--- WARD-03: two base types duplicate a type that carries a legal citation.
--- NO_PERMIT -> UNAUTHORIZED_BUSINESS_USE (NĐ 168/2024 Đ12 k5), WASTE_DISPOSAL -> HYGIENE_LITTERING
--- (NĐ 45/2022 Đ25). Retired, not deleted: past violations keep referencing them.
-UPDATE ViolationTypes SET is_active = 0
-WHERE violation_type_code IN ('NO_PERMIT', 'WASTE_DISPOSAL') AND is_active = 1;
-GO
 
--- WARD-13: a sanction decision is signed by the ward chairman, so the officer's title is a
--- fixed, admin-configured column (UserAccounts.sanction_authority_title), never typed on
--- the form. The demo officers are given the title of their own ward.
-UPDATE a
-SET a.sanction_authority_title = CONCAT(N'Chủ tịch UBND ', u.unit_name)
-FROM UserAccounts a
-JOIN AdministrativeUnits u ON u.unit_id = a.ward_unit_id
-WHERE a.role_code = 'WARD_AUTHORITY' AND a.sanction_authority_title IS NULL;
-GO
 
 
 /* ============================================================
@@ -204,26 +203,43 @@ IF NOT EXISTS (SELECT 1 FROM PricingZones)
 BEGIN
     SET IDENTITY_INSERT PricingZones ON;
     INSERT INTO PricingZones
-        (zone_id, ward_unit_id, zone_name, price_per_day, available_from, available_to,
-         created_by, zone_code, regulation_ref, segment_from, segment_to, application_deadline)
+        (zone_id, ward_unit_id, zone_name, price_per_day, price_display_unit, price_per_month,
+         quarter_discount_percent, rental_mode, event_start_date, event_end_date,
+         available_from, available_to, created_by, zone_code, regulation_ref,
+         segment_from, segment_to, application_deadline)
     VALUES
-        (1, 10, N'Đường Nguyễn Văn Linh', 30000, '05:00', '22:00', 2,
-            N'HC1-NVL', N'QĐ 1247/QĐ-UBND', N'Nút giao Hoàng Diệu', N'Cầu Rồng',
+        -- STANDARD zones rent fixed locations by the month. Zone 1 is priced per month
+        -- (900 000/tháng) with 10% off a 3/6/12-month term; its price_per_day of 30 000 is the
+        -- derived day rate, ROUND(900 000 / 30). Zones 2-4 are priced per day (x30 per month).
+        (1, 10, N'Đường Nguyễn Văn Linh', 30000, 'MONTH', 900000, 10.00, 'STANDARD', NULL, NULL,
+            '05:00', '22:00', 2, N'HC1-NVL', N'QĐ 1247/QĐ-UBND',
+            N'Nút giao Hoàng Diệu', N'Cầu Rồng',
             DATEADD(DAY, 60, CAST(SYSUTCDATETIME() AS DATE))),
-        (2, 10, N'Đường Hoàng Diệu',      25000, '06:00', '21:00', 2,
-            N'HC1-HD',  N'QĐ 1247/QĐ-UBND', N'Nút giao Nguyễn Văn Linh', N'Chợ Hàn',
+        (2, 10, N'Đường Hoàng Diệu',      25000, 'DAY', NULL, NULL, 'STANDARD', NULL, NULL,
+            '06:00', '21:00', 2, N'HC1-HD',  N'QĐ 1247/QĐ-UBND',
+            N'Nút giao Nguyễn Văn Linh', N'Chợ Hàn',
             DATEADD(DAY, 45, CAST(SYSUTCDATETIME() AS DATE))),
-        (3, 11, N'Đường Điện Biên Phủ',   20000, '05:30', '22:00', 3,
-            N'TKD-DBP', N'QĐ 0982/QĐ-UBND', N'Ngã ba Huế', N'Cầu vượt Hòa Cầm',
+        (3, 11, N'Đường Điện Biên Phủ',   20000, 'DAY', NULL, NULL, 'STANDARD', NULL, NULL,
+            '05:30', '22:00', 3, N'TKD-DBP', N'QĐ 0982/QĐ-UBND',
+            N'Ngã ba Huế', N'Cầu vượt Hòa Cầm',
             DATEADD(DAY, 30, CAST(SYSUTCDATETIME() AS DATE))),
-        (4, 12, N'Đường Ngô Quyền',       22000, '06:00', '22:00', 4,
-            N'AHB-NQ',  N'QĐ 0771/QĐ-UBND', N'Cầu sông Hàn', N'Nút giao Phạm Văn Đồng',
-            DATEADD(DAY, 30, CAST(SYSUTCDATETIME() AS DATE)));
+        (4, 12, N'Đường Ngô Quyền',       22000, 'DAY', NULL, NULL, 'STANDARD', NULL, NULL,
+            '06:00', '22:00', 4, N'AHB-NQ',  N'QĐ 0771/QĐ-UBND',
+            N'Cầu sông Hàn', N'Nút giao Phạm Văn Đồng',
+            DATEADD(DAY, 30, CAST(SYSUTCDATETIME() AS DATE))),
+        -- Zone 5 is the EVENT model: a pop-up night market rented day by day, open only
+        -- between its own start and end dates (no monthly price, no quarterly discount).
+        (5, 10, N'Phố đi bộ Bạch Đằng - Chợ đêm lễ hội', 60000, 'DAY', NULL, NULL, 'EVENT',
+            CAST(SYSUTCDATETIME() AS DATE), DATEADD(DAY, 20, CAST(SYSUTCDATETIME() AS DATE)),
+            '17:00', '23:00', 2, N'HC1-BD-EV', N'QĐ 1302/QĐ-UBND',
+            N'Cầu Rồng', N'Cầu Sông Hàn',
+            DATEADD(DAY, 10, CAST(SYSUTCDATETIME() AS DATE)));
     SET IDENTITY_INSERT PricingZones OFF;
 END;
 GO
 
--- Fee components (SIDE-02 quote). PER_DAY multiplies by the term; PER_TERM is charged once.
+-- Fee components (SIDE-02 quote). PER_DAY multiplies by the term; ONE_TIME and the
+-- refundable DEPOSIT are charged on the first contract only, never again on a renewal.
 IF NOT EXISTS (SELECT 1 FROM ZoneFeeComponents)
 BEGIN
     INSERT INTO ZoneFeeComponents (zone_id, component_name, calc_basis, unit_amount, sort_order)
@@ -231,8 +247,8 @@ BEGIN
     FROM PricingZones z
     CROSS JOIN (VALUES
         (N'Phí vệ sinh môi trường', 'PER_DAY',  CAST(  3000 AS DECIMAL(18,0)), 1),
-        (N'Phí quản lý hồ sơ',      'PER_TERM', CAST(150000 AS DECIMAL(18,0)), 2),
-        (N'Tiền đặt cọc',           'PER_TERM', CAST(500000 AS DECIMAL(18,0)), 3)
+        (N'Phí quản lý hồ sơ',      'ONE_TIME', CAST(150000 AS DECIMAL(18,0)), 2),
+        (N'Tiền đặt cọc',           'DEPOSIT',  CAST(500000 AS DECIMAL(18,0)), 3)
     ) AS c(component_name, calc_basis, unit_amount, sort_order);
 END;
 GO
@@ -252,7 +268,9 @@ GO
 
 -- 20 slots on the Nguyễn Văn Linh corridor, plus a handful in the other zones so
 -- every ward has something on its map. All WARD_DEFINED: a VENDOR_PROPOSED slot
--- must carry proposal evidence (CK_SidewalkSlots_ProposalCoherent).
+-- must carry proposal evidence (CK_SidewalkSlots_ProposalCoherent). A slot is
+-- inserted in the status its contract gives it: NVL-01, NVL-05 and NVL-08 are let
+-- (contracts 1, 3 and 2), NVL-03 has an open application.
 IF NOT EXISTS (SELECT 1 FROM SidewalkSlots)
 BEGIN
     SET IDENTITY_INSERT SidewalkSlots ON;
@@ -262,14 +280,14 @@ BEGIN
         (slot_id, slot_code, zone_id, latitude, longitude, width_meters, length_meters,
          slot_status, source, has_power, has_water, has_trash_bin, business_category)
     VALUES
-        ( 1, 'NVL-01', 1, 16.060935, 108.217760, 2.00, 3.00, 'AVAILABLE', 'WARD_DEFINED', 1, 1, 1, 'FOOD_BEVERAGE'),
+        ( 1, 'NVL-01', 1, 16.060935, 108.217760, 2.00, 3.00, 'ACTIVE', 'WARD_DEFINED', 1, 1, 1, 'FOOD_BEVERAGE'),
         ( 2, 'NVL-02', 1, 16.060948, 108.217900, 2.00, 3.00, 'AVAILABLE', 'WARD_DEFINED', 1, 0, 1, 'FOOD_BEVERAGE'),
-        ( 3, 'NVL-03', 1, 16.060961, 108.218040, 2.00, 3.00, 'AVAILABLE', 'WARD_DEFINED', 0, 0, 1, 'RETAIL'),
+        ( 3, 'NVL-03', 1, 16.060961, 108.218040, 2.00, 3.00, 'PENDING_APPLICATION', 'WARD_DEFINED', 0, 0, 1, 'RETAIL'),
         ( 4, 'NVL-04', 1, 16.060974, 108.218180, 2.00, 3.00, 'AVAILABLE', 'WARD_DEFINED', 1, 1, 0, 'FOOD_BEVERAGE'),
-        ( 5, 'NVL-05', 1, 16.060987, 108.218320, 2.00, 3.00, 'AVAILABLE', 'WARD_DEFINED', 0, 0, 0, 'GENERAL'),
+        ( 5, 'NVL-05', 1, 16.060987, 108.218320, 2.00, 3.00, 'ACTIVE', 'WARD_DEFINED', 0, 0, 0, 'GENERAL'),
         ( 6, 'NVL-06', 1, 16.061000, 108.218460, 2.00, 3.00, 'AVAILABLE', 'WARD_DEFINED', 1, 0, 1, 'FOOD_BEVERAGE'),
         ( 7, 'NVL-07', 1, 16.061013, 108.218600, 2.00, 3.00, 'AVAILABLE', 'WARD_DEFINED', 0, 1, 1, 'CRAFTS'),
-        ( 8, 'NVL-08', 1, 16.061026, 108.218740, 2.00, 3.00, 'AVAILABLE', 'WARD_DEFINED', 1, 1, 1, 'FOOD_BEVERAGE'),
+        ( 8, 'NVL-08', 1, 16.061026, 108.218740, 2.00, 3.00, 'ACTIVE', 'WARD_DEFINED', 1, 1, 1, 'FOOD_BEVERAGE'),
         ( 9, 'NVL-09', 1, 16.061039, 108.218880, 2.00, 3.00, 'AVAILABLE', 'WARD_DEFINED', 0, 0, 0, 'SERVICES'),
         (10, 'NVL-10', 1, 16.061052, 108.219020, 2.00, 3.00, 'AVAILABLE', 'WARD_DEFINED', 1, 0, 1, 'RETAIL'),
 
@@ -293,7 +311,12 @@ BEGIN
         (24, 'DBP-01', 3, 16.066229, 108.205945, 2.00, 3.00, 'AVAILABLE', 'WARD_DEFINED', 1, 1, 1, 'FOOD_BEVERAGE'),
         (25, 'DBP-02', 3, 16.066369, 108.206105, 2.00, 3.00, 'AVAILABLE', 'WARD_DEFINED', 0, 0, 1, 'CRAFTS'),
         (26, 'NQ-01',  4, 16.080457, 108.234506, 2.00, 3.00, 'AVAILABLE', 'WARD_DEFINED', 1, 0, 1, 'FOOD_BEVERAGE'),
-        (27, 'NQ-02',  4, 16.080597, 108.234666, 2.00, 3.00, 'AVAILABLE', 'WARD_DEFINED', 0, 1, 1, 'RETAIL');
+        (27, 'NQ-02',  4, 16.080597, 108.234666, 2.00, 3.00, 'AVAILABLE', 'WARD_DEFINED', 0, 1, 1, 'RETAIL'),
+
+    -- The event market (zone 5) along Bạch Đằng, between Cầu Rồng and Cầu Sông Hàn.
+        (31, 'BD-EV-01', 5, 16.061300, 108.226900, 2.00, 2.00, 'AVAILABLE', 'WARD_DEFINED', 1, 0, 1, 'FOOD_BEVERAGE'),
+        (32, 'BD-EV-02', 5, 16.061430, 108.226920, 2.00, 2.00, 'AVAILABLE', 'WARD_DEFINED', 1, 0, 1, 'FOOD_BEVERAGE'),
+        (33, 'BD-EV-03', 5, 16.061560, 108.226940, 2.00, 2.00, 'AVAILABLE', 'WARD_DEFINED', 0, 0, 1, 'CRAFTS');
 
     SET IDENTITY_INSERT SidewalkSlots OFF;
 END;
@@ -448,17 +471,13 @@ BEGIN
     INSERT INTO RentalContracts
         (contract_id, application_id, slot_id, vendor_id, start_date, end_date, contract_status, created_at)
     VALUES
-        (1, 1, 1, 1, DATEADD(DAY, -30, CAST(SYSUTCDATETIME() AS DATE)),
-                     DATEADD(DAY,  60, CAST(SYSUTCDATETIME() AS DATE)), 'ACTIVE', DATEADD(DAY, -30, SYSUTCDATETIME())),
+        -- end_date is inclusive: a 90-day term runs start .. start+89.
+        (1, 1, 1, 1, DATEADD(DAY, -32, CAST(SYSUTCDATETIME() AS DATE)),
+                     DATEADD(DAY,  57, CAST(SYSUTCDATETIME() AS DATE)), 'ACTIVE', DATEADD(DAY, -30, SYSUTCDATETIME())),
         (2, 2, 8, 1, DATEADD(DAY, -10, CAST(SYSUTCDATETIME() AS DATE)),
-                     DATEADD(DAY, 170, CAST(SYSUTCDATETIME() AS DATE)), 'ACTIVE', DATEADD(DAY, -10, SYSUTCDATETIME()));
+                     DATEADD(DAY, 169, CAST(SYSUTCDATETIME() AS DATE)), 'ACTIVE', DATEADD(DAY, -10, SYSUTCDATETIME()));
     SET IDENTITY_INSERT RentalContracts OFF;
 END;
-GO
-
--- Occupied slots follow their contract; slot 3 has an open application.
-UPDATE SidewalkSlots SET slot_status = 'ACTIVE'              WHERE slot_id IN (1, 8) AND slot_status <> 'ACTIVE';
-UPDATE SidewalkSlots SET slot_status = 'PENDING_APPLICATION' WHERE slot_id = 3       AND slot_status = 'AVAILABLE';
 GO
 
 /* SIDE-08 permits. qr_payload is a placeholder, NOT a real IPermitTokenService
@@ -543,31 +562,42 @@ GO
 
 /* ============================================================
    6. FEES AND INVOICES (FEE-01..03)
-   Zone 1: 30 000/day + 3 000/day cleaning + 150 000 admin + 500 000 deposit.
-     contract 1  ( 90 days): 90*33 000 + 650 000 = 3 620 000
-     contract 2  (180 days): 180*33 000 + 650 000 = 6 590 000
+   Zone 1: 900 000/month, -10% on a whole-quarter term, 3 000/day cleaning,
+   150 000 one-time admin fee, 500 000 refundable deposit. Same numbers the API's
+   FeeQuoteCalculator + FeeInstalmentPlanner produce (30-day instalments, one-offs
+   on the first):
+     contract 1 ( 90 days): 2 700 000 - 270 000 + 270 000 + 650 000 = 3 350 000
+                            = 1 550 000 + 900 000 + 900 000
+     contract 2 (180 days): 5 400 000 - 540 000 + 540 000 + 650 000 = 6 050 000
+                            = 1 550 000 + 5 x 900 000
    ============================================================ */
 
 IF NOT EXISTS (SELECT 1 FROM FeeSchedules)
 BEGIN
     SET IDENTITY_INSERT FeeSchedules ON;
     INSERT INTO FeeSchedules (fee_schedule_id, contract_id, revision, total_amount, generated_at) VALUES
-        (1, 1, 1, 3620000, DATEADD(DAY, -30, SYSUTCDATETIME())),
-        (2, 2, 1, 6590000, DATEADD(DAY, -10, SYSUTCDATETIME()));
+        (1, 1, 1, 3350000, DATEADD(DAY, -30, SYSUTCDATETIME())),
+        (2, 2, 1, 6050000, DATEADD(DAY, -10, SYSUTCDATETIME()));
     SET IDENTITY_INSERT FeeSchedules OFF;
 
     SET IDENTITY_INSERT FeeScheduleItems ON;
-    INSERT INTO FeeScheduleItems (fee_item_id, fee_schedule_id, due_date, amount, item_status, paid_at) VALUES
+    -- deposit_amount: the first instalment of each contract carries the 500 000 refundable
+    -- deposit, which is what the ward hands back (DepositRefunds) when the contract ends.
+    INSERT INTO FeeScheduleItems
+        (fee_item_id, fee_schedule_id, due_date, amount, deposit_amount, item_status, paid_at) VALUES
         -- Contract 1: one paid, one overdue, one upcoming -- all three states on screen.
-        (1, 1, DATEADD(DAY, -30, CAST(SYSUTCDATETIME() AS DATE)), 1540000, 'PAID',
+        (1, 1, DATEADD(DAY, -32, CAST(SYSUTCDATETIME() AS DATE)), 1550000, 500000, 'PAID',
                DATEADD(DAY, -29, SYSUTCDATETIME())),
-        (2, 1, DATEADD(DAY,  -2, CAST(SYSUTCDATETIME() AS DATE)), 1040000, 'OVERDUE', NULL),
-        (3, 1, DATEADD(DAY,  28, CAST(SYSUTCDATETIME() AS DATE)), 1040000, 'PENDING', NULL),
+        (2, 1, DATEADD(DAY,  -2, CAST(SYSUTCDATETIME() AS DATE)), 900000, 0, 'OVERDUE', NULL),
+        (3, 1, DATEADD(DAY,  28, CAST(SYSUTCDATETIME() AS DATE)), 900000, 0, 'PENDING', NULL),
         -- Contract 2: first instalment paid, the rest ahead.
-        (4, 2, DATEADD(DAY, -10, CAST(SYSUTCDATETIME() AS DATE)), 2630000, 'PAID',
+        (4, 2, DATEADD(DAY, -10, CAST(SYSUTCDATETIME() AS DATE)), 1550000, 500000, 'PAID',
                DATEADD(DAY,  -9, SYSUTCDATETIME())),
-        (5, 2, DATEADD(DAY,  50, CAST(SYSUTCDATETIME() AS DATE)), 1980000, 'PENDING', NULL),
-        (6, 2, DATEADD(DAY, 110, CAST(SYSUTCDATETIME() AS DATE)), 1980000, 'PENDING', NULL);
+        (5, 2, DATEADD(DAY,  20, CAST(SYSUTCDATETIME() AS DATE)),  900000, 0, 'PENDING', NULL),
+        (6, 2, DATEADD(DAY,  50, CAST(SYSUTCDATETIME() AS DATE)),  900000, 0, 'PENDING', NULL),
+        (7, 2, DATEADD(DAY,  80, CAST(SYSUTCDATETIME() AS DATE)),  900000, 0, 'PENDING', NULL),
+        (8, 2, DATEADD(DAY, 110, CAST(SYSUTCDATETIME() AS DATE)),  900000, 0, 'PENDING', NULL),
+        (9, 2, DATEADD(DAY, 140, CAST(SYSUTCDATETIME() AS DATE)),  900000, 0, 'PENDING', NULL);
     SET IDENTITY_INSERT FeeScheduleItems OFF;
 END;
 GO
@@ -576,8 +606,8 @@ GO
 IF NOT EXISTS (SELECT 1 FROM Invoices)
 BEGIN
     INSERT INTO Invoices (invoice_number, fee_item_id, penalty_id, vendor_id, amount, issued_at) VALUES
-        (N'HD-2026-000001', 1, NULL, 1, 1540000, DATEADD(DAY, -29, SYSUTCDATETIME())),
-        (N'HD-2026-000002', 4, NULL, 1, 2630000, DATEADD(DAY,  -9, SYSUTCDATETIME()));
+        (N'HD-2026-000001', 1, NULL, 1, 1550000, DATEADD(DAY, -29, SYSUTCDATETIME())),
+        (N'HD-2026-000002', 4, NULL, 1, 1550000, DATEADD(DAY,  -9, SYSUTCDATETIME()));
 END;
 GO
 
@@ -921,20 +951,17 @@ IF NOT EXISTS (SELECT 1 FROM PermitScanLogs)
 GO
 
 /* ============================================================
-   8. VIOLATIONS, PENALTIES AND PAYMENTS (WARD-12, FEE-01/04/05, SYS-03/04/05)
+   9. WARD COMPLIANCE, CONTINUED: A CONTRACT WITHOUT A SCHEDULE, VIOLATIONS, PENALTIES
+   (WARD-12, FEE-01/04/05, SYS-03)
 
-   1 has a paid penalty, 2 an unpaid one, 3 a waived one; 4 has no identified
-   offender, so it cannot have a penalty at all.
+   Violations 1 and 2 are on the contracts that exist; 3 is a customer report; 4 names
+   only a slot, so it has no penalty at all. Of the penalties, 1 is paid, 2 unpaid and
+   3 waived. Their payments are in section 12.
 
    Contracts 1 and 2 already carry a hand-written fee schedule, which makes them
    useful for reading screens but useless for exercising SYS-03: regenerating a
    schedule that has PAID instalments is refused on purpose. Contract 3 below is
    therefore created with no schedule at all, as the target for generation.
-
-   The payment rows give the two already-PAID instalments the transactions they
-   were missing, so "lịch sử thanh toán" has something true to show, and add one
-   FAILED and one PENDING transaction so the retry and awaiting-callback states
-   are both reachable without a real provider.
    ============================================================ */
 
 -- Contract 3: vendor 1, slot NVL-05, 60 days from today, deliberately WITHOUT a
@@ -964,8 +991,6 @@ BEGIN
         (3, 4, 5, 1, CAST(SYSUTCDATETIME() AS DATE),
                      DATEADD(DAY, 59, CAST(SYSUTCDATETIME() AS DATE)), 'ACTIVE', SYSUTCDATETIME());
     SET IDENTITY_INSERT RentalContracts OFF;
-
-    UPDATE SidewalkSlots SET slot_status = 'ACTIVE' WHERE slot_id = 5;
 END;
 GO
 
@@ -1045,7 +1070,9 @@ GO
    (1, 9, 10) were confirmed by an officer against the physical CCCD; 2 and 4 were
    not, so the ward still has to confirm identity before it can approve them.
    Registration 3 is left blank on purpose to show an incomplete form. The ID
-   numbers are fictional.
+   numbers are fictional. Registration 4 deliberately carries registration 2's
+   number under a different account, so the ward's duplicate check (AIC-03) has
+   a real finding to show.
    ============================================================ */
 
 UPDATE BusinessRegistrations SET
@@ -1103,7 +1130,7 @@ UPDATE BusinessRegistrations SET
 WHERE registration_id = 10 AND id_number IS NULL;
 
 UPDATE BusinessRegistrations SET
-    id_type = 'CCCD', id_number = '048090000004', id_issued_date = '2021-09-09',
+    id_type = 'CCCD', id_number = '048079000002', id_issued_date = '2021-09-09',
     id_issued_place = N'Cục Cảnh sát QLHC về TTXH', owner_date_of_birth = '1990-07-25',
     owner_gender = N'Nam', owner_ethnicity = N'Kinh',
     permanent_address = N'9 Trần Phú, Phường Hải Châu 1, Đà Nẵng',
@@ -1125,7 +1152,8 @@ IF NOT EXISTS (SELECT 1 FROM BusinessRegistrationHouseholdMembers)
 GO
 
 -- Recorded outcomes of the AI checks (decision support only, BR-41). Registration 2 matches;
--- registration 4 does not, which the ward screen should flag without deciding anything.
+-- registration 4 does not: the card reads a different number than the one declared (which is
+-- registration 2's) and the face is not the card's. The ward screen should flag it without deciding.
 IF NOT EXISTS (SELECT 1 FROM KycVerificationResults)
     INSERT INTO KycVerificationResults
         (user_id, registration_id, check_type, provider, is_match, similarity_percent,
@@ -1185,7 +1213,10 @@ GO
    12. PAYMENTS AND REFUNDS (PAY-01..04, FEE-01, FEE-04, SYS-04)
    Every paid order, paid fee instalment and paid penalty has its successful
    transaction; order 4 still waits for payment; order 5 was rejected after
-   payment, so it has an automatic refund. Provider references are fictional.
+   payment, so it has an automatic refund. The overdue instalment has a FAILED
+   attempt (the vendor can retry) and the next one a PENDING checkout whose
+   callback has not come back. CK_PaymentTransactions_PurposeMatchesTarget ties
+   each purpose to exactly one target column. Provider references are fictional.
    ============================================================ */
 
 IF NOT EXISTS (SELECT 1 FROM PaymentTransactions)
@@ -1200,23 +1231,30 @@ BEGIN
         (3, N'seed-order-3',   'ORDER',      NULL, NULL, 3, 'MOMO',    N'MOMO-SEED-0003', 45000,   'SUCCESS', DATEADD(MINUTE,-24, SYSUTCDATETIME()), DATEADD(MINUTE,-25, SYSUTCDATETIME())),
         (4, N'seed-order-4',   'ORDER',      NULL, NULL, 4, 'MOMO',    NULL,              50000,   'PENDING', NULL,                                DATEADD(MINUTE, -5, SYSUTCDATETIME())),
         (5, N'seed-order-5',   'ORDER',      NULL, NULL, 5, 'ZALOPAY', N'ZP-SEED-0005',   25000,   'SUCCESS', DATEADD(DAY,  -2, SYSUTCDATETIME()), DATEADD(DAY,  -2, SYSUTCDATETIME())),
-        (6, N'seed-fee-1',     'RENTAL_FEE', 1,    NULL, NULL, 'MOMO', N'MOMO-SEED-F001', 1540000, 'SUCCESS', DATEADD(DAY, -29, SYSUTCDATETIME()), DATEADD(DAY, -29, SYSUTCDATETIME())),
-        (7, N'seed-fee-4',     'RENTAL_FEE', 4,    NULL, NULL, 'ZALOPAY', N'ZP-SEED-F004', 2630000, 'SUCCESS', DATEADD(DAY,  -9, SYSUTCDATETIME()), DATEADD(DAY,  -9, SYSUTCDATETIME())),
-        (8, N'seed-penalty-2', 'PENALTY',    NULL, 2,    NULL, 'MOMO', N'MOMO-SEED-P002',  500000, 'SUCCESS', DATEADD(DAY, -33, SYSUTCDATETIME()), DATEADD(DAY, -33, SYSUTCDATETIME()));
+        (6, N'seed-fee-1',     'RENTAL_FEE', 1,    NULL, NULL, 'MOMO',    N'MOMO-SEED-F001', 1550000, 'SUCCESS', DATEADD(DAY, -29, SYSUTCDATETIME()), DATEADD(DAY, -29, SYSUTCDATETIME())),
+        (7, N'seed-fee-4',     'RENTAL_FEE', 4,    NULL, NULL, 'ZALOPAY', N'ZP-SEED-F004',   1550000, 'SUCCESS', DATEADD(DAY,  -9, SYSUTCDATETIME()), DATEADD(DAY,  -9, SYSUTCDATETIME())),
+        (8, N'seed-penalty-1', 'PENALTY',    NULL, 1,    NULL, 'MOMO',    N'MOMO-SEED-P001',  500000, 'SUCCESS', DATEADD(DAY, -18, SYSUTCDATETIME()), DATEADD(DAY, -18, SYSUTCDATETIME())),
+        -- A failed attempt on the OVERDUE instalment: the vendor must be able to retry.
+        (9, N'seed-fee-2',     'RENTAL_FEE', 2,    NULL, NULL, 'MOMO',    N'MOMO-SEED-F002',   900000, 'FAILED',  DATEADD(DAY,  -1, SYSUTCDATETIME()), DATEADD(DAY,  -1, SYSUTCDATETIME())),
+        -- Checkout started, callback not back yet.
+        (10, N'seed-fee-3',    'RENTAL_FEE', 3,    NULL, NULL, 'ZALOPAY', NULL,                900000, 'PENDING', NULL,                                DATEADD(MINUTE, -20, SYSUTCDATETIME()));
     SET IDENTITY_INSERT PaymentTransactions OFF;
 END;
 GO
 
--- SYS-04: what the providers sent. The last event carries a bad signature and matched nothing.
+-- SYS-04: every callback is kept whether or not it matched and whether or not its signature
+-- checked out -- months later the signed payload is the only evidence in a dispute. One is a
+-- replay of an already-settled payment; the last carries a bad signature and matched nothing.
 IF NOT EXISTS (SELECT 1 FROM PaymentCallbackEvents)
     INSERT INTO PaymentCallbackEvents
         (provider, provider_reference, transaction_id, raw_payload, signature_valid, processing_result, received_at)
     VALUES
-        ('MOMO',    N'MOMO-SEED-0001', 1, N'{"seed":true,"resultCode":0,"amount":60000}',   1, 'APPLIED',  DATEADD(DAY,  -6, SYSUTCDATETIME())),
-        ('MOMO',    N'MOMO-SEED-F001', 6, N'{"seed":true,"resultCode":0,"amount":1540000}', 1, 'APPLIED',  DATEADD(DAY, -29, SYSUTCDATETIME())),
-        ('MOMO',    N'MOMO-SEED-P002', 8, N'{"seed":true,"resultCode":0,"amount":500000}',  1, 'APPLIED',  DATEADD(DAY, -33, SYSUTCDATETIME())),
-        ('MOMO',    N'MOMO-SEED-P002', 8, N'{"seed":true,"resultCode":0,"amount":500000}',  1, 'DUPLICATE', DATEADD(DAY, -33, SYSUTCDATETIME())),
-        ('ZALOPAY', N'ZP-UNKNOWN-0001', NULL, N'{"seed":true,"note":"unsigned callback"}',  0, 'REJECTED', DATEADD(DAY,  -1, SYSUTCDATETIME()));
+        ('MOMO',    N'MOMO-SEED-0001', 1, N'{"seed":true,"resultCode":0,"amount":60000}',   1, 'APPLIED',   DATEADD(DAY,  -6, SYSUTCDATETIME())),
+        ('MOMO',    N'MOMO-SEED-F001', 6, N'{"seed":true,"resultCode":0,"amount":1550000}', 1, 'APPLIED',   DATEADD(DAY, -29, SYSUTCDATETIME())),
+        ('ZALOPAY', N'ZP-SEED-F004',   7, N'{"seed":true,"resultCode":0,"amount":1550000}', 1, 'APPLIED',   DATEADD(DAY,  -9, SYSUTCDATETIME())),
+        ('MOMO',    N'MOMO-SEED-P001', 8, N'{"seed":true,"resultCode":0,"amount":500000}',  1, 'APPLIED',   DATEADD(DAY, -18, SYSUTCDATETIME())),
+        ('MOMO',    N'MOMO-SEED-P001', 8, N'{"seed":true,"resultCode":0,"amount":500000}',  1, 'DUPLICATE', DATEADD(DAY, -18, SYSUTCDATETIME())),
+        ('ZALOPAY', N'ZP-UNKNOWN-0001', NULL, N'{"seed":true,"note":"unsigned callback"}',  0, 'REJECTED',  DATEADD(DAY,  -1, SYSUTCDATETIME()));
 GO
 
 -- PAY-04: order 5 was rejected after payment, so its money went back automatically.
@@ -1229,10 +1267,11 @@ IF NOT EXISTS (SELECT 1 FROM RefundTransactions)
             'SUCCESS', DATEADD(DAY, -2, SYSUTCDATETIME()), DATEADD(DAY, -2, SYSUTCDATETIME()));
 GO
 
--- FEE-03: the invoice for the paid penalty (the fee invoices are in section 6).
+-- FEE-03 / SYS-05: the invoice for the paid penalty (the fee invoices are in section 6).
+-- CK_Invoices_ExactlyOneSource: a penalty invoice carries penalty_id and leaves fee_item_id null.
 IF NOT EXISTS (SELECT 1 FROM Invoices WHERE invoice_number = N'HD-2026-000003')
     INSERT INTO Invoices (invoice_number, fee_item_id, penalty_id, vendor_id, amount, issued_at)
-    VALUES (N'HD-2026-000003', NULL, 2, 1, 500000, DATEADD(DAY, -33, SYSUTCDATETIME()));
+    VALUES (N'HD-2026-000003', NULL, 1, 1, 500000, DATEADD(DAY, -18, SYSUTCDATETIME()));
 GO
 
 
@@ -1248,7 +1287,7 @@ IF NOT EXISTS (SELECT 1 FROM Notifications)
         (5,  'ENROLLMENT_STATUS_UPDATE', N'Hồ sơ đăng ký đã được duyệt',
             N'Hồ sơ "Bún chả Hải Châu" đã được Phường duyệt.',                              'REGISTRATION', 9, 1, DATEADD(DAY, -11, SYSUTCDATETIME())),
         (5,  'PENALTY_SANCTION_ISSUED',  N'Quyết định xử phạt mới',
-            N'Bạn có một quyết định xử phạt QĐXP-2026/0001 chưa thanh toán.',               'PENALTY', 1, 0, DATEADD(DAY, -11, SYSUTCDATETIME())),
+            N'Bạn có một quyết định xử phạt (ô NVL-08, cản trở lối đi bộ) chưa thanh toán.', 'PENALTY', 2, 0, DATEADD(DAY, -5, SYSUTCDATETIME())),
         (5,  'ORDER',                    N'Có đơn hàng mới',
             N'Đơn DH-2026-0004 đang chờ khách thanh toán.',                                 'ORDER', 4, 0, DATEADD(MINUTE, -5, SYSUTCDATETIME())),
         (6,  'ENROLLMENT_STATUS_UPDATE', N'Hồ sơ đang chờ duyệt',
@@ -1279,80 +1318,6 @@ IF NOT EXISTS (SELECT 1 FROM AIAssistanceLogs)
             58.00, NULL, NULL, DATEADD(DAY, -1, SYSUTCDATETIME()));
 GO
 
--- SYS-05: the paid penalty gets its invoice too. CK_Invoices_ExactlyOneSource
--- means penalty invoices carry penalty_id and leave fee_item_id null.
-IF NOT EXISTS (SELECT 1 FROM Invoices WHERE penalty_id IS NOT NULL)
-BEGIN
-    INSERT INTO Invoices (invoice_number, fee_item_id, penalty_id, vendor_id, amount, issued_at)
-    SELECT N'HD-2026-000003', NULL, p.penalty_id, 1, p.amount, DATEADD(DAY, -18, SYSUTCDATETIME())
-    FROM Penalties p WHERE p.penalty_id = 1;
-END;
-GO
-
-/* SYS-04 ledger. CK_PaymentTransactions_PurposeMatchesTarget ties each purpose to
-   exactly one target column, so a RENTAL_FEE row carries fee_item_id and nothing
-   else. idempotency_key is UNIQUE — it is what stops a replayed callback being
-   applied twice. */
-IF NOT EXISTS (SELECT 1 FROM PaymentTransactions WHERE payment_purpose <> 'ORDER')
-BEGIN
-    INSERT INTO PaymentTransactions
-        (idempotency_key, payment_purpose, fee_item_id, penalty_id, order_id,
-         provider, provider_reference, amount, transaction_status, callback_received_at, created_at)
-    VALUES
-        -- The two instalments that were already PAID, now with the payments behind them.
-        (N'SEED-TXN-FEE-0001', 'RENTAL_FEE', 1, NULL, NULL, 'MOMO',
-            N'MOMO-SEED-0001', 1540000, 'SUCCESS',
-            DATEADD(DAY, -29, SYSUTCDATETIME()), DATEADD(DAY, -29, SYSUTCDATETIME())),
-        (N'SEED-TXN-FEE-0002', 'RENTAL_FEE', 4, NULL, NULL, 'ZALOPAY',
-            N'ZALO-SEED-0002', 2630000, 'SUCCESS',
-            DATEADD(DAY, -9, SYSUTCDATETIME()), DATEADD(DAY, -9, SYSUTCDATETIME())),
-        -- The paid penalty.
-        (N'SEED-TXN-PEN-0001', 'PENALTY', NULL, 1, NULL, 'MOMO',
-            N'MOMO-SEED-0003', 500000, 'SUCCESS',
-            DATEADD(DAY, -18, SYSUTCDATETIME()), DATEADD(DAY, -18, SYSUTCDATETIME())),
-        -- A failed attempt on the OVERDUE instalment: the vendor must be able to retry.
-        (N'SEED-TXN-FEE-0003', 'RENTAL_FEE', 2, NULL, NULL, 'MOMO',
-            N'MOMO-SEED-0004', 1040000, 'FAILED',
-            DATEADD(DAY, -1, SYSUTCDATETIME()), DATEADD(DAY, -1, SYSUTCDATETIME())),
-        -- Checkout started, callback not back yet.
-        (N'SEED-TXN-FEE-0004', 'RENTAL_FEE', 3, NULL, NULL, 'ZALOPAY',
-            NULL, 1040000, 'PENDING', NULL, DATEADD(MINUTE, -20, SYSUTCDATETIME()));
-END;
-GO
-
-/* Every callback is kept whether or not it matched and whether or not its
-   signature checked out: months later the signed payload is the only evidence in
-   a dispute. */
-IF NOT EXISTS (SELECT 1 FROM PaymentCallbackEvents)
-BEGIN
-    INSERT INTO PaymentCallbackEvents
-        (provider, provider_reference, transaction_id, raw_payload, signature_valid, processing_result, received_at)
-    SELECT v.provider, v.provider_reference, t.transaction_id, v.raw_payload,
-           v.signature_valid, v.processing_result, v.received_at
-    FROM (VALUES
-        ('MOMO',    N'MOMO-SEED-0001', N'SEED-TXN-FEE-0001',
-            N'{"providerReference":"MOMO-SEED-0001","idempotencyKey":"SEED-TXN-FEE-0001","amount":1540000,"status":"SUCCESS"}',
-            CAST(1 AS BIT), 'APPLIED',   DATEADD(DAY, -29, SYSUTCDATETIME())),
-        ('ZALOPAY', N'ZALO-SEED-0002', N'SEED-TXN-FEE-0002',
-            N'{"providerReference":"ZALO-SEED-0002","idempotencyKey":"SEED-TXN-FEE-0002","amount":2630000,"status":"SUCCESS"}',
-            CAST(1 AS BIT), 'APPLIED',   DATEADD(DAY, -9, SYSUTCDATETIME())),
-        ('MOMO',    N'MOMO-SEED-0003', N'SEED-TXN-PEN-0001',
-            N'{"providerReference":"MOMO-SEED-0003","idempotencyKey":"SEED-TXN-PEN-0001","amount":500000,"status":"SUCCESS"}',
-            CAST(1 AS BIT), 'APPLIED',   DATEADD(DAY, -18, SYSUTCDATETIME())),
-        -- Replay of an already-settled payment.
-        ('MOMO',    N'MOMO-SEED-0001', N'SEED-TXN-FEE-0001',
-            N'{"providerReference":"MOMO-SEED-0001","idempotencyKey":"SEED-TXN-FEE-0001","amount":1540000,"status":"SUCCESS"}',
-            CAST(1 AS BIT), 'DUPLICATE', DATEADD(DAY, -29, SYSUTCDATETIME())),
-        -- Bad signature: recorded, never applied.
-        ('MOMO',    N'MOMO-SEED-FAKE', NULL,
-            N'{"providerReference":"MOMO-SEED-FAKE","idempotencyKey":"SEED-TXN-UNKNOWN","amount":9999999,"status":"SUCCESS"}',
-            CAST(0 AS BIT), 'REJECTED',  DATEADD(DAY, -2, SYSUTCDATETIME()))
-    ) AS v(provider, provider_reference, idempotency_key, raw_payload,
-           signature_valid, processing_result, received_at)
-    LEFT JOIN PaymentTransactions t ON t.idempotency_key = v.idempotency_key;
-END;
-GO
-
 -- FEE-02 reminders the vendor should already see in their notification list.
 IF NOT EXISTS (SELECT 1 FROM Notifications WHERE notification_type = 'FEE')
 BEGIN
@@ -1360,10 +1325,10 @@ BEGIN
         (user_id, notification_type, title, body, related_entity_type, related_entity_id, is_read, sent_at)
     VALUES
         (5, 'FEE', N'Phí thuê ô đã quá hạn',
-            N'Kỳ phí 1.040.000 đ của ô NVL-01 đã quá hạn thanh toán.',
+            N'Kỳ phí 900.000 đ của ô NVL-01 đã quá hạn thanh toán.',
             'FeeScheduleItem', 2, 0, DATEADD(DAY, -2, SYSUTCDATETIME())),
         (5, 'FEE', N'Sắp đến hạn đóng phí',
-            N'Kỳ phí 1.040.000 đ của ô NVL-01 sẽ đến hạn trong 28 ngày.',
+            N'Kỳ phí 900.000 đ của ô NVL-01 sẽ đến hạn trong 28 ngày.',
             'FeeScheduleItem', 3, 0, DATEADD(DAY, -1, SYSUTCDATETIME()));
 END;
 GO
@@ -1391,9 +1356,6 @@ SELECT
     (SELECT COUNT(*) FROM MenuItems)              AS [menu_items],
     (SELECT COUNT(*) FROM Orders)                 AS [orders],
     (SELECT COUNT(*) FROM SlotTransferRequests)   AS [transfers],
-    (SELECT COUNT(*) FROM Violations)             AS [violations],
-    (SELECT COUNT(*) FROM Penalties)              AS [penalties],
-    (SELECT COUNT(*) FROM PaymentTransactions)    AS [payments],
     (SELECT COUNT(*) FROM Notifications)          AS [notifications];
 
 SELECT registration_status, COUNT(*) AS [count]

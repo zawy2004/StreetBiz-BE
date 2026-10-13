@@ -6,7 +6,9 @@ public sealed record FeeInstalment(
     DateOnly DueDate,
     DateOnly PeriodStart,
     DateOnly PeriodEnd,
-    decimal Amount);
+    decimal Amount,
+    /// <summary>The refundable deposit inside <c>Amount</c> (first instalment only).</summary>
+    decimal Deposit = 0m);
 
 /// <summary>A whole plan: the contract total and the instalments that add up to it exactly.</summary>
 public sealed record FeePlan(decimal Total, IReadOnlyList<FeeInstalment> Instalments);
@@ -29,7 +31,15 @@ public sealed record FeeScheduleContextRow(
     string ContractStatus,
     int TermDays,
     decimal PricePerDay,
-    IReadOnlyList<FeeComponentRow> Components);
+    IReadOnlyList<FeeComponentRow> Components,
+    decimal? PricePerMonth = null,
+    string RentalMode = "STANDARD",
+    decimal? QuarterDiscountPercent = null,
+    decimal? PriceOverride = null)
+{
+    public ZonePricing Pricing =>
+        new ZonePricing(PricePerDay, PricePerMonth, RentalMode, QuarterDiscountPercent).WithOverride(PriceOverride);
+}
 
 /// <summary>A fee schedule revision and its instalments.</summary>
 public sealed record FeeScheduleRow(
@@ -162,7 +172,7 @@ public sealed record FinanceCallbackMutationResult(
     long? TransactionId);
 
 /// <summary>SYS-06/FEE-02: how many instalments a reminder sweep moved to OVERDUE and how many reminders it sent.</summary>
-public sealed record FeeReminderSweepResult(int OverdueCount, int ReminderCount);
+public sealed record FeeReminderSweepResult(int OverdueCount, int ReminderCount, int PenaltyReminderCount = 0);
 
 /// <summary>One invoice as the vendor sees it (FEE-03). <c>Kind</c> is FEE or PENALTY — never both (CK_Invoices_ExactlyOneSource).</summary>
 public sealed record InvoiceRow(

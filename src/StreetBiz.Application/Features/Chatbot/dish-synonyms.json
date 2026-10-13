@@ -1,0 +1,26 @@
+{
+  "version": "2026-10-09",
+  "note": "Curated names for the same dish (regional spellings and common aliases). Only exact entries are expanded; add a group here instead of letting a model invent synonyms.",
+  "groups": [
+    ["mì quảng", "mỳ quảng"],
+    ["bánh mì", "bánh mỳ"],
+    ["hủ tiếu", "hủ tíu"],
+    ["chả giò", "nem rán"],
+    ["bún chả cá", "bún cá"],
+    ["bánh tráng cuốn thịt heo", "bánh tráng thịt heo"],
+    ["bò bía", "pò pía"],
+    ["cà phê", "cafe", "cà fê", "coffee"],
+    ["cà phê sữa", "cafe sữa", "nâu đá"],
+    ["trà sữa", "milk tea"],
+    ["nước mía", "mía đá"],
+    ["sinh tố", "smoothie"],
+    ["nước ép", "juice"],
+    ["kem", "ice cream"],
+    ["bánh xèo", "bánh khoái"],
+    ["nem nướng", "nem lụi"],
+    ["xôi", "xôi nếp"],
+    ["chè", "chè thập cẩm"],
+    ["bánh căn", "bánh khọt"],
+    ["ốc", "ốc luộc"]
+  ]
+}

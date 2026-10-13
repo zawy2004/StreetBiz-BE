@@ -51,7 +51,11 @@ public sealed class FinanceRepository(
                         component.calc_basis,
                         component.unit_amount,
                         component.sort_order))
-                    .ToList()))
+                    .ToList(),
+                contract.slot.zone.price_per_month,
+                contract.slot.zone.rental_mode,
+                contract.slot.zone.quarter_discount_percent,
+                contract.slot.price_override))
             .FirstOrDefaultAsync(cancellationToken);
 
     public async Task<FeeScheduleRow> ReplaceFeeScheduleAsync(
@@ -138,6 +142,7 @@ public sealed class FinanceRepository(
                 due_date = instalment.DueDate,
                 amount = instalment.Amount,
                 item_status = FeeItemStatuses.Pending,
+                deposit_amount = instalment.Deposit,
             });
         }
 
@@ -879,9 +884,70 @@ public sealed class FinanceRepository(
                 reminderCount++;
             }
 
+            // Phase A: remind a vendor about an UNPAID penalty once it has sat past the grace
+            // period their ward configured (WardCompliancePolicies.unpaid_penalty_grace_days).
+            // Wards that have not configured a grace period are skipped entirely -- this sweep
+            // never invents a deadline a ward did not opt into.
+            var penaltyReminderCount = 0;
+            var gracePeriods = await db.WardCompliancePolicies.AsNoTracking()
+                .Where(p => p.unpaid_penalty_grace_days != null)
+                .Select(p => new { p.ward_unit_id, GraceDays = p.unpaid_penalty_grace_days!.Value })
+                .ToListAsync(cancellationToken);
+            if (gracePeriods.Count > 0)
+            {
+                var unpaid = await db.Penalties
+                    .Include(p => p.penalty_schedule)
+                    .Include(p => p.violation)
+                    .Where(p => p.penalty_status == PenaltyStatuses.Unpaid)
+                    .ToListAsync(cancellationToken);
+
+                var remindedPenaltyIdsToday = (await db.Notifications.AsNoTracking()
+                    .Where(n => n.related_entity_type == "Penalty"
+                        && n.notification_type == FinanceNotificationTypes.PenaltyOverdue
+                        && n.sent_at >= todayStart
+                        && n.related_entity_id != null)
+                    .Select(n => n.related_entity_id!.Value)
+                    .ToListAsync(cancellationToken))
+                    .ToHashSet();
+
+                foreach (var penalty in unpaid)
+                {
+                    if (remindedPenaltyIdsToday.Contains(penalty.penalty_id)
+                        || penalty.violation.vendor_id is not { } vendorId)
+                    {
+                        continue;
+                    }
+                    var grace = gracePeriods.FirstOrDefault(g => g.ward_unit_id == penalty.penalty_schedule.ward_unit_id);
+                    if (grace is null)
+                    {
+                        continue;
+                    }
+                    var overdueSince = BusinessCalendar.Today(penalty.created_at);
+                    var daysSince = today.DayNumber - overdueSince.DayNumber;
+                    if (daysSince < grace.GraceDays)
+                    {
+                        continue;
+                    }
+
+                    var vendorUserId = await db.Vendors.AsNoTracking()
+                        .Where(v => v.vendor_id == vendorId).Select(v => v.user_id).FirstOrDefaultAsync(cancellationToken);
+                    if (vendorUserId <= 0)
+                    {
+                        continue;
+                    }
+
+                    Notify(vendorUserId, FinanceNotificationTypes.PenaltyOverdue,
+                        "Khoản phạt vi phạm chưa nộp",
+                        $"Khoản phạt {Vnd(penalty.amount)} (biên bản {penalty.violation.bien_ban_so ?? penalty.violation_id.ToString()}) "
+                            + $"đã quá {daysSince} ngày chưa nộp. Vui lòng thanh toán để tránh ảnh hưởng tới việc xem xét gia hạn/duy trì giấy phép.",
+                        "Penalty", penalty.penalty_id, now);
+                    penaltyReminderCount++;
+                }
+            }
+
             await db.SaveChangesAsync(cancellationToken);
             await transaction.CommitAsync(cancellationToken);
-            return new FeeReminderSweepResult(overdue.Count, reminderCount);
+            return new FeeReminderSweepResult(overdue.Count, reminderCount, penaltyReminderCount);
         });
     }
 
@@ -1043,6 +1109,123 @@ public sealed class FinanceRepository(
     private IQueryable<ScaffoldedModels.FeeScheduleItem> CurrentFeeItems(long vendorId) =>
         db.FeeScheduleItems.AsNoTracking()
             .Where(item => item.fee_schedule.contract.vendor_id == vendorId && item.fee_schedule.superseded_at == null);
+
+    public async Task<long> RecordOfflinePaymentAsync(
+        int wardId,
+        long actorUserId,
+        long? feeItemId,
+        long? penaltyId,
+        string method,
+        string? reference,
+        string? note,
+        CancellationToken cancellationToken)
+    {
+        if ((feeItemId is null) == (penaltyId is null))
+        {
+            throw new ArgumentException("Exactly one of feeItemId and penaltyId must be given.");
+        }
+
+        var strategy = db.Database.CreateExecutionStrategy();
+        return await strategy.ExecuteAsync(async () =>
+        {
+            db.ChangeTracker.Clear();
+            await using var transaction = await db.Database.BeginTransactionAsync(
+                IsolationLevel.Serializable, cancellationToken);
+            var now = Now;
+
+            PaymentTransaction payment;
+            if (feeItemId is { } itemId)
+            {
+                var item = await db.FeeScheduleItems
+                    .Include(i => i.fee_schedule).ThenInclude(s => s.contract).ThenInclude(c => c.slot).ThenInclude(s => s.zone)
+                    .SingleOrDefaultAsync(i => i.fee_item_id == itemId, cancellationToken);
+                if (item is null || item.fee_schedule.contract.slot.zone.ward_unit_id != wardId)
+                {
+                    throw new NotFoundException(FinanceMessages.FeeItemNotFound);
+                }
+
+                if (!FeeItemStatuses.IsOutstanding(item.item_status) || item.fee_schedule.superseded_at is not null)
+                {
+                    throw new DomainRuleException(FinanceMessages.FeeItemNoLongerPayable);
+                }
+
+                payment = new PaymentTransaction
+                {
+                    payment_purpose = PaymentPurposes.RentalFee,
+                    fee_item_id = itemId,
+                    amount = item.amount,
+                    fee_item = item,
+                };
+            }
+            else
+            {
+                var id = penaltyId!.Value;
+                var penalty = await db.Penalties
+                    .Include(p => p.violation).ThenInclude(v => v.slot).ThenInclude(s => s!.zone)
+                    .Include(p => p.violation).ThenInclude(v => v.contract).ThenInclude(c => c!.slot).ThenInclude(s => s.zone)
+                    .Include(p => p.violation).ThenInclude(v => v.UserAccount)
+                    .SingleOrDefaultAsync(p => p.penalty_id == id, cancellationToken);
+                var violation = penalty?.violation;
+                var penaltyWard = violation?.slot?.zone.ward_unit_id
+                    ?? violation?.contract?.slot.zone.ward_unit_id
+                    ?? violation?.UserAccount?.ward_unit_id;
+                if (penalty is null || penaltyWard != wardId)
+                {
+                    throw new NotFoundException(FinanceMessages.PenaltyNotFound);
+                }
+
+                if (!PenaltyStatuses.IsPayable(penalty.penalty_status))
+                {
+                    throw new DomainRuleException(FinanceMessages.PenaltyNoLongerPayable);
+                }
+
+                payment = new PaymentTransaction
+                {
+                    payment_purpose = PaymentPurposes.Penalty,
+                    penalty_id = id,
+                    amount = penalty.amount,
+                    penalty = penalty,
+                };
+            }
+
+            // A checkout the vendor opened on this target must not be completed later on top of
+            // the payment the officer is recording now.
+            var openAttempts = await db.PaymentTransactions
+                .Where(t => t.transaction_status == PaymentStatuses.Pending
+                    && ((feeItemId != null && t.fee_item_id == feeItemId)
+                        || (penaltyId != null && t.penalty_id == penaltyId)))
+                .ToListAsync(cancellationToken);
+            foreach (var attempt in openAttempts)
+            {
+                attempt.transaction_status = PaymentStatuses.Failed;
+                attempt.callback_received_at = now;
+            }
+
+            payment.idempotency_key = $"OFFLINE-{Guid.NewGuid():N}";
+            payment.provider = method;
+            payment.provider_reference = reference;
+            payment.transaction_status = PaymentStatuses.Success;
+            payment.callback_received_at = now;
+            payment.created_at = now;
+            db.PaymentTransactions.Add(payment);
+
+            await ApplySuccessAsync(payment, cancellationToken);
+
+            db.AuditLogs.Add(new AuditLog
+            {
+                actor_user_id = actorUserId,
+                action = "OFFLINE_PAYMENT_RECORDED",
+                entity_type = feeItemId is not null ? "FeeScheduleItem" : "Penalty",
+                entity_id = feeItemId ?? penaltyId!.Value,
+                details = JsonSerializer.Serialize(new { method, reference, note, amount = payment.amount }),
+                created_at = now,
+            });
+
+            await db.SaveChangesAsync(cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
+            return payment.transaction_id;
+        });
+    }
 
     /// <summary>Every penalty raised against a violation identified to this vendor.</summary>
     private IQueryable<ScaffoldedModels.Penalty> VendorPenalties(long vendorId) =>

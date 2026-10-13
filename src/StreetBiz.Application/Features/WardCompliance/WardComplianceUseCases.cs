@@ -1,5 +1,6 @@
 using FluentValidation;
 using MediatR;
+using StreetBiz.Application.Common.Exceptions;
 using StreetBiz.Application.Common.Security;
 using StreetBiz.Application.Features.AiAssistance;
 using StreetBiz.Application.Features.WardSlots;
@@ -7,7 +8,8 @@ using StreetBiz.Application.Features.WardSlots;
 namespace StreetBiz.Application.Features.WardCompliance;
 
 #region Enrollment / Registration Use Cases
-public sealed record ListWardEnrollmentsQuery(string? Status, int Page = 1) : IRequest<IReadOnlyList<WardEnrollmentListItemDto>>;
+public sealed record ListWardEnrollmentsQuery(string? Status, int Page = 1, string? VendorType = null)
+    : IRequest<IReadOnlyList<WardEnrollmentListItemDto>>;
 
 public sealed class ListWardEnrollmentsQueryValidator : AbstractValidator<ListWardEnrollmentsQuery>
 {
@@ -27,7 +29,8 @@ public sealed class ListWardEnrollmentsQueryHandler(
         CancellationToken cancellationToken)
     {
         var actor = await actorContext.RequireAsync(cancellationToken);
-        return await complianceService.ListEnrollmentsAsync(actor, request.Status, request.Page, cancellationToken);
+        return await complianceService.ListEnrollmentsAsync(
+            actor, request.Status, request.Page, cancellationToken, request.VendorType);
     }
 }
 
@@ -52,6 +55,30 @@ public sealed class GetWardEnrollmentDetailQueryHandler(
     {
         var actor = await actorContext.RequireAsync(cancellationToken);
         return await complianceService.GetEnrollmentDetailAsync(actor, request.Id, cancellationToken);
+    }
+}
+
+public sealed record GenerateEnrollmentDocumentQuery(long Id, string Format) : IRequest<(byte[] Content, string FileName)>;
+
+public sealed class GenerateEnrollmentDocumentQueryValidator : AbstractValidator<GenerateEnrollmentDocumentQuery>
+{
+    public GenerateEnrollmentDocumentQueryValidator()
+    {
+        RuleFor(x => x.Id).GreaterThan(0);
+        RuleFor(x => x.Format).Must(f => f is "docx" or "pdf").WithMessage("Định dạng phải là docx hoặc pdf.");
+    }
+}
+
+public sealed class GenerateEnrollmentDocumentQueryHandler(
+    IWardActorContext actorContext,
+    IWardComplianceService complianceService)
+    : IRequestHandler<GenerateEnrollmentDocumentQuery, (byte[] Content, string FileName)>
+{
+    public async Task<(byte[] Content, string FileName)> Handle(
+        GenerateEnrollmentDocumentQuery request, CancellationToken cancellationToken)
+    {
+        var actor = await actorContext.RequireAsync(cancellationToken);
+        return await complianceService.GenerateEnrollmentDocumentAsync(actor, request.Id, request.Format, cancellationToken);
     }
 }
 
@@ -118,6 +145,20 @@ public sealed class ConfirmEnrollmentIdentityCommandHandler(
     }
 }
 #endregion
+
+public sealed record ClaimWardEnrollmentCommand(long Id) : IRequest<WardEnrollmentDetailDto>;
+
+public sealed class ClaimWardEnrollmentCommandHandler(
+    IWardActorContext actorContext,
+    IWardComplianceService complianceService)
+    : IRequestHandler<ClaimWardEnrollmentCommand, WardEnrollmentDetailDto>
+{
+    public async Task<WardEnrollmentDetailDto> Handle(ClaimWardEnrollmentCommand request, CancellationToken cancellationToken)
+    {
+        var actor = await actorContext.RequireAsync(cancellationToken);
+        return await complianceService.ClaimEnrollmentAsync(actor, request.Id, cancellationToken);
+    }
+}
 
 #region Rental Application Use Cases
 public sealed record ListWardRentalApplicationsQuery(string? Status, int Page = 1) : IRequest<IReadOnlyList<WardRentalApplicationListItemDto>>;
@@ -453,6 +494,14 @@ public sealed class RecordWardViolationCommandValidator : AbstractValidator<Reco
         RuleFor(x => x.Request.ViolationType).NotEmpty().WithMessage("Loại vi phạm không được để trống.");
         RuleFor(x => x.Request.Description).NotEmpty().WithMessage("Mô tả vi phạm không được để trống.")
             .MaximumLength(1000).WithMessage("Mô tả không quá 1000 ký tự.");
+        RuleFor(x => x.Request.ExplanationMethod)
+            .Must(m => m is "DIRECT" or "WRITTEN")
+            .When(x => x.Request.ExplanationRequired)
+            .WithMessage("Chọn hình thức giải trình (trực tiếp hoặc bằng văn bản).");
+        RuleFor(x => x.Request.WitnessRole)
+            .Must(r => r is "WITNESS" or "WARD_REPRESENTATIVE")
+            .When(x => x.Request.WitnessRole is not null)
+            .WithMessage("Vai trò người chứng kiến không hợp lệ.");
     }
 }
 
@@ -470,6 +519,62 @@ public sealed class RecordWardViolationCommandHandler(
     }
 }
 
+public sealed record RecordWardExplanationCommand(
+    long ViolationId,
+    RecordExplanationRequest Request) : IRequest<WardViolationDetailDto>;
+
+public sealed class RecordWardExplanationCommandValidator : AbstractValidator<RecordWardExplanationCommand>
+{
+    public RecordWardExplanationCommandValidator()
+    {
+        RuleFor(x => x.ViolationId).GreaterThan(0);
+        RuleFor(x => x.Request.Content).NotEmpty().WithMessage("Nội dung giải trình không được để trống.")
+            .MaximumLength(1000).WithMessage("Nội dung giải trình không quá 1000 ký tự.");
+    }
+}
+
+public sealed class RecordWardExplanationCommandHandler(
+    IWardActorContext actorContext,
+    IWardComplianceService complianceService)
+    : IRequestHandler<RecordWardExplanationCommand, WardViolationDetailDto>
+{
+    public async Task<WardViolationDetailDto> Handle(RecordWardExplanationCommand request, CancellationToken ct)
+    {
+        var actor = await actorContext.RequireAsync(ct);
+        return await complianceService.RecordExplanationAsync(actor, request.ViolationId, request.Request, ct);
+    }
+}
+
+public sealed record DeliverWardViolationCommand(
+    long ViolationId,
+    DeliverViolationRequest Request) : IRequest<WardViolationDetailDto>;
+
+public sealed class DeliverWardViolationCommandValidator : AbstractValidator<DeliverWardViolationCommand>
+{
+    public DeliverWardViolationCommandValidator()
+    {
+        RuleFor(x => x.ViolationId).GreaterThan(0);
+        RuleFor(x => x.Request.RefusalReason).NotEmpty()
+            .When(x => x.Request.Refused)
+            .WithMessage("Ghi rõ lý do từ chối nhận biên bản.");
+        RuleFor(x => x.Request.DeliveredToName).NotEmpty()
+            .When(x => !x.Request.Refused)
+            .WithMessage("Ghi rõ tên người nhận biên bản.");
+    }
+}
+
+public sealed class DeliverWardViolationCommandHandler(
+    IWardActorContext actorContext,
+    IWardComplianceService complianceService)
+    : IRequestHandler<DeliverWardViolationCommand, WardViolationDetailDto>
+{
+    public async Task<WardViolationDetailDto> Handle(DeliverWardViolationCommand request, CancellationToken ct)
+    {
+        var actor = await actorContext.RequireAsync(ct);
+        return await complianceService.DeliverViolationAsync(actor, request.ViolationId, request.Request, ct);
+    }
+}
+
 public sealed record SanctionWardViolationCommand(
     long ViolationId,
     SanctionWardViolationRequest Request) : IRequest<WardViolationDetailDto>;
@@ -481,8 +586,6 @@ public sealed class SanctionWardViolationCommandValidator : AbstractValidator<Sa
         RuleFor(x => x.ViolationId).GreaterThan(0);
         RuleFor(x => x.Request.PenaltyScheduleId).GreaterThan(0).WithMessage("Phải chọn biểu khung phạt hợp lệ.");
         RuleFor(x => x.Request.DecisionNumber).NotEmpty().WithMessage("Số quyết định xử phạt không được để trống.");
-        RuleFor(x => x.Request.SignerName).NotEmpty().WithMessage("Thiếu tên người ký quyết định xử phạt.");
-        RuleFor(x => x.Request.SignerTitle).NotEmpty().WithMessage("Thiếu chức danh người ký (VD: Chủ tịch UBND Phường).");
     }
 }
 
@@ -497,6 +600,30 @@ public sealed class SanctionWardViolationCommandHandler(
     {
         var actor = await actorContext.RequireAsync(cancellationToken);
         return await complianceService.SanctionViolationAsync(actor, request.ViolationId, request.Request, cancellationToken);
+    }
+}
+
+public sealed record GenerateViolationDocumentQuery(long Id) : IRequest<WardViolationDocumentDto>;
+
+public sealed class GenerateViolationDocumentQueryValidator : AbstractValidator<GenerateViolationDocumentQuery>
+{
+    public GenerateViolationDocumentQueryValidator()
+    {
+        RuleFor(x => x.Id).GreaterThan(0);
+    }
+}
+
+public sealed class GenerateViolationDocumentQueryHandler(
+    IWardActorContext actorContext,
+    IWardComplianceService complianceService)
+    : IRequestHandler<GenerateViolationDocumentQuery, WardViolationDocumentDto>
+{
+    public async Task<WardViolationDocumentDto> Handle(
+        GenerateViolationDocumentQuery request,
+        CancellationToken cancellationToken)
+    {
+        var actor = await actorContext.RequireAsync(cancellationToken);
+        return await complianceService.GenerateViolationDocumentAsync(actor, request.Id, cancellationToken);
     }
 }
 #endregion
@@ -558,7 +685,15 @@ public sealed class GetAiEncroachmentCheckQueryHandler(
 {
     public async Task<AiEncroachmentResult> Handle(GetAiEncroachmentCheckQuery request, CancellationToken cancellationToken)
     {
+        // Ward officers only, and only photos we store ourselves (or an inline image): the URL is
+        // caller-supplied, so fetching anything else would be a server-side request forgery vector.
         var actor = await actorContext.RequireAsync(cancellationToken);
+        if (!EvidenceFiles.TryParseUrl(request.PhotoUrl, out _, out _)
+            && request.PhotoUrl?.StartsWith("data:image/", StringComparison.OrdinalIgnoreCase) != true)
+        {
+            throw new DomainRuleException("Ảnh hiện trường phải được tải lên từ hệ thống.");
+        }
+
         return await insights.CheckEncroachmentAsync(
             actor, request.PhotoUrl, request.SlotWidth, request.SlotLength, request.SlotId, cancellationToken);
     }
@@ -598,3 +733,17 @@ public sealed class GetWardPatrolHeatmapQueryHandler(
     }
 }
 #endregion
+
+public sealed record CheckWardFastTrackQuery(long Id) : IRequest<FastTrackCheckDto>;
+
+public sealed class CheckWardFastTrackQueryHandler(
+    IWardActorContext actorContext,
+    IWardComplianceService complianceService)
+    : IRequestHandler<CheckWardFastTrackQuery, FastTrackCheckDto>
+{
+    public async Task<FastTrackCheckDto> Handle(CheckWardFastTrackQuery request, CancellationToken cancellationToken)
+    {
+        var actor = await actorContext.RequireAsync(cancellationToken);
+        return await complianceService.CheckFastTrackAsync(actor, request.Id, cancellationToken);
+    }
+}

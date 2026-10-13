@@ -23,8 +23,9 @@ public sealed class WardComplianceController(ISender sender) : ControllerBase
     public async Task<ActionResult<IReadOnlyList<WardEnrollmentListItemDto>>> ListEnrollments(
         [FromQuery] string? status,
         [FromQuery] int page = 1,
+        [FromQuery] string? vendorType = null,
         CancellationToken ct = default) =>
-        Ok(await sender.Send(new ListWardEnrollmentsQuery(status, page), ct));
+        Ok(await sender.Send(new ListWardEnrollmentsQuery(status, page, vendorType), ct));
 
     [HttpGet("enrollments/{id:long}")]
     public async Task<ActionResult<WardEnrollmentDetailDto>> GetEnrollment(
@@ -39,6 +40,16 @@ public sealed class WardComplianceController(ISender sender) : ControllerBase
         CancellationToken ct) =>
         Ok(await sender.Send(new DecideWardEnrollmentCommand(id, decision), ct));
 
+    /// <summary>REG-06: which fast-track conditions this registration meets.</summary>
+    [HttpGet("enrollments/{id:long}/fast-track-check")]
+    public async Task<ActionResult<FastTrackCheckDto>> CheckFastTrack(long id, CancellationToken ct) =>
+        Ok(await sender.Send(new CheckWardFastTrackQuery(id), ct));
+
+    /// <summary>WARD-04: take a SUBMITTED file into review (UNDER_REVIEW); the vendor can no longer edit it.</summary>
+    [HttpPost("enrollments/{id:long}/claim")]
+    public async Task<ActionResult<WardEnrollmentDetailDto>> ClaimEnrollment(long id, CancellationToken ct) =>
+        Ok(await sender.Send(new ClaimWardEnrollmentCommand(id), ct));
+
     /// <summary>BR-41 KYC gate: officer confirms they compared the vendor against their
     /// physical/chip CCCD. Required before a decision/decision with APPROVE succeeds.</summary>
     [HttpPost("enrollments/{id:long}/confirm-identity")]
@@ -47,6 +58,19 @@ public sealed class WardComplianceController(ISender sender) : ControllerBase
         ConfirmEnrollmentIdentity request,
         CancellationToken ct) =>
         Ok(await sender.Send(new ConfirmEnrollmentIdentityCommand(id, request), ct));
+
+    /// <summary>Mẫu số 01 Phụ lục II, TT 68/2025/TT-BTC, filled with this registration's own data,
+    /// as a downloadable .docx or .pdf (?format=docx|pdf, default docx).</summary>
+    [HttpGet("enrollments/{id:long}/document")]
+    public async Task<IActionResult> GetEnrollmentDocument(
+        long id, [FromQuery] string format = "docx", CancellationToken ct = default)
+    {
+        var (content, fileName) = await sender.Send(new GenerateEnrollmentDocumentQuery(id, format), ct);
+        var contentType = format == "pdf"
+            ? "application/pdf"
+            : "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+        return File(content, contentType, fileName);
+    }
     #endregion
 
     #region Rental Applications / Temporary Usage Permits
@@ -140,12 +164,38 @@ public sealed class WardComplianceController(ISender sender) : ControllerBase
         CancellationToken ct) =>
         Ok(await sender.Send(new RecordWardViolationCommand(request), ct));
 
+    [HttpPost("violations/{id:long}/explanation")]
+    public async Task<ActionResult<WardViolationDetailDto>> RecordExplanation(
+        long id,
+        RecordExplanationRequest request,
+        CancellationToken ct) =>
+        Ok(await sender.Send(new RecordWardExplanationCommand(id, request), ct));
+
+    [HttpPost("violations/{id:long}/deliver")]
+    public async Task<ActionResult<WardViolationDetailDto>> DeliverViolation(
+        long id,
+        DeliverViolationRequest request,
+        CancellationToken ct) =>
+        Ok(await sender.Send(new DeliverWardViolationCommand(id, request), ct));
+
     [HttpPost("violations/{id:long}/sanction")]
     public async Task<ActionResult<WardViolationDetailDto>> SanctionViolation(
         long id,
         SanctionWardViolationRequest request,
         CancellationToken ct) =>
         Ok(await sender.Send(new SanctionWardViolationCommand(id, request), ct));
+
+    /// <summary>Mẫu biên bản số 01 (Điều 58 Luật XLVPHC, NĐ 118/2021/NĐ-CP), filled with this
+    /// violation's recorded data, as a downloadable .docx.</summary>
+    [HttpGet("violations/{id:long}/document")]
+    public async Task<IActionResult> GetViolationDocument(long id, CancellationToken ct)
+    {
+        var doc = await sender.Send(new GenerateViolationDocumentQuery(id), ct);
+        return File(
+            doc.Content,
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            doc.FileName);
+    }
     #endregion
 
     #region AI Assistance
@@ -172,20 +222,6 @@ public sealed class WardComplianceController(ISender sender) : ControllerBase
         AiSuggestionFeedbackRequest request,
         CancellationToken ct) =>
         Ok(await sender.Send(new ReviewAiSuggestionCommand(id, request), ct));
-
-    /// <summary>Authenticated only -- an earlier draft left this [AllowAnonymous], letting
-    /// anyone call out to a paid LLM with no rate limit. See Program.cs for the rate-limit
-    /// policy applied to this route.</summary>
-    [EnableRateLimiting("VendorAssistantAi")]
-    [HttpPost("ai/vendor-assistant")]
-    public async Task<ActionResult<VendorAssistantResponse>> VendorAssistant(
-        [FromBody] VendorAssistantRequest request,
-        [FromServices] IAiComplianceService aiService,
-        CancellationToken ct)
-    {
-        var answer = await aiService.AnswerVendorAssistantAsync(request.Question, request.Context, ct);
-        return Ok(new VendorAssistantResponse(answer, true));
-    }
     #endregion
 
     #region Insights (rule-based, no LLM)
@@ -206,6 +242,4 @@ public sealed class WardComplianceController(ISender sender) : ControllerBase
     #endregion
 }
 
-public sealed record VendorAssistantRequest(string Question, string? Context = null);
-public sealed record VendorAssistantResponse(string Answer, bool IsAiGenerated);
 

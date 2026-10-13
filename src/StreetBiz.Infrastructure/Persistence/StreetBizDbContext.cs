@@ -42,6 +42,8 @@ public partial class StreetBizDbContext : DbContext
 
     public virtual DbSet<FeeScheduleItem> FeeScheduleItems { get; set; }
 
+    public virtual DbSet<DepositRefund> DepositRefunds { get; set; }
+
     public virtual DbSet<FoodCategory> FoodCategories { get; set; }
 
     public virtual DbSet<FoodSafetyApplication> FoodSafetyApplications { get; set; }
@@ -117,6 +119,8 @@ public partial class StreetBizDbContext : DbContext
     public virtual DbSet<UserSession> UserSessions { get; set; }
 
     public virtual DbSet<Vendor> Vendors { get; set; }
+
+    public virtual DbSet<WardCompliancePolicy> WardCompliancePolicies { get; set; }
 
     public virtual DbSet<VendorComment> VendorComments { get; set; }
 
@@ -398,6 +402,9 @@ public partial class StreetBizDbContext : DbContext
             entity.HasIndex(e => new { e.due_date, e.item_status }, "IX_FeeScheduleItems_DueDate");
 
             entity.Property(e => e.amount).HasColumnType("decimal(18, 0)");
+            entity.Property(e => e.deposit_amount).HasColumnType("decimal(18, 0)").HasDefaultValue(0m);
+            entity.Property(e => e.original_amount).HasColumnType("decimal(18, 0)");
+            entity.Property(e => e.adjustment_reason).HasMaxLength(500);
             entity.Property(e => e.item_status)
                 .HasMaxLength(20)
                 .HasDefaultValue("PENDING");
@@ -406,6 +413,25 @@ public partial class StreetBizDbContext : DbContext
                 .HasForeignKey(d => d.fee_schedule_id)
                 .OnDelete(DeleteBehavior.ClientSetNull)
                 .HasConstraintName("FK_FeeScheduleItems_Schedule");
+        });
+
+        modelBuilder.Entity<DepositRefund>(entity =>
+        {
+            entity.HasKey(e => e.refund_id);
+
+            entity.HasIndex(e => e.contract_id, "UQ_DepositRefunds_Contract").IsUnique();
+
+            entity.Property(e => e.deposit_paid).HasColumnType("decimal(18, 0)");
+            entity.Property(e => e.amount).HasColumnType("decimal(18, 0)");
+            entity.Property(e => e.deduction_reason).HasMaxLength(500);
+            entity.Property(e => e.method).HasMaxLength(20);
+            entity.Property(e => e.reference).HasMaxLength(100);
+            entity.Property(e => e.refunded_at).HasDefaultValueSql("(sysutcdatetime())");
+
+            entity.HasOne(d => d.contract).WithMany()
+                .HasForeignKey(d => d.contract_id)
+                .OnDelete(DeleteBehavior.ClientSetNull)
+                .HasConstraintName("FK_DepositRefunds_Contract");
         });
 
         modelBuilder.Entity<FoodCategory>(entity =>
@@ -816,6 +842,10 @@ public partial class StreetBizDbContext : DbContext
                 .HasMaxLength(30)
                 .HasComputedColumnSql("(CONVERT([nvarchar](30),N'WARD_AUTHORITY'))", true);
             entity.Property(e => e.price_per_day).HasColumnType("decimal(18, 0)");
+            entity.Property(e => e.price_per_month).HasColumnType("decimal(18, 0)");
+            entity.Property(e => e.quarter_discount_percent).HasColumnType("decimal(5, 2)");
+            entity.Property(e => e.price_display_unit).HasMaxLength(10).HasDefaultValue("DAY");
+            entity.Property(e => e.rental_mode).HasMaxLength(10).HasDefaultValue("STANDARD");
             entity.Property(e => e.regulation_ref).HasMaxLength(120);
             entity.Property(e => e.segment_from).HasMaxLength(150);
             entity.Property(e => e.segment_to).HasMaxLength(150);
@@ -1128,6 +1158,7 @@ public partial class StreetBizDbContext : DbContext
             entity.HasIndex(e => e.slot_code, "UQ__Sidewalk__5D19A1A4F1795837").IsUnique();
 
             entity.Property(e => e.business_category).HasMaxLength(30);
+            entity.Property(e => e.price_override).HasColumnType("decimal(18, 0)");
             entity.Property(e => e.created_at).HasDefaultValueSql("(sysutcdatetime())");
             entity.Property(e => e.has_power).HasDefaultValue(false);
             entity.Property(e => e.has_trash_bin).HasDefaultValue(false);
@@ -1296,6 +1327,7 @@ public partial class StreetBizDbContext : DbContext
                 .HasMaxLength(20)
                 .HasDefaultValue("ACTIVE");
             entity.Property(e => e.created_at).HasDefaultValueSql("(sysutcdatetime())");
+            entity.Property(e => e.failed_login_count).HasDefaultValue(0);
             entity.Property(e => e.full_name).HasMaxLength(150);
             entity.Property(e => e.password_hash).HasMaxLength(255);
             entity.Property(e => e.phone_number).HasMaxLength(15);
@@ -1372,6 +1404,25 @@ public partial class StreetBizDbContext : DbContext
                 .HasConstraintName("FK_Vendors_User");
         });
 
+        modelBuilder.Entity<WardCompliancePolicy>(entity =>
+        {
+            entity.HasKey(e => e.ward_unit_id);
+
+            entity.Property(e => e.updated_at).HasDefaultValueSql("(sysutcdatetime())");
+            entity.Property(e => e.ward_unit_type)
+                .HasMaxLength(20)
+                .HasComputedColumnSql("(CONVERT([nvarchar](20),N'WARD'))", true);
+
+            entity.HasOne(d => d.AdministrativeUnit).WithOne()
+                .HasPrincipalKey<AdministrativeUnit>(p => new { p.unit_id, p.unit_type })
+                .HasForeignKey<WardCompliancePolicy>(d => new { d.ward_unit_id, d.ward_unit_type })
+                .HasConstraintName("FK_WardCompliancePolicies_Ward");
+
+            entity.HasOne(d => d.UserAccount).WithMany()
+                .HasForeignKey(d => d.updated_by)
+                .HasConstraintName("FK_WardCompliancePolicies_UpdatedBy");
+        });
+
         modelBuilder.Entity<VendorComment>(entity =>
         {
             entity.HasKey(e => e.comment_id).HasName("PK__VendorCo__E7957687EF3B4D7C");
@@ -1445,6 +1496,23 @@ public partial class StreetBizDbContext : DbContext
             entity.Property(e => e.description).HasMaxLength(1000);
             entity.Property(e => e.evidence_url).HasMaxLength(500);
             entity.Property(e => e.recorded_at).HasDefaultValueSql("(sysutcdatetime())");
+            entity.Property(e => e.bien_ban_so).HasMaxLength(50);
+            entity.Property(e => e.prepared_location).HasMaxLength(255);
+            entity.Property(e => e.witness_name).HasMaxLength(150);
+            entity.Property(e => e.witness_role).HasMaxLength(20);
+            entity.Property(e => e.witness_occupation).HasMaxLength(150);
+            entity.Property(e => e.witness_address).HasMaxLength(255);
+            entity.Property(e => e.violator_full_name).HasMaxLength(150);
+            entity.Property(e => e.violator_gender).HasMaxLength(10);
+            entity.Property(e => e.violator_nationality).HasMaxLength(50);
+            entity.Property(e => e.violator_id_number).HasMaxLength(20);
+            entity.Property(e => e.violator_id_issued_place).HasMaxLength(150);
+            entity.Property(e => e.violator_address).HasMaxLength(255);
+            entity.Property(e => e.containment_measures).HasMaxLength(500);
+            entity.Property(e => e.explanation_method).HasMaxLength(20);
+            entity.Property(e => e.explanation_content).HasMaxLength(1000);
+            entity.Property(e => e.delivered_to_name).HasMaxLength(150);
+            entity.Property(e => e.delivery_refusal_reason).HasMaxLength(500);
             entity.Property(e => e.recorder_role)
                 .HasMaxLength(30)
                 .HasComputedColumnSql("(CONVERT([nvarchar](30),N'WARD_AUTHORITY'))", true);

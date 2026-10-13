@@ -35,7 +35,7 @@ public sealed class WardConfigurationUseCaseTests
         await new CreateWardZoneCommandHandler(ctx, svc).Handle(new(zoneRequest), default);
         await new UpdateWardZoneCommandHandler(ctx, svc).Handle(new(1, zoneRequest), default);
         await new DeleteWardZoneCommandHandler(ctx, svc).Handle(new(1, "t"), default);
-        await new PreviewWardZoneImpactQueryHandler(ctx, svc).Handle(new(1, new(1, null, null)), default);
+        await new PreviewWardZoneImpactQueryHandler(ctx, svc).Handle(new(1, new(1, null, null, [])), default);
         await new ListWardZoneHistoryQueryHandler(ctx, svc).Handle(new(1), default);
         await new GetWardSlotGridQueryHandler(ctx, svc).Handle(new(null), default);
         await new CheckWardSlotPlacementQueryHandler(ctx, svc).Handle(new(new(1, 16, 108, 2, 2), null), default);
@@ -132,7 +132,7 @@ public sealed class WardConfigurationUseCaseTests
         Assert.False(zone.Validate(new CreateWardZoneCommand(ZoneRequest() with { RegulationIssuer = new string('x', 80) + "x" })).IsValid);
 
         Assert.False(new DeleteWardZoneCommandValidator().Validate(new DeleteWardZoneCommand(1, "")).IsValid);
-        Assert.False(new PreviewWardZoneImpactQueryValidator().Validate(new PreviewWardZoneImpactQuery(1, new(0, null, null))).IsValid);
+        Assert.False(new PreviewWardZoneImpactQueryValidator().Validate(new PreviewWardZoneImpactQuery(1, new(0, null, null, []))).IsValid);
         Assert.False(new CancelWardPenaltyRateCommandValidator().Validate(new CancelWardPenaltyRateCommand(0)).IsValid);
         Assert.False(new ListWardPenaltyHistoryQueryValidator().Validate(new ListWardPenaltyHistoryQuery("")).IsValid);
 

@@ -30,6 +30,20 @@ public sealed class WardUseCaseTests
         actor.Should().Be(new WardActor(42, 7, "Ward Officer"));
     }
 
+    [Fact]
+    public async Task Actor_resolver_carries_the_accounts_sanction_authority_title_when_present()
+    {
+        var users = new Mock<IUserAccountRepository>();
+        users.Setup(x => x.GetByIdAsync(42, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new AppUser(
+                42, "0900000042", "hash", "Ward Officer", RoleCodes.WardAuthority, 7,
+                AccountStatuses.Active, DateTime.UtcNow, SanctionAuthorityTitle: "Chủ tịch UBND Phường"));
+
+        var actor = await new WardActorResolver(users.Object).ResolveAsync(42, CancellationToken.None);
+
+        actor.Should().Be(new WardActor(42, 7, "Ward Officer", "Chủ tịch UBND Phường"));
+    }
+
     [Theory]
     [InlineData(RoleCodes.Vendor, AccountStatuses.Active, 7)]
     [InlineData(RoleCodes.WardAuthority, AccountStatuses.Suspended, 7)]

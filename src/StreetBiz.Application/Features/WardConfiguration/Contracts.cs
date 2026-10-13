@@ -14,7 +14,9 @@ public sealed record PenaltyRateDto(
     DateOnly EffectiveFrom,
     DateOnly? EffectiveTo,
     DateTime CreatedAt,
-    bool IsInUse);
+    bool IsInUse,
+    /// <summary>The officer who set this rate (PenaltyFeeSchedules.created_by), for BR-46 traceability.</summary>
+    string ActorName);
 
 public sealed record WardPenaltyTypeDto(
     string ViolationType,
@@ -58,7 +60,13 @@ public sealed record WardZoneDto(
     int ActiveSlotCount,
     int FeatureCount,
     IReadOnlyList<ZoneFeeComponentView> FeeComponents,
-    string VersionToken);
+    string VersionToken,
+    string PriceDisplayUnit,
+    decimal? PricePerMonth,
+    string RentalMode,
+    DateOnly? EventStartDate,
+    DateOnly? EventEndDate,
+    decimal? QuarterDiscountPercent = null);
 
 /// <summary>
 /// Regulation parts are composed server-side into regulation_ref. On update, leaving all three
@@ -78,14 +86,38 @@ public sealed record UpsertZoneRequest(
     DateOnly? ApplicationDeadline,
     IReadOnlyList<ZoneFeeComponentInput> FeeComponents,
     string? ChangeReason,
-    string? VersionToken);
+    string? VersionToken,
+    /// <summary>"DAY" (default) or "MONTH". When MONTH, PricePerMonth is required, whole-month
+    /// terms are billed at it, and PricePerDay is derived from it (ROUND(PricePerMonth / 30, 0))
+    /// for EVENT and part-month terms rather than taken as-is.</summary>
+    string PriceDisplayUnit = "DAY",
+    long? PricePerMonth = null,
+    /// <summary>"STANDARD" (default, long-term) or "EVENT" (short-term/pop-up, keeps the
+    /// existing day-by-day rental flow). EVENT requires EventStartDate/EventEndDate and may
+    /// not use PriceDisplayUnit MONTH.</summary>
+    string RentalMode = "STANDARD",
+    DateOnly? EventStartDate = null,
+    DateOnly? EventEndDate = null,
+    /// <summary>STANDARD only: % taken off the rent of a 3/6/12-month term; null = no discount.</summary>
+    decimal? QuarterDiscountPercent = null);
 
-public sealed record ZoneImpactPreviewRequest(long PricePerDay, TimeOnly? AvailableFrom, TimeOnly? AvailableTo);
+/// <summary>The pricing fields default to "unchanged" so older clients that only send a day
+/// price keep previewing exactly what they did before.</summary>
+public sealed record ZoneImpactPreviewRequest(
+    long PricePerDay,
+    TimeOnly? AvailableFrom,
+    TimeOnly? AvailableTo,
+    IReadOnlyList<ZoneFeeComponentInput> FeeComponents,
+    string? PriceDisplayUnit = null,
+    long? PricePerMonth = null,
+    decimal? QuarterDiscountPercent = null);
 
 public sealed record ZoneImpactItem(string Kind, long Id, string SlotCode, string VendorName, int TermDays, decimal CurrentTotal, decimal NewTotal);
 
 public sealed record ZoneImpactPreviewDto(
-    bool PriceChanged,
+    /// <summary>True when the price-per-day OR the fee components changed -- either one changes
+    /// the total a pending application or renewal will be charged once approved.</summary>
+    bool AmountChanged,
     bool HoursChanged,
     IReadOnlyList<ZoneImpactItem> PendingApplications,
     IReadOnlyList<ZoneImpactItem> OpenRenewals,
@@ -231,6 +263,22 @@ public sealed record UpsertStreetFeatureRequest(
 public sealed record StreetFeatureMutationResultDto(WardStreetFeatureDto Feature, IReadOnlyList<PlacementIssue> AffectedSlots);
 #endregion
 
+#region WardCompliancePolicy (Phase A)
+/// <summary>Null fields mean the feature is off for this ward -- no "consider revoking" banner,
+/// no overdue-penalty reminder sweep. A ward opts in explicitly.</summary>
+public sealed record WardCompliancePolicyDto(
+    int? ViolationThresholdCount,
+    int? ViolationWindowDays,
+    int? UnpaidPenaltyGraceDays,
+    DateTime? UpdatedAt,
+    string? UpdatedByName);
+
+public sealed record UpsertWardCompliancePolicyRequest(
+    int? ViolationThresholdCount,
+    int? ViolationWindowDays,
+    int? UnpaidPenaltyGraceDays);
+#endregion
+
 public static class StreetFeatureTypes
 {
     public static readonly string[] All = ["TRANSFORMER", "HYDRANT", "TREE", "LIGHT_POLE", "BUS_STOP", "PARKING"];
@@ -314,7 +362,12 @@ public interface IWardConfigurationService
     Task DeleteSlotAsync(WardActor actor, long slotId, string versionToken, CancellationToken ct);
     Task<BatchPreviewDto> PreviewBatchAsync(WardActor actor, BatchPreviewRequest request, CancellationToken ct);
     Task<IReadOnlyList<WardSlotDto>> CreateBatchAsync(WardActor actor, BatchCreateRequest request, CancellationToken ct);
+    Task<IReadOnlyList<ConfigHistoryEntryDto>> ListSlotHistoryAsync(WardActor actor, long slotId, CancellationToken ct);
     Task<StreetFeatureMutationResultDto> CreateFeatureAsync(WardActor actor, UpsertStreetFeatureRequest request, CancellationToken ct);
     Task<StreetFeatureMutationResultDto> UpdateFeatureAsync(WardActor actor, int featureId, UpsertStreetFeatureRequest request, CancellationToken ct);
     Task DeleteFeatureAsync(WardActor actor, int featureId, string versionToken, CancellationToken ct);
+
+    // Phase A
+    Task<WardCompliancePolicyDto> GetCompliancePolicyAsync(WardActor actor, CancellationToken ct);
+    Task<WardCompliancePolicyDto> UpsertCompliancePolicyAsync(WardActor actor, UpsertWardCompliancePolicyRequest request, CancellationToken ct);
 }

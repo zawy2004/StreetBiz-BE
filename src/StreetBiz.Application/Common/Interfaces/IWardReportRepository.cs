@@ -17,4 +17,11 @@ public interface IWardReportRepository
 
     /// <summary>WARD-15: the ward's current operational snapshot.</summary>
     Task<WardDashboardRow> GetDashboardAsync(int wardUnitId, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// AIC-08: the extra facts the period summary reads -- the period's violations by type, the
+    /// on-time share of the instalments paid in it, and the largest overdue debtor right now.
+    /// </summary>
+    Task<ReportPeriodFacts> GetPeriodFactsAsync(
+        int wardUnitId, DateOnly from, DateOnly to, CancellationToken cancellationToken);
 }

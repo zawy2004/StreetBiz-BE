@@ -33,6 +33,9 @@ public sealed record ChatMessagePage(IReadOnlyList<ChatMessageRow> Messages, boo
 /// </summary>
 public sealed record ChatParticipant(long UserId, ChatParticipantSide Side);
 
+/// <summary>The two accounts in a thread: the buyer, and the seller who owns the storefront.</summary>
+public sealed record ChatThreadUsers(long CustomerUserId, long VendorUserId);
+
 public enum ChatParticipantSide
 {
     Customer,

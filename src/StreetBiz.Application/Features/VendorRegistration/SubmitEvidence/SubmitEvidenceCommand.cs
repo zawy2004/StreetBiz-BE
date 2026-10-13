@@ -35,6 +35,9 @@ public sealed class SubmitEvidenceCommandValidator : AbstractValidator<SubmitEvi
             .Must(url => EvidenceFiles.TryParseUrl(url, out _, out _))
             .WithMessage(RegMessages.UploadValidDocument)
             .MaximumLength(500).WithMessage(RegMessages.UploadValidDocument);
+
+        // OCR output is client-supplied; it only ever needs a few hundred characters.
+        RuleFor(x => x.OcrExtractedData).MaximumLength(4000).WithMessage(RegMessages.FieldTooLong);
     }
 }
 
@@ -64,6 +67,13 @@ public sealed class SubmitEvidenceCommandHandler(
             {
                 [nameof(request.FileUrl)] = [RegMessages.UploadValidDocument],
             });
+        }
+
+        // One file backs one document: attaching the same upload twice (or to another file) would
+        // let a single scan satisfy several requirements.
+        if (await repository.IsEvidenceFileUsedAsync(request.FileUrl, cancellationToken))
+        {
+            throw new ConflictException(RegMessages.EvidenceAlreadyUsed);
         }
 
         var evidence = new NewRegistrationEvidence(request.EvidenceType, request.FileUrl, request.OcrExtractedData);

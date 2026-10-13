@@ -4,7 +4,9 @@ using StreetBiz.Application.Common.Exceptions;
 using StreetBiz.Application.Common.Interfaces;
 using StreetBiz.Application.Common.Models;
 using StreetBiz.Application.Common.Security;
+using StreetBiz.Application.DTOs.AdministrativeUnits;
 using StreetBiz.Application.Features.VendorKyc;
+using StreetBiz.Application.Features.VendorRegistration.GenerateRegistrationDocument;
 using StreetBiz.Application.Features.VendorRegistration.SubmitEvidence;
 using StreetBiz.Application.Features.VendorRegistration.SubmitRegistration;
 using StreetBiz.Application.Features.VendorRegistration.UpdateRegistration;
@@ -118,6 +120,39 @@ public sealed class VendorRegistrationHandlerTests
         var result = await handler.Handle(Evidence(UserId), CancellationToken.None);
 
         result.EvidenceId.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task Generating_the_registration_document_uses_the_callers_own_name_and_ward_and_rejects_a_bad_format()
+    {
+        Owns(RegistrationStatuses.Submitted);
+        var currentUser = new Mock<ICurrentUser>();
+        currentUser.Setup(c => c.UserId).Returns(UserId);
+        var users = new Mock<IUserAccountRepository>();
+        users.Setup(u => u.GetByIdAsync(UserId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new AppUser(UserId, "0900000000", "x", "Nguyễn Văn A", RoleCodes.Vendor, null, AccountStatuses.Active, null));
+        units.Setup(u => u.ListWardsAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync([new WardDto(WardId, "Phường Kiểm Thử", null)]);
+        var generator = new Mock<IRegistrationDocumentGenerator>();
+        RegistrationDocumentData? captured = null;
+        generator.Setup(g => g.GenerateAsync(It.IsAny<RegistrationDocumentData>(), "docx", It.IsAny<CancellationToken>()))
+            .Callback<RegistrationDocumentData, string, CancellationToken>((d, _, _) => captured = d)
+            .ReturnsAsync(([1, 2, 3], "DangKyHKD_700.docx"));
+        var handler = new GenerateRegistrationDocumentQueryHandler(
+            vendorContext.Object, currentUser.Object, users.Object, units.Object, generator.Object);
+
+        var (content, fileName) = await handler.Handle(
+            new GenerateRegistrationDocumentQuery(RegistrationId, "docx"), CancellationToken.None);
+
+        content.Should().NotBeEmpty();
+        fileName.Should().Be("DangKyHKD_700.docx");
+        captured.Should().NotBeNull();
+        captured!.OwnerFullName.Should().Be("Nguyễn Văn A");
+        captured.WardName.Should().Be("Phường Kiểm Thử");
+        captured.RegistrationStatus.Should().Be(RegistrationStatuses.Submitted);
+
+        var validator = new GenerateRegistrationDocumentQueryValidator();
+        validator.Validate(new GenerateRegistrationDocumentQuery(RegistrationId, "xlsx")).IsValid.Should().BeFalse();
     }
 
     [Fact]

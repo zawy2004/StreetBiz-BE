@@ -67,6 +67,19 @@ public sealed class RentalContractRepository(StreetBizDbContext dbContext) : IRe
         contract.cancelled_at = DateTime.UtcNow;
         contract.slot.slot_status = SlotStatuses.Available;
 
+        // Phase D policy: a voluntary cancellation never refunds instalments already PAID, but
+        // future instalments that have not come due yet are dropped -- the vendor owes nothing
+        // more for periods they will not occupy the slot for.
+        var futureItems = await dbContext.FeeScheduleItems
+            .Where(i => i.fee_schedule.contract_id == contractId
+                && i.fee_schedule.superseded_at == null
+                && i.item_status == DebtStatuses.FeeItemPending)
+            .ToListAsync(cancellationToken);
+        foreach (var item in futureItems)
+        {
+            item.item_status = DebtStatuses.FeeItemCancelled;
+        }
+
         try
         {
             await dbContext.SaveChangesAsync(cancellationToken);

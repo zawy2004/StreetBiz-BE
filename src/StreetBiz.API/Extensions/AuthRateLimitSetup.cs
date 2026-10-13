@@ -14,6 +14,9 @@ public static class AuthRateLimitSetup
     /// <summary>Sign-in attempts: password and OTP.</summary>
     public const string SignIn = "AuthSignIn";
 
+    /// <summary>Token refresh: bursty per NAT (many tabs/devices), so a looser limit.</summary>
+    public const string Refresh = "AuthRefresh";
+
     /// <summary>Anything that causes an SMS to be sent.</summary>
     public const string OtpRequest = "AuthOtpRequest";
 
@@ -34,6 +37,7 @@ public static class AuthRateLimitSetup
             // endpoint itself, which those per-phone rules cannot.
             options.AddPolicy(SignIn, PerClient(limit: relaxed ? 200 : 10, windowMinutes: 5));
             options.AddPolicy(OtpRequest, PerClient(limit: relaxed ? 200 : 20, windowMinutes: 15));
+            options.AddPolicy(Refresh, PerClient(limit: relaxed ? 400 : 60, windowMinutes: 5));
 
             options.OnRejected = async (context, cancellationToken) =>
             {

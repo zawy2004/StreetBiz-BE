@@ -16,7 +16,38 @@ public sealed class ChatHub(
 {
     public const string MessageReceivedEvent = "ChatMessageReceived";
 
+    /// <summary>One of the caller's threads has a new message, wherever they are in the app.</summary>
+    public const string InboxChangedEvent = "ChatInboxChanged";
+
     public static string GroupName(long conversationId) => $"chat:{conversationId}";
+
+    public static string InboxGroupName(long userId) => $"inbox:{userId}";
+
+    /// <summary>
+    /// Every thread of the caller, for the unread badge and new-message alerts
+    /// on any screen. The account is read from the caller's own token and never
+    /// passed in, so nobody can listen to somebody else's inbox.
+    /// </summary>
+    public async Task SubscribeInbox()
+    {
+        var userId = await CallerUserIdAsync()
+            ?? throw new HubException("Only a buyer or a seller has an inbox.");
+        await Groups.AddToGroupAsync(
+            Context.ConnectionId,
+            InboxGroupName(userId),
+            Context.ConnectionAborted);
+    }
+
+    public async Task UnsubscribeInbox()
+    {
+        if (await CallerUserIdAsync() is { } userId)
+        {
+            await Groups.RemoveFromGroupAsync(
+                Context.ConnectionId,
+                InboxGroupName(userId),
+                Context.ConnectionAborted);
+        }
+    }
 
     public async Task SubscribeConversation(long conversationId)
     {
@@ -37,6 +68,18 @@ public sealed class ChatHub(
         Context.ConnectionId,
         GroupName(conversationId),
         Context.ConnectionAborted);
+
+    private async Task<long?> CallerUserIdAsync()
+    {
+        try
+        {
+            return (await participants.RequireParticipantAsync(Context.ConnectionAborted)).UserId;
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            return null;
+        }
+    }
 
     private async Task<bool> CanAccessAsync(long conversationId)
     {
