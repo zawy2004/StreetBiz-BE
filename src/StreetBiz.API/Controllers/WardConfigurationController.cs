@@ -1,6 +1,8 @@
 using MediatR;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
+using StreetBiz.Application.Features.AiAssistance;
 using StreetBiz.Application.Features.WardConfiguration;
 
 namespace StreetBiz.API.Controllers;
@@ -64,6 +66,13 @@ public sealed class WardConfigurationController(ISender sender) : ControllerBase
     [HttpGet("pricing-zones/{id:int}/history")]
     public async Task<ActionResult<IReadOnlyList<ConfigHistoryEntryDto>>> ZoneHistory(int id, CancellationToken ct) =>
         Ok(await sender.Send(new ListWardZoneHistoryQuery(id), ct));
+
+    /// <summary>AIC-07: a suggested price from 90 days of occupancy, within the configured zone's
+    /// own +-20% band. The officer still saves (or not) through UpdateZone like any other change.</summary>
+    [HttpGet("pricing-zones/{id:int}/price-suggestion")]
+    [EnableRateLimiting("WardAi")]
+    public async Task<ActionResult<ZonePriceSuggestionDto>> PriceSuggestion(int id, CancellationToken ct) =>
+        Ok(await sender.Send(new GetZonePriceSuggestionQuery(id), ct));
     #endregion
 
     #region WARD-01 Slot grid & street features

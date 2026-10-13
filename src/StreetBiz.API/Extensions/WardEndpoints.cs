@@ -25,6 +25,20 @@ public static class WardEndpoints
                         Window = TimeSpan.FromMinutes(1),
                         QueueLimit = 0,
                     }));
+            // AIC-04/06/07 and the ward-scoped encroachment check each call a paid LLM/vision
+            // provider per request; a per-officer cap keeps a runaway client (or a refresh loop)
+            // from burning through the shared API key quota.
+            options.AddPolicy("WardAi", context =>
+                System.Threading.RateLimiting.RateLimitPartition.GetFixedWindowLimiter(
+                    context.User.FindFirstValue("sub")
+                    ?? context.Connection.RemoteIpAddress?.ToString()
+                    ?? "anonymous",
+                    _ => new System.Threading.RateLimiting.FixedWindowRateLimiterOptions
+                    {
+                        PermitLimit = 20,
+                        Window = TimeSpan.FromMinutes(1),
+                        QueueLimit = 0,
+                    }));
             options.AddPolicy("WardDevSession", context =>
                 System.Threading.RateLimiting.RateLimitPartition.GetFixedWindowLimiter(
                     context.Connection.RemoteIpAddress?.ToString() ?? "anonymous",
