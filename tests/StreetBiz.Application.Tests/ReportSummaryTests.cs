@@ -190,7 +190,7 @@ public sealed class ReportSummaryTests
         var reports = new Mock<IWardReportRepository>();
         reports.Setup(x => x.GetCollectionReportAsync(10, It.IsAny<DateOnly>(), It.IsAny<DateOnly>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(Totals());
-        reports.Setup(x => x.GetDashboardAsync(10, It.IsAny<CancellationToken>())).ReturnsAsync(Dashboard());
+        reports.Setup(x => x.GetDashboardAsync(10, It.IsAny<DateOnly>(), It.IsAny<CancellationToken>())).ReturnsAsync(Dashboard());
         reports.Setup(x => x.GetPeriodFactsAsync(10, It.IsAny<DateOnly>(), It.IsAny<DateOnly>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(Facts());
 
@@ -212,7 +212,7 @@ public sealed class ReportSummaryTests
         var reports = new Mock<IWardReportRepository>();
         reports.Setup(x => x.GetCollectionReportAsync(11, It.IsAny<DateOnly>(), It.IsAny<DateOnly>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(Totals());
-        reports.Setup(x => x.GetDashboardAsync(11, It.IsAny<CancellationToken>())).ReturnsAsync(Dashboard());
+        reports.Setup(x => x.GetDashboardAsync(11, It.IsAny<DateOnly>(), It.IsAny<CancellationToken>())).ReturnsAsync(Dashboard());
         reports.Setup(x => x.GetPeriodFactsAsync(11, It.IsAny<DateOnly>(), It.IsAny<DateOnly>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(Facts());
 

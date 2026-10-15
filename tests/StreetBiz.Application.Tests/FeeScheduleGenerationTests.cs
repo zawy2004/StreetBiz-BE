@@ -34,18 +34,6 @@ public sealed class FeeScheduleGenerationTests
             Start,
             issuedOn ?? ApprovedAhead);
 
-    [Fact]
-    public void Only_the_rent_is_billed_because_the_quote_shows_other_components_as_reference_only()
-    {
-        var quote = FeeQuoteCalculator.Calculate(1, 30_000m, 90, ZoneOneComponents());
-
-        var plan = FeeInstalmentPlanner.Plan(quote, Start, ApprovedAhead);
-
-        // "Tiền thuê tính vào hợp đồng" = 90 x 30 000; cleaning, admin fee and deposit are "chưa tính vào hợp đồng".
-        quote.IsReferenceOnly.Should().BeTrue();
-        plan.Total.Should().Be(quote.BaseFee).And.Be(2_700_000m);
-    }
-
     [Theory]
     [InlineData(1)]
     [InlineData(29)]
@@ -72,14 +60,6 @@ public sealed class FeeScheduleGenerationTests
         int termDays, int expectedCount)
     {
         PlanFor(termDays).Instalments.Should().HaveCount(expectedCount);
-    }
-
-    [Fact]
-    public void Every_full_period_costs_the_same_with_nothing_extra_on_the_first()
-    {
-        var plan = PlanFor(90);
-
-        plan.Instalments.Select(instalment => instalment.Amount).Should().Equal(900_000m, 900_000m, 900_000m);
     }
 
     [Fact]
@@ -252,20 +232,6 @@ public sealed class FeeScheduleGenerationTests
     }
 
     [Fact]
-    public void A_renewal_bills_exactly_the_days_it_adds_from_the_day_after_the_old_end()
-    {
-        // 45 days added after a term ending 29/11, approved well ahead.
-        var plan = FeeInstalmentPlanner.PlanExtension(
-            30_000m, new DateOnly(2026, 11, 30), new DateOnly(2027, 1, 13), new DateOnly(2026, 11, 1));
-
-        plan.Total.Should().Be(45 * 30_000m);
-        plan.Instalments.Select(instalment => (instalment.DueDate, instalment.Amount)).Should().Equal(
-            (new DateOnly(2026, 11, 30), 900_000m),
-            (new DateOnly(2026, 12, 30), 450_000m));
-        plan.Instalments.Last().PeriodEnd.Should().Be(new DateOnly(2027, 1, 13));
-    }
-
-    [Fact]
     public async Task Generation_prices_the_applied_for_term_and_stores_the_matching_total()
     {
         var finance = new Mock<IFinanceRepository>();
@@ -280,7 +246,8 @@ public sealed class FeeScheduleGenerationTests
         finance.Verify(repository => repository.ReplaceFeeScheduleAsync(
             7,
             42,
-            2_700_000m,
+            // 90 days of rent (2 700 000) + cleaning (270 000) + admin fee (150 000) + deposit (500 000): the quote.
+            3_620_000m,
             It.Is<IReadOnlyList<FeeInstalment>>(instalments => instalments.Count == 3
                 // "Today" (01/09 in Đà Nẵng) is the start date: the first instalment gets the grace week.
                 && instalments[0].DueDate == Start.AddDays(7)),
@@ -324,34 +291,6 @@ public sealed class FeeScheduleGenerationTests
         var act = () => Handler(finance).Handle(new GenerateFeeScheduleCommand(7, 42), CancellationToken.None);
 
         await act.Should().ThrowAsync<DomainRuleException>().WithMessage(FinanceMessages.ContractNotActive);
-        finance.Verify(repository => repository.ReplaceFeeScheduleAsync(
-            It.IsAny<long>(), It.IsAny<long>(), It.IsAny<decimal>(),
-            It.IsAny<IReadOnlyList<FeeInstalment>>(), It.IsAny<CancellationToken>()), Times.Never);
-    }
-
-    [Fact]
-    public async Task A_renewal_appends_its_added_days_to_the_open_schedule()
-    {
-        var finance = new Mock<IFinanceRepository>();
-        finance.Setup(repository => repository.GetFeeScheduleContextAsync(7, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Context(termDays: 90));
-        finance.Setup(repository => repository.AppendInstalmentsAsync(
-                7, 42, It.IsAny<DateOnly>(), It.IsAny<FeePlan>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Schedule());
-        var sender = new Mock<ISender>();
-        sender.Setup(s => s.Send(It.IsAny<ExtendFeeScheduleCommand>(), It.IsAny<CancellationToken>()))
-            .Returns((ExtendFeeScheduleCommand command, CancellationToken token) =>
-                new ExtendFeeScheduleCommandHandler(finance.Object, Clock()).Handle(command, token));
-
-        await new ExtendFeeScheduleOnContractRenewed(sender.Object).Handle(
-            new RentalContractRenewedEvent(7, Start.AddDays(89), Start.AddDays(119), 42), CancellationToken.None);
-
-        finance.Verify(repository => repository.AppendInstalmentsAsync(
-            7,
-            42,
-            Start.AddDays(90),
-            It.Is<FeePlan>(plan => plan.Total == 900_000m && plan.Instalments.Count == 1),
-            It.IsAny<CancellationToken>()));
         finance.Verify(repository => repository.ReplaceFeeScheduleAsync(
             It.IsAny<long>(), It.IsAny<long>(), It.IsAny<decimal>(),
             It.IsAny<IReadOnlyList<FeeInstalment>>(), It.IsAny<CancellationToken>()), Times.Never);

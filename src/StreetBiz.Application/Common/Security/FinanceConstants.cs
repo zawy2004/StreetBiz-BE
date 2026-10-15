@@ -176,9 +176,6 @@ public static class FinanceMessages
     public static string EarlierInstalmentFirst(int ordinal, DateOnly dueDate) =>
         $"Vui lòng thanh toán kỳ {ordinal} (hạn {dueDate:dd/MM/yyyy}) trước.";
 
-    /// <summary>WARD-09: the renewal's days already have instalments on the open schedule.</summary>
-    public const string ExtensionAlreadyBilled = "Giai đoạn gia hạn này đã có kỳ phí trên lịch phí hiện tại.";
-
     /// <summary>WARD-14: marking a payment refunded that is not waiting for a refund.</summary>
     public const string RefundNotRequired = "Khoản thanh toán này không ở trạng thái chờ hoàn tiền.";
 

@@ -9,7 +9,7 @@ tables. No schema change was needed.
 
 | Use case | Backend behavior |
 | --- | --- |
-| SYS-03 | Generate a contract's fee schedule from `RentalContractApprovedEvent` (published by WARD-08/09, not yet implemented — a Development-only endpoint stands in). Splits the term into 30-day instalments; PER_TERM zone components (admin fee, deposit) fall entirely on the first instalment; the last instalment absorbs rounding. Regenerating supersedes the current revision instead of editing it, and is refused once any instalment is PAID or when the contract is no longer `ACTIVE`. |
+| SYS-03 | A contract's fee schedule is written by WARD-08/09 approval itself (`WardComplianceService`); `RentalContractApprovedEvent` regenerates one on demand (a Development-only endpoint raises it by hand). Splits the term into 30-day instalments; PER_TERM zone components (admin fee, deposit) fall entirely on the first instalment; the last instalment absorbs rounding. Regenerating supersedes the current revision instead of editing it, and is refused once any instalment is PAID or when the contract is no longer `ACTIVE`. |
 | SYS-04 | One callback endpoint (`POST /api/payments/{provider}/callback`) for every payment purpose. Looks up which purpose (`RENTAL_FEE`/`PENALTY`/`ORDER`) a transaction belongs to before applying, so a real MoMo/ZaloPay merchant account's single configured webhook URL still works. Idempotent: a repeated callback for an already-terminal transaction is recorded as `DUPLICATE`, never re-applied. |
 | SYS-05 | An invoice (`HD-{year}-{6 digits}`) is issued in the same transaction as a successful callback — never before payment is confirmed (BR-32). |
 | SYS-06 / FEE-02 | `FeeReminderHostedService` sweeps hourly (configurable): instalments past their due date move `PENDING → OVERDUE` with a notification; instalments due within 3 days get a reminder, at most once per calendar day. |
@@ -184,19 +184,21 @@ card MoMo publishes on developers.momo.vn.
 
 ## Fee schedule lifecycle (SYS-03)
 
-What is billed is the **rent only**, `price_per_day × days`: the "tiền thuê tính vào hợp đồng"
-line of the SIDE-02 quote. The zone's other components (cleaning, admin fee, deposit) are
-reference-only there ("chưa tính vào hợp đồng"), so billing them would charge more than the vendor
-agreed to. Instalments are 30-day periods due the day each starts, never sooner than 7 days after
-the schedule was issued (`FeeInstalmentPlanner.GraceDays`), so a contract approved today does not
-open with an instalment overdue tomorrow.
+What is billed is exactly the SIDE-02 quote (`FeeQuoteCalculator`): the rent after any quarterly
+discount, the zone's fees and the deposit, so a contract never costs more or less than the vendor
+was quoted. `FeeInstalmentPlanner` splits it into 30-day instalments due the day each starts; the
+one-off lines and the deposit fall on the first one. When a schedule is generated after the fact
+(the reconciliation sweep, or `GenerateFeeScheduleCommand`) the planner is given the issue date and
+no instalment is due sooner than 7 days after it (`FeeInstalmentPlanner.GraceDays`), so a vendor is
+not handed an instalment that is overdue tomorrow. The ward's own approval writes the schedule
+without that floor.
 
 Three paths keep a schedule in step with its contract:
 
 | Path | Trigger | What it does |
 | --- | --- | --- |
-| Approval | `RentalContractApprovedEvent` (published by WARD-08 inside its transaction) → `GenerateFeeScheduleOnContractApproved` | Generates the schedule. |
-| Renewal | `RentalContractRenewedEvent` (WARD-09) → `ExtendFeeScheduleOnContractRenewed` → `ExtendFeeScheduleCommand` | **Appends** the renewal's days as new instalments to the open schedule and raises its total. Instalments of the current term, paid or not, are untouched; publishing it twice is a `409`. |
+| Approval | WARD-08 approval (`WardComplianceService.PlanTermAsync`) writes the schedule in its own transaction | Prices the term with the quote calculator and the planner. `RentalContractApprovedEvent` → `GenerateFeeScheduleOnContractApproved` remains for regenerating a seeded contract. |
+| Renewal | WARD-09 approval (`WardComplianceService`) | Appends the renewal's instalments (no second one-time fee or deposit) to the contract's open schedule in the same transaction. |
 | Reconciliation | The hourly sweep, first step (`ReconcileFeeSchedulesCommand`) | Safety net for whichever workflow changed the contract without raising an event: bills an `ACTIVE` contract in force that has no instalments and nothing paid (the approving officer is the actor), and closes (`CANCELLED`) the open instalments of a contract that ended early whose period never began. |
 
 An instalment is "of a period that never began" when it is due after the last day the contract was in
@@ -205,10 +207,8 @@ is the Vietnam date of `cancelled_at` (a returned slot) or of the permit's `revo
 permit). The vendor is told once, with the amount. A suspended contract keeps billing: suspension is
 not an end, and whether to pause billing is the ward's call.
 
-The ward's approval and renewal on `develop` (`WardComplianceService`) do not publish these events
-yet; see "Remaining work". Until they do, reconciliation bills an approved contract within an hour,
-and `POST /api/dev/contracts/{id}/fee-schedule` and `.../fee-schedule/extend` (Development only)
-publish the events by hand.
+Reconciliation also bills an approved contract that somehow has no schedule within an hour, and
+`POST /api/dev/contracts/{id}/fee-schedule` (Development only) publishes the approval event by hand.
 
 ## Business calendar
 
@@ -282,18 +282,10 @@ testing-only caveat, not a production behavior.
 
 ## Remaining work
 
-- **Integration with WARD-08/09 on `develop`** (code owned by the ward workflow, not changed
-  here). Approval (`WardComplianceService`, ~line 597) writes a `FeeSchedules` header with
-  `total_amount = term × price_per_day` and **no `FeeScheduleItems`**; renewal (~line 1016)
-  supersedes the current revision even when it has been paid into, which drops the instalments of the
-  current term that are not due yet. Both should instead publish `RentalContractApprovedEvent` /
-  `RentalContractRenewedEvent` inside their transaction (`ReplaceFeeScheduleAsync` and
-  `AppendInstalmentsAsync` join an ambient transaction for exactly this) and drop their own
-  `FeeSchedules` write. Until then reconciliation bills approved contracts, but a renewal still loses
-  the not-yet-due instalments of the current term.
-- **Deposits** are not billed (see above), so there is nothing to refund or settle when a contract
-  ends. Charging a deposit means a separate obligation with its own life cycle (held, refunded,
-  deducted), not an instalment.
+- **Grace days on approval.** `WardComplianceService` calls the planner without an issue date, so a
+  contract approved today can open with an instalment due on its start date. Passing
+  `BusinessCalendar.Today(...)` there would give such a vendor the same grace week as a schedule
+  generated by the sweep.
 - **Receipt, not a tax e-invoice.** The PDF ("Biên lai thanh toán") is an internal
   record of a confirmed payment. It is not the official fee or penalty receipt
   ("biên lai thu phí, lệ phí" / "biên lai thu tiền phạt") that the authority

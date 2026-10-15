@@ -31,15 +31,6 @@ public interface IFinanceRepository
     Task<FeeScheduleRow?> GetCurrentFeeScheduleAsync(long contractId, CancellationToken cancellationToken);
 
     /// <summary>
-    /// SYS-03 for WARD-09: adds a renewal's instalments to the contract's open schedule and raises
-    /// its total, joining the caller's transaction when there is one. Refused (409) when the open
-    /// schedule already has an instalment due on or after <paramref name="firstDay"/>, so a
-    /// renewal published twice is not billed twice.
-    /// </summary>
-    Task<FeeScheduleRow> AppendInstalmentsAsync(
-        long contractId, long actorUserId, DateOnly firstDay, FeePlan plan, CancellationToken cancellationToken);
-
-    /// <summary>
     /// SYS-03 safety net: ACTIVE contracts in force on <paramref name="today"/> with nothing to
     /// bill (no open schedule, or one without instalments) and no instalment ever paid. A renewal
     /// (a superseded revision with payments) is not listed: it needs its own added days billed.

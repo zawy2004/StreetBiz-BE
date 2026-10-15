@@ -5,6 +5,7 @@ using StreetBiz.Application.Common.Exceptions;
 using StreetBiz.Application.Common.Security;
 using StreetBiz.Application.Features.WardFinance;
 using StreetBiz.Application.Features.WardSlots;
+using StreetBiz.Infrastructure.Payments;
 using StreetBiz.Infrastructure.Persistence;
 using StreetBiz.Infrastructure.Persistence.Repositories;
 using StreetBiz.Infrastructure.Persistence.ScaffoldedModels;
@@ -228,7 +229,7 @@ public sealed class WardFinanceServiceTests
         public TestContext Db { get; private set; } = null!;
 
         public WardFinanceService Service() =>
-            new(new TestContext(Options()), new FinanceRepository(new TestContext(Options()), Clock), Clock);
+            new(new TestContext(Options()), new FinanceRepository(new TestContext(Options()), Clock, Microsoft.Extensions.Options.Options.Create(new PaymentGatewaySettings())), Clock);
 
         private DbContextOptions<StreetBizDbContext> Options() =>
             new DbContextOptionsBuilder<StreetBizDbContext>().UseSqlite(Connection).Options;
