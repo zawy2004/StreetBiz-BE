@@ -168,14 +168,16 @@ public sealed class WardComplianceServiceTests
     }
 
     [Theory]
-    [InlineData("DIRECT", 2)]
-    [InlineData("WRITTEN", 5)]
-    public async Task Explanation_deadline_is_counted_in_working_days(string method, int workingDays)
+    // Recorded on Monday 12/10/2026 at 09:00 in Đà Nẵng. The day of the record is not counted and
+    // the window runs to the end of its last working day (Điều 147-148 BLDS via Điều 8 Luật XLVPHC):
+    // DIRECT = Tue + Wed, closing at 24:00 Wed 14/10; WRITTEN = 13, 14, 15, 16, 19, closing 24:00 Mon 19/10.
+    [InlineData("DIRECT", "2026-10-14T17:00:00Z")]
+    [InlineData("WRITTEN", "2026-10-19T17:00:00Z")]
+    public async Task Explanation_deadline_runs_to_the_end_of_the_last_working_day(string method, string deadlineUtc)
     {
         using var f = await Fixture.Create();
-        var service = f.NewService();
-        var todayVn = BusinessCalendar.Today(DateTime.UtcNow);
-        var expectedDeadline = BusinessCalendar.StartOfDayUtc(BusinessCalendar.AddWorkingDays(todayVn, workingDays));
+        var service = f.NewService(clock: new FixedClock(new DateTimeOffset(2026, 10, 12, 2, 0, 0, TimeSpan.Zero)));
+        var expectedDeadline = DateTime.Parse(deadlineUtc, null, System.Globalization.DateTimeStyles.AdjustToUniversal);
 
         var detail = await service.RecordViolationAsync(f.Actor, new RecordWardViolationRequest(
             null, 100, 10, "UNAUTHORIZED_BUSINESS_USE", "Vi phạm", null,
@@ -1522,6 +1524,105 @@ public sealed class WardComplianceServiceTests
         Assert.Equal("PENDING", (await verify.RenewalRequests.SingleAsync(r => r.renewal_id == 606)).renewal_status);
     }
 
+    [Fact]
+    public async Task An_approval_after_midnight_in_Da_Nang_starts_the_contract_on_the_Vietnamese_date()
+    {
+        // 01:30 on Tuesday 13/10 in Đà Nẵng is still Monday 12/10 in UTC. The contract (and so the
+        // permit's validity window) must start on the 13th, the day the officer approved it.
+        using var f = await Fixture.Create();
+        var clock = new FixedClock(new DateTimeOffset(2026, 10, 12, 18, 30, 0, TimeSpan.Zero));
+
+        await f.NewService(clock: clock).DecideRentalApplicationAsync(
+            f.Actor, 1, new WardRentalApplicationDecision("APPROVE", "Đạt yêu cầu", "PENDING"), default);
+
+        using var verify = f.NewDb();
+        var contract = await verify.RentalContracts.SingleAsync(c => c.application_id == 1);
+        Assert.Equal(new DateOnly(2026, 10, 13), contract.start_date);
+        Assert.Equal(new DateOnly(2026, 10, 13).AddDays(30 - 1), contract.end_date); // 30-day term, end inclusive
+    }
+
+    [Fact]
+    public async Task Renewal_decision_is_due_at_the_end_of_the_third_working_day()
+    {
+        using var f = await Fixture.Create();
+        var today = BusinessCalendar.Today(TimeProvider.System);
+        using (var seed = f.NewDb())
+        {
+            seed.RentalContracts.Add(new RentalContract
+            {
+                contract_id = 920, application_id = 1, slot_id = 100, vendor_id = 10,
+                start_date = today, end_date = today.AddDays(30), contract_status = "ACTIVE", created_at = DateTime.UtcNow
+            });
+            await seed.SaveChangesAsync();
+            // Filed Friday 28/08/2026 at 10:00 in Đà Nẵng: 31/08 (swapped), 01/09 and 02/09 are off,
+            // so the 3 working days are 03, 04 and 07/09 and the decision is due by 24:00 Mon 07/09.
+            seed.RenewalRequests.Add(new RenewalRequest
+            {
+                renewal_id = 720, contract_id = 920, requested_term_days = 30, renewal_status = "PENDING",
+                created_at = new DateTime(2026, 8, 28, 3, 0, 0, DateTimeKind.Utc)
+            });
+            await seed.SaveChangesAsync();
+        }
+
+        var detail = await f.NewService().GetRenewalDetailAsync(f.Actor, 720, default);
+
+        Assert.Equal(new DateTime(2026, 9, 7, 17, 0, 0, DateTimeKind.Utc), detail.SlaDueAt);
+    }
+
+    [Fact]
+    public async Task Inspecting_a_permit_by_its_number_works_in_the_officers_own_ward()
+    {
+        using var f = await Fixture.Create();
+        await SeedPermitsInTwoWards(f);
+
+        var result = await f.NewService().InspectPermitAsync(f.Actor, new InspectWardPermitRequest("960", null, null, null), default);
+
+        Assert.True(result.Found);
+        Assert.True(result.IsOwnWard);
+        Assert.Equal(960, result.PermitId);
+        Assert.Equal(910, result.ContractId);
+    }
+
+    [Fact]
+    public async Task Another_wards_permit_cannot_be_looked_up_by_its_sequential_number()
+    {
+        // Permit and contract numbers are sequential; answering them for every ward would let an
+        // officer enumerate the city's vendors. The signed QR is required instead.
+        using var f = await Fixture.Create();
+        await SeedPermitsInTwoWards(f);
+        var service = f.NewService();
+
+        foreach (var number in new[] { "961", "911" })
+        {
+            var result = await service.InspectPermitAsync(f.Actor, new InspectWardPermitRequest(number, null, null, null), default);
+            Assert.False(result.Found);
+            Assert.Equal("NOT_FOUND", result.EffectiveStatus);
+            Assert.Null(result.VendorName);
+        }
+    }
+
+    [Fact]
+    public async Task Another_wards_signed_QR_shows_validity_only_and_no_ids_to_act_on()
+    {
+        using var f = await Fixture.Create();
+        var (_, otherPayload) = await SeedPermitsInTwoWards(f);
+
+        var result = await f.NewService().InspectPermitAsync(f.Actor, new InspectWardPermitRequest(otherPayload, null, null, null), default);
+
+        Assert.True(result.Found);
+        Assert.True(result.IsValid);
+        Assert.False(result.IsOwnWard);
+        Assert.Equal("B-01", result.SlotCode);
+        Assert.Null(result.PermitId);
+        Assert.Null(result.ContractId);
+        Assert.Null(result.VendorId);
+        Assert.Null(result.SlotId);
+        Assert.Null(result.AiVisionResult);
+        // The scan is still on record, against the permit that was shown.
+        using var verify = f.NewDb();
+        Assert.Equal(961, (await verify.PermitScanLogs.SingleAsync()).permit_id);
+    }
+
     private sealed class Fixture : IDisposable
     {
         public SqliteConnection Connection { get; } = new("Data Source=:memory:");
@@ -1568,7 +1669,7 @@ public sealed class WardComplianceServiceTests
         public TestContext NewDb() =>
             new(new DbContextOptionsBuilder<StreetBizDbContext>().UseSqlite(Connection).Options);
 
-        public WardComplianceService NewService(IAiComplianceService? ai = null)
+        public WardComplianceService NewService(IAiComplianceService? ai = null, TimeProvider? clock = null)
         {
             // One context per service, shared with its KYC repository, so both see the same
             // change tracker -- mirrors the scoped lifetimes in DependencyInjection.
@@ -1578,11 +1679,50 @@ public sealed class WardComplianceServiceTests
                 new PermitTokenService(Options.Create(new PermitSettings { SigningKey = "test-only-signing-key-0123456789" })),
                 ai ?? new NoOpAiComplianceService(),
                 new KycResultRepository(db, new DateTimeProvider()),
-                TimeProvider.System,
+                clock ?? TimeProvider.System,
                 new RegistrationDocumentGenerator());
         }
 
         public void Dispose() => Connection.Dispose();
+    }
+
+    private sealed class FixedClock(DateTimeOffset now) : TimeProvider
+    {
+        public override DateTimeOffset GetUtcNow() => now;
+    }
+
+    // Signs QR payloads with the same key as Fixture.NewService, as a real permit would be.
+    private static readonly PermitTokenService Tokens =
+        new(Options.Create(new PermitSettings { SigningKey = "test-only-signing-key-0123456789" }));
+
+    /// <summary>A permit on slot 100 (ward 1) and one on slot 200, which belongs to ward 2.</summary>
+    private static async Task<(string OwnPayload, string OtherPayload)> SeedPermitsInTwoWards(Fixture f)
+    {
+        var today = BusinessCalendar.Today(TimeProvider.System);
+        var ownPayload = Tokens.Create(910, DateTime.UtcNow);
+        var otherPayload = Tokens.Create(911, DateTime.UtcNow);
+        using var seed = f.NewDb();
+        seed.PricingZones.Add(new PricingZone { zone_id = 2, ward_unit_id = 2, zone_name = "Khu B", price_per_day = 40000, created_by = 2 });
+        seed.SidewalkSlots.Add(new SidewalkSlot { slot_id = 200, zone_id = 2, slot_code = "B-01", source = "WARD_DEFINED", slot_status = "ACTIVE", latitude = 10, longitude = 106 });
+        seed.RentalApplications.Add(new RentalApplication { application_id = 20, registration_id = 1, slot_id = 200, application_method = "MANUAL_SELECTED", application_status = "APPROVED", requested_term_days = 30 });
+        seed.RentalContracts.AddRange(
+            new RentalContract { contract_id = 910, application_id = 1, slot_id = 100, vendor_id = 10, start_date = today, end_date = today.AddDays(30), contract_status = "ACTIVE", created_at = DateTime.UtcNow },
+            new RentalContract { contract_id = 911, application_id = 20, slot_id = 200, vendor_id = 10, start_date = today, end_date = today.AddDays(30), contract_status = "ACTIVE", created_at = DateTime.UtcNow });
+        await seed.SaveChangesAsync();
+        seed.DigitalPermits.AddRange(
+            new DigitalPermit { permit_id = 960, contract_id = 910, qr_payload = ownPayload, permit_status = "ACTIVE", issued_at = DateTime.UtcNow },
+            new DigitalPermit { permit_id = 961, contract_id = 911, qr_payload = otherPayload, permit_status = "ACTIVE", issued_at = DateTime.UtcNow });
+        await seed.SaveChangesAsync();
+        // The SQL Server view is not created by EnsureCreated; a table with the same shape stands in for it.
+        await seed.Database.ExecuteSqlRawAsync("""
+            CREATE TABLE IF NOT EXISTS vw_PermitValidity (permit_id INTEGER, contract_id INTEGER, qr_payload TEXT, slot_id INTEGER,
+              vendor_id INTEGER, start_date TEXT, end_date TEXT, permit_status TEXT, contract_status TEXT, effective_status TEXT)
+            """);
+        await seed.Database.ExecuteSqlRawAsync(
+            "INSERT INTO vw_PermitValidity VALUES (960, 910, {0}, 100, 10, {2}, {3}, 'ACTIVE', 'ACTIVE', 'VALID'), " +
+            "(961, 911, {1}, 200, 10, {2}, {3}, 'ACTIVE', 'ACTIVE', 'VALID')",
+            ownPayload, otherPayload, today.ToString("yyyy-MM-dd"), today.AddDays(30).ToString("yyyy-MM-dd"));
+        return (ownPayload, otherPayload);
     }
 
     /// Deterministic no-op double: every test in this file exercises DB/business-rule

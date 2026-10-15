@@ -49,5 +49,7 @@ public partial class StreetBizDbContext
         audit.Property(x => x.operation).HasMaxLength(80);
         audit.Property(x => x.outcome).HasMaxLength(40);
         audit.HasIndex(x => new { x.message_id, x.timestamp });
+        // The daily voice allowance sums one actor's voice_session rows since the start of the day.
+        audit.HasIndex(x => new { x.actor_id, x.operation, x.timestamp });
     }
 }

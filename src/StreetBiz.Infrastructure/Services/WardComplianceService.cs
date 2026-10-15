@@ -42,6 +42,11 @@ public sealed class WardComplianceService(
     private static DateOnly ToVnDate(DateTime utc) =>
         DateOnly.FromDateTime(TimeZoneInfo.ConvertTimeFromUtc(DateTime.SpecifyKind(utc, DateTimeKind.Utc), VietnamTimeZone));
 
+    /// <summary>NĐ 241/2026 Điều 21: a renewal is decided within 3 working days of being filed,
+    /// counted from the next day and running to the end of the third (BusinessCalendar).</summary>
+    private static DateTime RenewalSlaDueAt(DateTime createdAtUtc) =>
+        BusinessCalendar.EndOfDayUtc(BusinessCalendar.AddWorkingDays(ToVnDate(createdAtUtc), RenewalStatuses.DecisionSlaDays));
+
     private static string? NullIfBlank(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
     /// A violation has no ward column: it belongs to the ward of its slot, else of its
@@ -687,7 +692,7 @@ public sealed class WardComplianceService(
         var hasOccupant = await db.RentalContracts.AsNoTracking()
             .AnyAsync(c => c.slot_id == app.slot_id
                 && (c.contract_status == ContractStatuses.Active || c.contract_status == ContractStatuses.Suspended)
-                && c.end_date >= DateOnly.FromDateTime(Now), ct);
+                && c.end_date >= TodayVn, ct);
 
         if (hasOccupant)
         {
@@ -760,7 +765,7 @@ public sealed class WardComplianceService(
                     throw new DomainRuleException("Không thể cấp phép khi hồ sơ điểm bán liên kết chưa được phê duyệt (BR-16).");
                 }
 
-                var eventBlocker = EventZoneBlocker(app.slot.zone, app.requested_term_days, DateOnly.FromDateTime(Now));
+                var eventBlocker = EventZoneBlocker(app.slot.zone, app.requested_term_days, TodayVn);
                 if (eventBlocker is not null)
                 {
                     throw new DomainRuleException(eventBlocker);
@@ -770,14 +775,14 @@ public sealed class WardComplianceService(
                 var occupied = await db.RentalContracts
                     .AnyAsync(c => c.slot_id == app.slot_id
                         && (c.contract_status == ContractStatuses.Active || c.contract_status == ContractStatuses.Suspended)
-                        && c.end_date >= DateOnly.FromDateTime(Now), ct);
+                        && c.end_date >= TodayVn, ct);
 
                 if (occupied)
                 {
                     throw new ConflictException("Vị trí vỉa hè đã có giấy phép đang hoạt động.");
                 }
 
-                var startDate = DateOnly.FromDateTime(Now);
+                var startDate = TodayVn;
                 // end_date is inclusive: a 90-day term runs start .. start+89 (same as EventZoneBlocker).
                 var endDate = startDate.AddDays(app.requested_term_days - 1);
 
@@ -1163,7 +1168,7 @@ public sealed class WardComplianceService(
                 && r.contract.slot.slot_status != SlotStatuses.Suspended
                 && permit?.permit_status == PermitStatuses.Active;
 
-            var slaDueAt = r.created_at.AddDays(RenewalStatuses.DecisionSlaDays);
+            var slaDueAt = RenewalSlaDueAt(r.created_at);
             var isOverdue = RenewalStatuses.Open.Contains(r.renewal_status) && Now > slaDueAt;
 
             result.Add(new WardRenewalListItemDto(
@@ -1212,7 +1217,7 @@ public sealed class WardComplianceService(
         var vendorPhone = contract.vendor.user.phone_number;
         var vendorType = reg.vendor_type;
 
-        var today = DateOnly.FromDateTime(Now);
+        var today = TodayVn;
         var currentEndDate = contract.end_date;
         var remainingDays = currentEndDate.DayNumber - today.DayNumber;
         var proposedEndDate = currentEndDate.AddDays(renewal.requested_term_days);
@@ -1227,7 +1232,7 @@ public sealed class WardComplianceService(
             && compliance.Blockers.Count == 0;
         var isFastTrack = canApprove && compliance.Scorecard.IsCleanRecord;
 
-        var slaDueAt = renewal.created_at.AddDays(RenewalStatuses.DecisionSlaDays);
+        var slaDueAt = RenewalSlaDueAt(renewal.created_at);
         var isOverdue = RenewalStatuses.Open.Contains(renewal.renewal_status) && Now > slaDueAt;
 
         return new WardRenewalDetailDto(
@@ -1472,12 +1477,24 @@ public sealed class WardComplianceService(
 
         validity ??= await viewQuery.FirstOrDefaultAsync(x => x.qr_payload == raw, ct);
 
+        // A typed permit or contract number is sequential, so it is only accepted for the officer's
+        // own ward; another ward's permit needs the signed QR, as the public check does.
+        var foundByNumber = false;
         if (validity is null && long.TryParse(raw, out var parsedId))
         {
             validity = await viewQuery.FirstOrDefaultAsync(x => x.permit_id == parsedId || x.contract_id == parsedId, ct);
+            foundByNumber = validity is not null;
         }
 
-        if (validity is null)
+        var contract = validity is null
+            ? null
+            : await db.RentalContracts.AsNoTracking()
+                .Include(c => c.slot).ThenInclude(s => s.zone)
+                .Include(c => c.vendor).ThenInclude(v => v.BusinessRegistrations)
+                .SingleOrDefaultAsync(c => c.contract_id == validity.contract_id, ct);
+        var isOwnWard = contract?.slot.zone.ward_unit_id == actor.WardId;
+
+        if (validity is null || (foundByNumber && !isOwnWard))
         {
             return new InspectWardPermitResult(
                 Found: false, IsValid: false, EffectiveStatus: "NOT_FOUND",
@@ -1488,11 +1505,6 @@ public sealed class WardComplianceService(
                 LocationWarning: "Không tìm thấy giấy phép hợp lệ trên hệ thống.",
                 AiVisionResult: null);
         }
-
-        var contract = await db.RentalContracts.AsNoTracking()
-            .Include(c => c.slot).ThenInclude(s => s.zone)
-            .Include(c => c.vendor).ThenInclude(v => v.BusinessRegistrations)
-            .SingleOrDefaultAsync(c => c.contract_id == validity.contract_id, ct);
 
         var slot = contract?.slot;
         var vendorName = contract?.vendor.BusinessRegistrations.FirstOrDefault()?.display_name
@@ -1523,8 +1535,10 @@ public sealed class WardComplianceService(
             }
         }
 
+        // Another ward's stall: this officer can confirm the permit but has no authority to act on
+        // it, so neither the encroachment check (an action aid) nor the case ids are handed back.
         AiEncroachmentResult? aiVision = null;
-        if (!string.IsNullOrWhiteSpace(request.InspectionPhotoUrl))
+        if (isOwnWard && !string.IsNullOrWhiteSpace(request.InspectionPhotoUrl))
         {
             aiVision = await aiService.AnalyzeInspectionPhotoAsync(
                 request.InspectionPhotoUrl,
@@ -1552,11 +1566,11 @@ public sealed class WardComplianceService(
             Found: true,
             IsValid: isPermitValid,
             EffectiveStatus: validity.effective_status ?? "UNKNOWN",
-            PermitId: validity.permit_id,
-            ContractId: validity.contract_id,
-            VendorId: validity.vendor_id,
+            PermitId: isOwnWard ? validity.permit_id : null,
+            ContractId: isOwnWard ? validity.contract_id : null,
+            VendorId: isOwnWard ? validity.vendor_id : null,
             VendorName: vendorName,
-            SlotId: slot?.slot_id,
+            SlotId: isOwnWard ? slot?.slot_id : null,
             SlotCode: slot?.slot_code,
             SlotStreet: slot?.zone.zone_code ?? slot?.zone.zone_name,
             Width: slot?.width_meters,
@@ -1568,7 +1582,8 @@ public sealed class WardComplianceService(
             DistanceMeters: distanceMeters.HasValue ? Math.Round(distanceMeters.Value, 1) : null,
             IsLocationMatched: isLocationMatched,
             LocationWarning: locationWarning,
-            AiVisionResult: aiVision);
+            AiVisionResult: aiVision,
+            IsOwnWard: isOwnWard);
     }
 
     public async Task<bool> ExecutePermitActionAsync(
@@ -1611,7 +1626,7 @@ public sealed class WardComplianceService(
                 .AnyAsync(c => c.slot_id == permit.contract.slot_id
                     && c.contract_id != permit.contract.contract_id
                     && (c.contract_status == ContractStatuses.Active || c.contract_status == ContractStatuses.Suspended)
-                    && c.end_date >= DateOnly.FromDateTime(Now), ct);
+                    && c.end_date >= TodayVn, ct);
 
             if (!stillOccupied)
             {
@@ -1899,8 +1914,8 @@ public sealed class WardComplianceService(
         var explanationMethod = request.ExplanationRequired ? request.ExplanationMethod : null;
         var explanationDeadline = explanationMethod switch
         {
-            "DIRECT" => BusinessCalendar.StartOfDayUtc(BusinessCalendar.AddWorkingDays(TodayVn, 2)),
-            "WRITTEN" => BusinessCalendar.StartOfDayUtc(BusinessCalendar.AddWorkingDays(TodayVn, 5)),
+            "DIRECT" => BusinessCalendar.EndOfDayUtc(BusinessCalendar.AddWorkingDays(TodayVn, 2)),
+            "WRITTEN" => BusinessCalendar.EndOfDayUtc(BusinessCalendar.AddWorkingDays(TodayVn, 5)),
             _ => (DateTime?)null,
         };
 

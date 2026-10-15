@@ -134,7 +134,7 @@ public static class RenewalStatuses
     public static readonly string[] Open = [Pending, UnderReview];
 
     /// <summary>NĐ 241/2026 Điều 21 (sửa NĐ 165/2024): hạn xử lý hồ sơ gia hạn 3 ngày làm việc,
-    /// tính gần đúng bằng ngày lịch (hệ thống chưa có lịch ngày nghỉ/lễ để tính đúng ngày làm việc).</summary>
+    /// đếm theo lịch ngày làm việc của cơ quan nhà nước (BusinessCalendar, có ngày nghỉ lễ).</summary>
     public const int DecisionSlaDays = 3;
 
     /// <summary>Trần số ngày được phép xin gia hạn 1 lần, khớp trần của đơn thuê ô lần đầu

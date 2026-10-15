@@ -164,7 +164,10 @@ public sealed record InspectWardPermitResult(
     double? DistanceMeters,
     bool IsLocationMatched,
     string? LocationWarning,
-    AiEncroachmentResult? AiVisionResult);
+    AiEncroachmentResult? AiVisionResult,
+    /// <summary>False when the slot belongs to another ward: only the permit's validity is shown
+    /// (as the public check shows it) and the ids an officer would act on are left out.</summary>
+    bool IsOwnWard = true);
 
 public sealed record WardPermitActionRequest(
     string Action,
@@ -390,9 +393,9 @@ public sealed record WardRenewalListItemDto(
     bool IsFastTrackEligible,
     int ViolationCount,
     DateTime CreatedAt,
-    /// <summary>NĐ 241/2026 Điều 21 (sửa NĐ 165/2024): hạn xử lý hồ sơ 3 ngày làm việc. Tính
-    /// gần đúng bằng 3 ngày lịch kể từ khi nộp (hệ thống chưa có lịch ngày nghỉ/lễ để tính
-    /// đúng ngày làm việc) -- dùng để cảnh báo, không phải căn cứ pháp lý chính xác tuyệt đối.</summary>
+    /// <summary>NĐ 241/2026 Điều 21 (sửa NĐ 165/2024): hạn xử lý hồ sơ 3 ngày làm việc, tính từ
+    /// ngày kế tiếp ngày nộp đến hết ngày làm việc thứ ba (BusinessCalendar, có ngày nghỉ lễ). Ngày
+    /// lễ chưa công bố khi phát hành phải được thêm vào cấu hình BusinessCalendar.</summary>
     DateTime SlaDueAt,
     bool IsOverdue);
 
