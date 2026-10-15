@@ -57,7 +57,7 @@ public sealed class GetCollectionPerformanceQueryHandler(
             BusinessCalendar.StartOfDayUtc(from), BusinessCalendar.StartOfDayUtc(to.AddDays(1)),
             cancellationToken);
         var unpaid = await collections.ListUnpaidFeeItemsAsync(actor.WardId, cancellationToken);
-        var zones = await collections.ListZonesAsync(actor.WardId, cancellationToken);
+        var zones = await collections.ListZonesAsync(actor.WardId, today, cancellationToken);
         return WardCollectionAnalytics.Performance(from, to, activity, unpaid, zones);
     }
 }
@@ -134,24 +134,123 @@ public sealed class RemindDebtorCommandHandler(
         }
 
         var amount = debtor.OverdueAmount.ToString("#,##0", Vietnamese);
-        await collections.SendDebtReminderAsync(
+        // The consequence named is the one the system enforces: a contract with overdue fees can
+        // be neither renewed (WARD-09) nor returned (SIDE-07).
+        var earlier = await collections.SendDebtReminderAsync(
             request.ContractId,
             owed[0].VendorUserId,
             actor.UserId,
             "Phường nhắc thanh toán phí thuê ô",
             $"Ô {debtor.SlotCode} đang có {debtor.OverdueCount} kỳ phí quá hạn, tổng {amount} đ "
-            + $"(quá hạn {debtor.DaysOverdue} ngày). Vui lòng thanh toán trên StreetBiz để tránh bị "
-            + "xử lý theo quy định.",
+            + $"(quá hạn {debtor.DaysOverdue} ngày). Vui lòng thanh toán trên StreetBiz: hợp đồng còn nợ "
+            + "quá hạn không thể gia hạn hay trả ô.",
             now,
+            BusinessCalendar.StartOfDayUtc(today),
             cancellationToken);
+        if (earlier is { } sentAt)
+        {
+            // Another officer reminded this household a moment ago.
+            throw new ConflictException(WardCollectionMessages.AlreadyRemindedToday(
+                TimeZoneInfo.ConvertTimeFromUtc(sentAt, BusinessCalendar.TimeZone)));
+        }
+
         return new DebtReminderDto(request.ContractId, DateTime.SpecifyKind(now, DateTimeKind.Utc));
     }
+}
+
+/// <summary>WARD-14: overdue fees by age, fees due in the next 30 days, and payments owed back.</summary>
+public sealed record GetReceivablesQuery : IRequest<ReceivablesDto>;
+
+public sealed class GetReceivablesQueryHandler(
+    IWardActorContext wardActorContext,
+    IWardCollectionRepository collections,
+    TimeProvider clock) : IRequestHandler<GetReceivablesQuery, ReceivablesDto>
+{
+    public async Task<ReceivablesDto> Handle(GetReceivablesQuery request, CancellationToken cancellationToken)
+    {
+        var actor = await wardActorContext.RequireAsync(cancellationToken);
+        var unpaid = await collections.ListUnpaidFeeItemsAsync(actor.WardId, cancellationToken);
+        var refunds = await collections.ListRefundsAsync(actor.WardId, cancellationToken);
+        return WardCollectionAnalytics.Receivables(unpaid, BusinessCalendar.Today(clock), refunds);
+    }
+}
+
+/// <summary>
+/// WARD-14: payments the ward received but could not apply — an instalment or penalty paid twice —
+/// owed back to the vendor first, then those already refunded.
+/// </summary>
+public sealed record ListWardRefundsQuery : IRequest<IReadOnlyList<WardRefundDto>>;
+
+public sealed class ListWardRefundsQueryHandler(
+    IWardActorContext wardActorContext,
+    IWardCollectionRepository collections) : IRequestHandler<ListWardRefundsQuery, IReadOnlyList<WardRefundDto>>
+{
+    public async Task<IReadOnlyList<WardRefundDto>> Handle(ListWardRefundsQuery request, CancellationToken cancellationToken)
+    {
+        var actor = await wardActorContext.RequireAsync(cancellationToken);
+        return (await collections.ListRefundsAsync(actor.WardId, cancellationToken))
+            .Select(WardRefunds.ToDto)
+            .ToList();
+    }
+}
+
+/// <summary>
+/// WARD-14: the officer records that a payment owed back was refunded (through the provider's
+/// merchant portal or in cash). StreetBiz cannot send the money itself, so this records it.
+/// </summary>
+public sealed record MarkPaymentRefundedCommand(long TransactionId, string? Note) : IRequest<WardRefundDto>;
+
+public sealed class MarkPaymentRefundedCommandValidator : AbstractValidator<MarkPaymentRefundedCommand>
+{
+    public MarkPaymentRefundedCommandValidator()
+    {
+        RuleFor(x => x.TransactionId).GreaterThan(0);
+        RuleFor(x => x.Note).MaximumLength(500);
+    }
+}
+
+public sealed class MarkPaymentRefundedCommandHandler(
+    IWardActorContext wardActorContext,
+    IWardCollectionRepository collections,
+    TimeProvider clock) : IRequestHandler<MarkPaymentRefundedCommand, WardRefundDto>
+{
+    public async Task<WardRefundDto> Handle(MarkPaymentRefundedCommand request, CancellationToken cancellationToken)
+    {
+        var actor = await wardActorContext.RequireAsync(cancellationToken);
+        var refund = await collections.MarkRefundedAsync(
+                actor.WardId,
+                request.TransactionId,
+                actor.UserId,
+                string.IsNullOrWhiteSpace(request.Note) ? null : request.Note.Trim(),
+                clock.GetUtcNow().UtcDateTime,
+                cancellationToken)
+            ?? throw new NotFoundException(WardCollectionMessages.RefundNotFound);
+        return WardRefunds.ToDto(refund);
+    }
+}
+
+internal static class WardRefunds
+{
+    public static WardRefundDto ToDto(WardRefundRow row) => new(
+        row.TransactionId,
+        row.Kind,
+        row.VendorName,
+        row.VendorPhone,
+        row.SlotCode,
+        row.Label,
+        row.Provider,
+        row.ProviderReference,
+        row.Amount,
+        row.ReceivedAt,
+        row.Status,
+        row.RefundedAt);
 }
 
 public static class WardCollectionMessages
 {
     public const string NoDebtFound = "Không tìm thấy khoản nợ phí của hợp đồng này trong phường.";
     public const string NothingOverdue = "Hợp đồng này chưa có kỳ phí nào quá hạn.";
+    public const string RefundNotFound = "Không tìm thấy khoản cần hoàn tiền này trong phường.";
 
     public static string AlreadyRemindedToday(DateTime localTime) =>
         $"Đã nhắc hộ này hôm nay lúc {localTime:HH:mm}. Mỗi hộ chỉ được nhắc một lần mỗi ngày.";

@@ -54,6 +54,8 @@ public sealed class GetOrderTrackingQueryHandler(
                 order.OrderId, order.OrderStatus, order.PickupPoint.ToDto(), null, 0, order.ReadyAt)
             {
                 ArrivalNotifiedAt = arrival,
+                ArrivalNoticeCount = order.ArrivalNoticeCount,
+                ArrivalAcknowledgedAt = order.ArrivalAcknowledgedAt,
             };
         }
 
@@ -82,6 +84,8 @@ public sealed class GetOrderTrackingQueryHandler(
             order.OrderId, order.OrderStatus, order.PickupPoint.ToDto(), ready, order.OrdersAhead, order.ReadyAt)
         {
             ArrivalNotifiedAt = arrival,
+            ArrivalNoticeCount = order.ArrivalNoticeCount,
+            ArrivalAcknowledgedAt = order.ArrivalAcknowledgedAt,
         };
     }
 

@@ -48,7 +48,7 @@ public sealed class ExportCollectionReportQueryHandler(
             actor.WardId, from, to,
             BusinessCalendar.StartOfDayUtc(from), BusinessCalendar.StartOfDayUtc(to.AddDays(1)),
             cancellationToken);
-        var zones = await collections.ListZonesAsync(actor.WardId, cancellationToken);
+        var zones = await collections.ListZonesAsync(actor.WardId, today, cancellationToken);
 
         var workbook = renderer.RenderCollectionReportXlsx(
             new CollectionReportExport(wardName, from, to, report, invoices, clock.GetUtcNow().UtcDateTime)

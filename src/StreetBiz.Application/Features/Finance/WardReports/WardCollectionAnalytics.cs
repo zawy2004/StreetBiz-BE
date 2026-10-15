@@ -57,6 +57,61 @@ public static class WardCollectionAnalytics
             .ToList();
     }
 
+    /// <summary>
+    /// Overdue fees by how long they have been overdue, what falls due in the next 30 days
+    /// (today included), and the payments owed back to vendors.
+    /// </summary>
+    public static ReceivablesDto Receivables(
+        IReadOnlyList<WardUnpaidItemRow> unpaid,
+        DateOnly today,
+        IReadOnlyList<WardRefundRow> refunds)
+    {
+        var overdue = unpaid
+            .Where(item => item.DueDate < today)
+            .Select(item => (Item: item, Days: today.DayNumber - item.DueDate.DayNumber))
+            .ToList();
+        var aging = AgingBands
+            .Select(band =>
+            {
+                var inBand = overdue
+                    .Where(row => row.Days >= band.MinDays && (band.MaxDays is null || row.Days <= band.MaxDays))
+                    .ToList();
+                return new AgingBucketDto(
+                    band.Key,
+                    band.Label,
+                    band.MinDays,
+                    band.MaxDays,
+                    inBand.Count,
+                    inBand.Select(row => row.Item.ContractId).Distinct().Count(),
+                    inBand.Sum(row => row.Item.Amount));
+            })
+            .ToList();
+
+        var horizon = today.AddDays(29);
+        var upcoming = unpaid.Where(item => item.DueDate >= today && item.DueDate <= horizon).ToList();
+        var pendingRefunds = refunds.Where(refund => refund.Status == PaymentStatuses.RefundRequired).ToList();
+
+        return new ReceivablesDto(
+            today,
+            overdue.Sum(row => row.Item.Amount),
+            aging,
+            upcoming.Count,
+            upcoming.Sum(item => item.Amount),
+            pendingRefunds.Count,
+            pendingRefunds.Sum(refund => refund.Amount));
+    }
+
+    private static readonly (string Key, string Label, int MinDays, int? MaxDays)[] AgingBands =
+    [
+        ("1-30", "1–30 ngày", 1, 30),
+        ("31-60", "31–60 ngày", 31, 60),
+        ("61+", "Trên 60 ngày", 61, null),
+    ];
+
+    /// <summary>Still owed or paid: on a current revision and not closed by an early contract end.</summary>
+    private static bool IsOwed(WardFeeItemRow item) =>
+        item.IsCurrent && item.ItemStatus != FeeItemStatuses.Cancelled;
+
     public static bool PaidOnTime(WardFeeItemRow item) =>
         item.ItemStatus == FeeItemStatuses.Paid
         && item.PaidAt is { } paidAt
@@ -72,8 +127,8 @@ public static class WardCollectionAnalytics
         var fromUtc = BusinessCalendar.StartOfDayUtc(from);
         var toExclusiveUtc = BusinessCalendar.StartOfDayUtc(to.AddDays(1));
 
-        // "Due in the period": current revisions only. A superseded instalment is no longer owed.
-        var due = activity.Where(item => item.IsCurrent && item.DueDate >= from && item.DueDate <= to).ToList();
+        // "Due in the period": current revisions only. A superseded or cancelled instalment is no longer owed.
+        var due = activity.Where(item => IsOwed(item) && item.DueDate >= from && item.DueDate <= to).ToList();
         var paid = due.Where(item => item.ItemStatus == FeeItemStatuses.Paid).ToList();
         var onTime = paid.Count(PaidOnTime);
 
@@ -131,7 +186,7 @@ public static class WardCollectionAnalytics
         var feeCollected = activity
             .Where(item => item.ItemStatus == FeeItemStatuses.Paid && item.PaidAt is not null)
             .ToLookup(item => MonthOf(BusinessCalendar.DateOf(item.PaidAt!.Value)));
-        var feeDue = activity.Where(item => item.IsCurrent).ToLookup(item => MonthOf(item.DueDate));
+        var feeDue = activity.Where(IsOwed).ToLookup(item => MonthOf(item.DueDate));
         var penaltyCollected = penalties.ToLookup(penalty => MonthOf(BusinessCalendar.DateOf(penalty.PaidAt)));
 
         return months

@@ -66,10 +66,10 @@ public sealed class WardReportTests
         int slotTotal, int slotRented, int expectedPercent)
     {
         var reports = new Mock<IWardReportRepository>();
-        reports.Setup(x => x.GetDashboardAsync(10, It.IsAny<CancellationToken>()))
+        reports.Setup(x => x.GetDashboardAsync(10, It.IsAny<DateOnly>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new WardDashboardRow(slotTotal, slotRented, 0, 0, 0, 0, 0, 0));
 
-        var dto = await new GetWardDashboardQueryHandler(WardActorContext(10), reports.Object)
+        var dto = await new GetWardDashboardQueryHandler(WardActorContext(10), reports.Object, FixedClock(DateTime.UtcNow))
             .Handle(new GetWardDashboardQuery(), CancellationToken.None);
 
         dto.OccupancyPercent.Should().Be(expectedPercent);

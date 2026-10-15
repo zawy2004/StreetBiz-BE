@@ -54,3 +54,45 @@ public sealed record MonthlyCollectionDto(
     decimal FeeDuePaidOnTime);
 
 public sealed record DebtReminderDto(long ContractId, DateTime RemindedAt);
+
+/// <summary>
+/// One age band of overdue rental fees: <c>MinDays</c> to <c>MaxDays</c> days past due (no upper
+/// bound when null). <c>Households</c> counts contracts, so a household is in the band of each
+/// instalment it owes.
+/// </summary>
+public sealed record AgingBucketDto(
+    string Key,
+    string Label,
+    int MinDays,
+    int? MaxDays,
+    int Instalments,
+    int Households,
+    decimal Amount);
+
+/// <summary>
+/// WARD-14 receivables as of today: overdue fees by age, what falls due in the next 30 days, and
+/// payments received twice that the ward owes back.
+/// </summary>
+public sealed record ReceivablesDto(
+    DateOnly AsOf,
+    decimal OverdueAmount,
+    IReadOnlyList<AgingBucketDto> Aging,
+    int DueNext30Count,
+    decimal DueNext30Amount,
+    int RefundsPending,
+    decimal RefundsPendingAmount);
+
+/// <summary>A payment owed back to a vendor (REFUND_REQUIRED) or already paid back (REFUNDED).</summary>
+public sealed record WardRefundDto(
+    long TransactionId,
+    string Kind,
+    string VendorName,
+    string? VendorPhone,
+    string? SlotCode,
+    string Label,
+    string Provider,
+    string? ProviderReference,
+    decimal Amount,
+    DateTime ReceivedAt,
+    string Status,
+    DateTime? RefundedAt);

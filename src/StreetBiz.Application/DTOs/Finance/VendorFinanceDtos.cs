@@ -2,7 +2,8 @@ namespace StreetBiz.Application.DTOs.Finance;
 
 /// <summary>
 /// One instalment as the schedule screen shows it. <c>DaysOverdue</c> is set once the due date has
-/// passed unpaid, <c>DaysUntilDue</c> while it is still ahead; both null once paid.
+/// passed unpaid, <c>DaysUntilDue</c> while it is still ahead; both null once paid or cancelled.
+/// <c>PayableNow</c> marks the contract's oldest unpaid instalment: instalments are paid in order.
 /// </summary>
 public sealed record ScheduleItemDto(
     long FeeItemId,
@@ -16,9 +17,13 @@ public sealed record ScheduleItemDto(
     long? InvoiceId,
     string? InvoiceNumber,
     int? DaysOverdue,
-    int? DaysUntilDue);
+    int? DaysUntilDue,
+    bool PayableNow = false);
 
-/// <summary>A rental contract and how far its fee schedule has been paid.</summary>
+/// <summary>
+/// A rental contract and how far its fee schedule has been paid. Totals and counts leave out
+/// instalments cancelled because the contract ended before their period began.
+/// </summary>
 public sealed record VendorContractFinanceDto(
     long ContractId,
     string SlotCode,

@@ -13,7 +13,9 @@ namespace StreetBiz.Application.Features.Commerce.OrderTracking;
 /// no courier to report progress; the customer is the courier.
 ///
 /// Only while the order is still to be collected. Repeated taps inside
-/// <see cref="ResendAfter"/> return the notice already sent instead of pinging the stall again.
+/// <see cref="AnnounceArrivalCommandHandler.ResendAfter"/> return the notice already sent instead
+/// of pinging the stall again, and an order gets at most
+/// <see cref="AnnounceArrivalCommandHandler.MaxNotices"/> notices: past that it is noise.
 /// </summary>
 public sealed record AnnounceArrivalCommand(long OrderId, int? EtaMinutes) : IRequest<ArrivalNoticeDto>;
 
@@ -32,6 +34,7 @@ public sealed class AnnounceArrivalCommandHandler(
     IDateTimeProvider clock) : IRequestHandler<AnnounceArrivalCommand, ArrivalNoticeDto>
 {
     public static readonly TimeSpan ResendAfter = TimeSpan.FromMinutes(2);
+    public const int MaxNotices = 3;
 
     public async Task<ArrivalNoticeDto> Handle(AnnounceArrivalCommand request, CancellationToken cancellationToken)
     {
@@ -47,6 +50,11 @@ public sealed class AnnounceArrivalCommandHandler(
         if (order.LastNotifiedAt is { } last && now - last < ResendAfter)
         {
             return new ArrivalNoticeDto(order.OrderId, order.OrderStatus, DateTime.SpecifyKind(last, DateTimeKind.Utc), AlreadySent: true);
+        }
+
+        if (order.NoticeCount >= MaxNotices)
+        {
+            throw new DomainRuleException(ArrivalMessages.LimitReached);
         }
 
         await tracking.RecordArrivalAsync(
@@ -81,14 +89,69 @@ public sealed class ListVendorArrivalsQueryHandler(
         var rows = await tracking.ListVendorArrivalsAsync(vendorId, clock.UtcNow - Relevance, cancellationToken);
         return rows
             .Select(row => new OrderArrivalDto(
-                row.OrderId, row.OrderCode, DateTime.SpecifyKind(row.NotifiedAt, DateTimeKind.Utc), row.Message))
+                row.OrderId,
+                row.OrderCode,
+                DateTime.SpecifyKind(row.NotifiedAt, DateTimeKind.Utc),
+                row.Message,
+                row.AcknowledgedAt is { } acked ? DateTime.SpecifyKind(acked, DateTimeKind.Utc) : null))
             .ToList();
+    }
+}
+
+/// <summary>
+/// The stall answers "Đã thấy" to a customer on their way, so the customer knows the notice was
+/// read rather than wondering whether to call. Once per notice: a second tap returns the answer
+/// already sent, and a new notice from the customer can be answered again.
+/// </summary>
+public sealed record AcknowledgeArrivalCommand(long OrderId) : IRequest<ArrivalAckDto>;
+
+public sealed class AcknowledgeArrivalCommandValidator : AbstractValidator<AcknowledgeArrivalCommand>
+{
+    public AcknowledgeArrivalCommandValidator() => RuleFor(x => x.OrderId).GreaterThan(0);
+}
+
+public sealed class AcknowledgeArrivalCommandHandler(
+    IVendorContext vendorContext,
+    IOrderTrackingRepository tracking,
+    IDateTimeProvider clock) : IRequestHandler<AcknowledgeArrivalCommand, ArrivalAckDto>
+{
+    public async Task<ArrivalAckDto> Handle(AcknowledgeArrivalCommand request, CancellationToken cancellationToken)
+    {
+        var vendorId = await vendorContext.RequireVendorIdAsync(cancellationToken);
+        var order = await tracking.GetArrivalAckTargetAsync(vendorId, request.OrderId, cancellationToken)
+            ?? throw new NotFoundException(CommerceMessages.OrderNotFound);
+        if (!AnnounceArrivalCommandHandler.IsCollectable(order.OrderStatus))
+        {
+            throw new DomainRuleException(ArrivalMessages.NotCollectable);
+        }
+
+        if (order.LastNoticeAt is not { } noticeAt)
+        {
+            throw new DomainRuleException(ArrivalMessages.NothingToAcknowledge);
+        }
+
+        if (order.LastAckAt is { } ackAt && ackAt >= noticeAt)
+        {
+            return new ArrivalAckDto(order.OrderId, order.OrderStatus, DateTime.SpecifyKind(ackAt, DateTimeKind.Utc), AlreadyAcknowledged: true);
+        }
+
+        var now = clock.UtcNow;
+        await tracking.RecordArrivalAckAsync(
+            order.OrderId,
+            order.CustomerUserId,
+            "Quán đã nhận tin bạn đang đến",
+            $"{order.StorefrontName} đã biết bạn đang đến lấy đơn #{order.OrderCode}.",
+            now,
+            cancellationToken);
+        return new ArrivalAckDto(order.OrderId, order.OrderStatus, DateTime.SpecifyKind(now, DateTimeKind.Utc), AlreadyAcknowledged: false);
     }
 }
 
 public static class ArrivalMessages
 {
     public const string NotCollectable = "Đơn này không còn chờ lấy, không cần báo quán.";
+    public const string LimitReached = "Bạn đã báo quán 3 lần cho đơn này. Nếu cần, hãy gọi cho quán.";
+    public const string NothingToAcknowledge = "Khách chưa báo đang đến cho đơn này.";
 
     // The title already says "Khách đang đến"; the body only adds when, so the seller's ticket
     // (which shows both) does not say it twice.

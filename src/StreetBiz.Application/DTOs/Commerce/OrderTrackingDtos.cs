@@ -43,10 +43,20 @@ public sealed record OrderTrackingDto(
 {
     /// <summary>When the customer last told the stall "I'm on my way" for this order.</summary>
     public DateTime? ArrivalNotifiedAt { get; init; }
+
+    /// <summary>Notices sent so far; at most <c>AnnounceArrivalCommandHandler.MaxNotices</c>.</summary>
+    public int ArrivalNoticeCount { get; init; }
+
+    /// <summary>When the stall answered "Đã thấy" to the latest notice, if it has.</summary>
+    public DateTime? ArrivalAcknowledgedAt { get; init; }
 }
 
 /// <summary>The stall has been told the customer is on the way.</summary>
 public sealed record ArrivalNoticeDto(long OrderId, string OrderStatus, DateTime NotifiedAt, bool AlreadySent);
 
 /// <summary>A customer on the way to collect, for the seller's order board.</summary>
-public sealed record OrderArrivalDto(long OrderId, string OrderCode, DateTime NotifiedAt, string Message);
+public sealed record OrderArrivalDto(
+    long OrderId, string OrderCode, DateTime NotifiedAt, string Message, DateTime? AcknowledgedAt);
+
+/// <summary>The stall's "Đã thấy" answer to a customer on their way.</summary>
+public sealed record ArrivalAckDto(long OrderId, string OrderStatus, DateTime AcknowledgedAt, bool AlreadyAcknowledged);

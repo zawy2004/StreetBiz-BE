@@ -62,7 +62,7 @@ public sealed class FinanceDocumentTests
         collections.Setup(x => x.ListFeeActivityAsync(10, september.From, september.To,
                 It.IsAny<DateTime>(), It.IsAny<DateTime>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync([]);
-        collections.Setup(x => x.ListZonesAsync(10, It.IsAny<CancellationToken>()))
+        collections.Setup(x => x.ListZonesAsync(10, It.IsAny<DateOnly>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync([new WardZoneRow(3, "Nguyễn Văn Linh", 12, 8)]);
         var renderer = new Mock<IFinanceDocumentRenderer>();
         renderer.Setup(x => x.RenderCollectionReportXlsx(It.Is<CollectionReportExport>(e =>

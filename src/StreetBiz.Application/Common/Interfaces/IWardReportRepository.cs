@@ -16,7 +16,7 @@ public interface IWardReportRepository
         int wardUnitId, DateOnly from, DateOnly to, CancellationToken cancellationToken);
 
     /// <summary>WARD-15: the ward's current operational snapshot.</summary>
-    Task<WardDashboardRow> GetDashboardAsync(int wardUnitId, CancellationToken cancellationToken);
+    Task<WardDashboardRow> GetDashboardAsync(int wardUnitId, DateOnly today, CancellationToken cancellationToken);
 
     /// <summary>WARD-14 export: every receipt issued in the ward between two dates (inclusive), oldest first.</summary>
     Task<IReadOnlyList<WardInvoiceRow>> ListWardInvoicesAsync(

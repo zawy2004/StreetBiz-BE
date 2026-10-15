@@ -77,7 +77,7 @@ public sealed class WardReportRepository(StreetBizDbContext db) : IWardReportRep
             feeCollected, feePending, feeOverdue, penaltyCollected, penaltyPending, invoiceCount, recentViolations);
     }
 
-    public async Task<WardDashboardRow> GetDashboardAsync(int wardUnitId, CancellationToken cancellationToken)
+    public async Task<WardDashboardRow> GetDashboardAsync(int wardUnitId, DateOnly today, CancellationToken cancellationToken)
     {
         var slotTotal = await db.SidewalkSlots.AsNoTracking()
             .CountAsync(slot => slot.zone.ward_unit_id == wardUnitId, cancellationToken);
@@ -96,9 +96,11 @@ public sealed class WardReportRepository(StreetBizDbContext db) : IWardReportRep
                 && application.application_status == ApplicationStatuses.Pending,
                 cancellationToken);
 
+        // In force today: nothing moves a contract to EXPIRED when its end date passes.
         var activeContracts = await db.RentalContracts.AsNoTracking()
             .CountAsync(contract => contract.slot.zone.ward_unit_id == wardUnitId
-                && contract.contract_status == ContractStatuses.Active,
+                && contract.contract_status == ContractStatuses.Active
+                && contract.start_date <= today && contract.end_date >= today,
                 cancellationToken);
 
         var feeRevenue = await WardFeeItems(wardUnitId)

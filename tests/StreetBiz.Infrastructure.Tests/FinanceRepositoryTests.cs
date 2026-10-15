@@ -5,6 +5,7 @@ using Microsoft.Extensions.Options;
 using StreetBiz.Application.Common.Exceptions;
 using StreetBiz.Application.Common.Models;
 using StreetBiz.Application.Common.Security;
+using StreetBiz.Application.Features.Finance;
 using StreetBiz.Infrastructure.Payments;
 using StreetBiz.Infrastructure.Persistence;
 using StreetBiz.Infrastructure.Persistence.Repositories;
@@ -57,16 +58,187 @@ public sealed class FinanceRepositoryTests
         using var f = await Fixture.Create();
         var repository = f.Repository();
         var first = await repository.CreateFeeCheckoutAsync(Vendor, PastDueItem, "MOMO", "tab-1", default);
-        var second = await repository.CreateFeeCheckoutAsync(Vendor, PastDueItem, "MOMO", "tab-2", default);
+        var second = await repository.CreateFeeCheckoutAsync(Vendor, PastDueItem, "ZALOPAY", "tab-2", default);
 
-        await repository.ConfirmSandboxSuccessAsync(Vendor, first.TransactionId, default);
+        // The second provider took over: the first attempt was closed when it was opened.
+        Assert.Equal(PaymentStatuses.Failed, await StatusOf(f, first.TransactionId));
+        await repository.ConfirmSandboxSuccessAsync(Vendor, second.TransactionId, default);
         await Assert.ThrowsAsync<DomainRuleException>(() =>
-            repository.ConfirmSandboxSuccessAsync(Vendor, second.TransactionId, default));
+            repository.CreateFeeCheckoutAsync(Vendor, PastDueItem, "MOMO", "tab-3", default));
 
         var invoices = await f.Db.Invoices.AsNoTracking().Where(i => i.fee_item_id == PastDueItem).ToListAsync();
         var invoice = Assert.Single(invoices);
         // Continues from the seeded HD-2026-000010; the 2025 sequence is a different year.
         Assert.Equal("HD-2026-000011", invoice.invoice_number);
+    }
+
+    [Fact]
+    public async Task Paying_the_closed_first_attempt_after_the_instalment_was_paid_is_owed_back_not_invoiced()
+    {
+        // MoMo's page for the first attempt was left open in another tab and paid after ZaloPay settled.
+        using var f = await Fixture.Create();
+        var repository = f.Repository();
+        var first = await repository.CreateFeeCheckoutAsync(Vendor, PastDueItem, "MOMO", "tab-1", default);
+        await repository.SetPaymentProviderReferenceAsync(first.TransactionId, "SB-T1-aaaa1111", default);
+        var second = await repository.CreateFeeCheckoutAsync(Vendor, PastDueItem, "ZALOPAY", "tab-2", default);
+        await repository.ConfirmSandboxSuccessAsync(Vendor, second.TransactionId, default);
+
+        var late = await repository.ApplyPaymentCallbackAsync(new PaymentCallbackData(
+            "MOMO", "SB-T1-aaaa1111", "tab-1", first.Amount, PaymentStatuses.Success, "{}", true), default);
+
+        Assert.Equal(PaymentCallbackOutcome.Applied, late.Outcome);
+        Assert.Equal(PaymentStatuses.RefundRequired, await StatusOf(f, first.TransactionId));
+        Assert.Single(await f.Db.Invoices.AsNoTracking().Where(i => i.fee_item_id == PastDueItem).ToListAsync());
+        var notice = await f.Db.Notifications.AsNoTracking().SingleAsync(n => n.title == "Khoản thanh toán sẽ được hoàn lại");
+        Assert.Equal(Vendor, notice.user_id);
+        Assert.True(await f.Db.AuditLogs.AnyAsync(log => log.action == "FINANCE_PAYMENT_REFUND_REQUIRED"));
+
+        // A repeat of the same report changes nothing.
+        var again = await repository.ApplyPaymentCallbackAsync(new PaymentCallbackData(
+            "MOMO", "SB-T1-aaaa1111", "tab-1", first.Amount, PaymentStatuses.Success, "{}", true), default);
+        Assert.Equal(PaymentCallbackOutcome.Duplicate, again.Outcome);
+    }
+
+    [Fact]
+    public async Task A_payment_closed_as_failed_is_still_applied_if_its_page_is_paid_and_nothing_else_was()
+    {
+        using var f = await Fixture.Create();
+        var repository = f.Repository();
+        var checkout = await repository.CreateFeeCheckoutAsync(Vendor, PastDueItem, "MOMO", "key-1", default);
+        await repository.SetPaymentProviderReferenceAsync(checkout.TransactionId, "SB-T1-aaaa1111", default);
+        Assert.True(await repository.ClosePendingPaymentAsync(checkout.TransactionId, default));
+
+        var result = await repository.ApplyPaymentCallbackAsync(new PaymentCallbackData(
+            "MOMO", "SB-T1-aaaa1111", "key-1", checkout.Amount, PaymentStatuses.Success, "{}", true), default);
+
+        Assert.Equal(PaymentCallbackOutcome.Applied, result.Outcome);
+        Assert.Equal(PaymentStatuses.Success, await StatusOf(f, checkout.TransactionId));
+        Assert.Equal(FeeItemStatuses.Paid,
+            (await f.Db.FeeScheduleItems.AsNoTracking().SingleAsync(i => i.fee_item_id == PastDueItem)).item_status);
+        Assert.Single(await f.Db.Invoices.AsNoTracking().Where(i => i.fee_item_id == PastDueItem).ToListAsync());
+    }
+
+    [Fact]
+    public async Task An_instalment_holds_one_open_payment_and_the_same_provider_gets_it_back()
+    {
+        using var f = await Fixture.Create();
+        var repository = f.Repository();
+
+        var first = await repository.CreateFeeCheckoutAsync(Vendor, PastDueItem, "MOMO", "tab-1", default);
+        var again = await repository.CreateFeeCheckoutAsync(Vendor, PastDueItem, "MOMO", "tab-2", default);
+
+        Assert.Equal(first.TransactionId, again.TransactionId);
+        Assert.Equal("tab-1", again.IdempotencyKey);
+        Assert.Equal(1, await f.Db.PaymentTransactions.CountAsync(t => t.fee_item_id == PastDueItem));
+    }
+
+    [Fact]
+    public async Task Instalments_are_paid_oldest_first()
+    {
+        using var f = await Fixture.Create();
+        var repository = f.Repository();
+
+        // The instalment due 20/09 is unpaid, so the one due 28/09 cannot be opened yet.
+        var ex = await Assert.ThrowsAsync<DomainRuleException>(() =>
+            repository.CreateFeeCheckoutAsync(Vendor, DueSoonItem, "MOMO", "skip", default));
+        Assert.Contains("kỳ 2", ex.Message);
+        Assert.Contains("20/09/2026", ex.Message);
+
+        await repository.ConfirmSandboxSuccessAsync(Vendor,
+            (await repository.CreateFeeCheckoutAsync(Vendor, PastDueItem, "MOMO", "first", default)).TransactionId, default);
+        var next = await repository.CreateFeeCheckoutAsync(Vendor, DueSoonItem, "MOMO", "second", default);
+        Assert.True(next.TransactionId > 0);
+    }
+
+    [Fact]
+    public async Task Stale_payments_are_listed_and_closed_but_only_once()
+    {
+        using var f = await Fixture.Create();
+        var repository = f.Repository();
+        var stale = await repository.CreateFeeCheckoutAsync(Vendor, PastDueItem, "MOMO", "stale", default);
+
+        Assert.Empty(await repository.ListStalePaymentsAsync(MorningOf26th.UtcDateTime.AddHours(-1), default));
+        var listed = Assert.Single(await repository.ListStalePaymentsAsync(MorningOf26th.UtcDateTime.AddHours(1), default));
+        Assert.Equal(stale.TransactionId, listed.TransactionId);
+
+        Assert.True(await repository.ClosePendingPaymentAsync(stale.TransactionId, default));
+        Assert.False(await repository.ClosePendingPaymentAsync(stale.TransactionId, default));
+        Assert.Equal(PaymentStatuses.Failed, await StatusOf(f, stale.TransactionId));
+        Assert.Empty(await repository.ListStalePaymentsAsync(MorningOf26th.UtcDateTime.AddHours(1), default));
+    }
+
+    [Fact]
+    public async Task A_renewals_days_are_added_to_the_open_schedule_and_billing_them_twice_is_refused()
+    {
+        using var f = await Fixture.Create();
+        var repository = f.Repository();
+        // Contract 1's term ends 29/12/2026; the renewal adds 45 days, the last of them 12/02/2027.
+        var plan = FeeInstalmentPlanner.PlanExtension(
+            25_000m, new DateOnly(2026, 12, 30), new DateOnly(2027, 2, 12), new DateOnly(2026, 9, 26));
+
+        var schedule = await repository.AppendInstalmentsAsync(1, 1, new DateOnly(2026, 12, 30), plan, default);
+
+        // The current term's instalments stay as they were, paid or not; the renewal adds two.
+        Assert.Equal(2, schedule.Revision);
+        Assert.Equal(6_000_000m + 45 * 25_000m, schedule.TotalAmount);
+        Assert.Equal(6, schedule.Items.Count);
+        Assert.Equal(
+            [FeeItemStatuses.Paid, FeeItemStatuses.Pending, FeeItemStatuses.Pending, FeeItemStatuses.Pending,
+                FeeItemStatuses.Pending, FeeItemStatuses.Pending],
+            schedule.Items.Select(i => i.ItemStatus));
+        Assert.True(await f.Db.AuditLogs.AnyAsync(log => log.action == "FEE_SCHEDULE_EXTENDED"));
+        await Assert.ThrowsAsync<ConflictException>(() =>
+            repository.AppendInstalmentsAsync(1, 1, new DateOnly(2026, 12, 30), plan, default));
+    }
+
+    [Fact]
+    public async Task Unbilled_contracts_are_found_and_billed_contracts_are_not()
+    {
+        using var f = await Fixture.Create();
+        var repository = f.Repository();
+
+        // Contract 2 is approved with no schedule; contract 1 has one with instalments.
+        (await f.Db.RentalApplications.SingleAsync(a => a.application_id == 2)).reviewed_by = 1;
+        await f.Db.SaveChangesAsync();
+        var unbilled = Assert.Single(await repository.ListUnbilledContractsAsync(new DateOnly(2026, 9, 26), default));
+        Assert.Equal(2, unbilled.ContractId);
+
+        // An empty header (what the ward's approval wrote) is just as unbilled.
+        f.Db.FeeSchedules.Add(new FeeSchedule
+        {
+            fee_schedule_id = 9, contract_id = 2, revision = 1, total_amount = 0, generated_at = MorningOf26th.UtcDateTime,
+        });
+        await f.Db.SaveChangesAsync();
+        Assert.Equal(2, Assert.Single(await repository.ListUnbilledContractsAsync(new DateOnly(2026, 9, 26), default)).ContractId);
+        // Not once the contract has ended.
+        Assert.Empty(await repository.ListUnbilledContractsAsync(new DateOnly(2027, 1, 1), default));
+    }
+
+    [Fact]
+    public async Task A_contract_that_ended_early_has_its_later_instalments_closed_and_the_vendor_told_once()
+    {
+        using var f = await Fixture.Create();
+        var repository = f.Repository();
+        // Returned on 24/09: the instalment due 20/09 was owed; those due 28/09 and 28/10 never began.
+        var contract = await f.Db.RentalContracts.SingleAsync(c => c.contract_id == 1);
+        contract.contract_status = ContractStatuses.Cancelled;
+        contract.cancelled_at = new DateTime(2026, 9, 24, 4, 0, 0, DateTimeKind.Utc);
+        await f.Db.SaveChangesAsync();
+        f.Db.ChangeTracker.Clear();
+
+        Assert.Equal(2, await repository.CancelInstalmentsAfterEarlyEndAsync(default));
+        Assert.Equal(0, await repository.CancelInstalmentsAfterEarlyEndAsync(default));
+
+        var statuses = await f.Db.FeeScheduleItems.AsNoTracking().Where(i => i.fee_schedule_id == 2)
+            .OrderBy(i => i.fee_item_id).Select(i => i.item_status).ToListAsync();
+        Assert.Equal(
+            [FeeItemStatuses.Paid, FeeItemStatuses.Pending, FeeItemStatuses.Cancelled, FeeItemStatuses.Cancelled],
+            statuses);
+        Assert.Equal(1, await f.Db.Notifications.CountAsync(n => n.title == "Đã huỷ các kỳ phí sau khi kết thúc hợp đồng"));
+
+        // The sweep neither reminds about them nor marks them overdue.
+        await repository.RunFeeReminderSweepAsync(new DateOnly(2026, 9, 26), default);
+        Assert.False(await f.Db.Notifications.AnyAsync(n => n.title == "Sắp đến hạn đóng phí"));
     }
 
     [Fact]
@@ -96,10 +268,11 @@ public sealed class FinanceRepositoryTests
         using var f = await Fixture.Create();
         var repository = f.Repository();
         var neverOpened = await repository.CreateFeeCheckoutAsync(Vendor, PastDueItem, "MOMO", "k-never", default);
-        var openedBefore = await repository.CreateFeeCheckoutAsync(Vendor, DueSoonItem, "MOMO", "k-opened", default);
+        await repository.AbandonUnopenedCheckoutAsync(neverOpened.TransactionId, default);
+        // The first is closed, so the instalment has no open payment and a new one can be opened.
+        var openedBefore = await repository.CreateFeeCheckoutAsync(Vendor, PastDueItem, "MOMO", "k-opened", default);
         await repository.SetPaymentProviderReferenceAsync(openedBefore.TransactionId, "SB-T2-aaaa1111", default);
 
-        await repository.AbandonUnopenedCheckoutAsync(neverOpened.TransactionId, default);
         await repository.AbandonUnopenedCheckoutAsync(openedBefore.TransactionId, default);
 
         var statuses = await f.Db.PaymentTransactions.AsNoTracking()
@@ -207,7 +380,7 @@ public sealed class FinanceRepositoryTests
         // 01:00 on 1 January 2027 in Đà Nẵng is still 31 December 2026 in UTC.
         using var f = await Fixture.Create(new DateTimeOffset(2026, 12, 31, 18, 0, 0, TimeSpan.Zero));
         var repository = f.Repository();
-        var checkout = await repository.CreateFeeCheckoutAsync(Vendor, DueSoonItem, "MOMO", "new-year", default);
+        var checkout = await repository.CreateFeeCheckoutAsync(Vendor, PastDueItem, "MOMO", "new-year", default);
 
         await repository.ConfirmSandboxSuccessAsync(Vendor, checkout.TransactionId, default);
 
@@ -279,6 +452,9 @@ public sealed class FinanceRepositoryTests
 
         Assert.False(await f.Db.FeeSchedules.AsNoTracking().AnyAsync(s => s.contract_id == 2));
     }
+
+    private static async Task<string> StatusOf(Fixture f, long transactionId) =>
+        (await f.Db.PaymentTransactions.AsNoTracking().SingleAsync(t => t.transaction_id == transactionId)).transaction_status;
 
     private sealed class Fixture : IDisposable
     {

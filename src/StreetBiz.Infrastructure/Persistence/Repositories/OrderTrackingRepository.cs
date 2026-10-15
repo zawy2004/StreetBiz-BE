@@ -86,6 +86,7 @@ public sealed class OrderTrackingRepository(StreetBizDbContext db) : IOrderTrack
             .Select(history => (DateTime?)history.changed_at)
             .Min());
 
+        var notifiedAt = await LastArrivalAsync(orderId, cancellationToken);
         return new OrderTrackingRow(
             orderId,
             order.order_status,
@@ -95,12 +96,17 @@ public sealed class OrderTrackingRepository(StreetBizDbContext db) : IOrderTrack
             order.Point.ToRow(),
             await CountOrdersAheadAsync(order.Point.StorefrontId, orderId, order.order_status, order.placed_at, cancellationToken))
         {
-            ArrivalNotifiedAt = Utc(await LastArrivalAsync(orderId, cancellationToken)),
+            ArrivalNotifiedAt = Utc(notifiedAt),
+            ArrivalNoticeCount = await ArrivalCountAsync(orderId, cancellationToken),
+            ArrivalAcknowledgedAt = Utc(Answering(notifiedAt, await LastAckAsync(orderId, cancellationToken))),
         };
     }
 
     /// <summary>How an arrival notice is recognised among the seller's notifications.</summary>
     public const string ArrivalEntityType = "OrderArrival";
+
+    /// <summary>How the stall's "Đã thấy" answer is recognised among the customer's notifications.</summary>
+    public const string ArrivalAckEntityType = "OrderArrivalAck";
 
     public async Task<ArrivalTargetRow?> GetArrivalTargetAsync(
         long customerUserId, long orderId, CancellationToken cancellationToken)
@@ -118,7 +124,45 @@ public sealed class OrderTrackingRepository(StreetBizDbContext db) : IOrderTrack
             ? null
             : new ArrivalTargetRow(
                 orderId, order.order_code, order.order_status, order.VendorUserId,
-                await LastArrivalAsync(orderId, cancellationToken));
+                await LastArrivalAsync(orderId, cancellationToken),
+                await ArrivalCountAsync(orderId, cancellationToken));
+    }
+
+    public async Task<ArrivalAckTargetRow?> GetArrivalAckTargetAsync(
+        long vendorId, long orderId, CancellationToken cancellationToken)
+    {
+        var order = await db.Orders.AsNoTracking()
+            .Where(row => row.order_id == orderId && row.storefront.registration.vendor_id == vendorId)
+            .Select(row => new
+            {
+                row.order_code,
+                row.order_status,
+                row.customer_user_id,
+                row.storefront.storefront_name,
+            })
+            .SingleOrDefaultAsync(cancellationToken);
+        return order is null
+            ? null
+            : new ArrivalAckTargetRow(
+                orderId, order.order_code, order.order_status, order.customer_user_id, order.storefront_name,
+                await LastArrivalAsync(orderId, cancellationToken),
+                await LastAckAsync(orderId, cancellationToken));
+    }
+
+    public async Task RecordArrivalAckAsync(
+        long orderId, long customerUserId, string title, string body, DateTime now, CancellationToken cancellationToken)
+    {
+        db.Notifications.Add(new ScaffoldedModels.Notification
+        {
+            user_id = customerUserId,
+            notification_type = "ORDER",
+            title = title,
+            body = body,
+            related_entity_type = ArrivalAckEntityType,
+            related_entity_id = orderId,
+            sent_at = now,
+        });
+        await db.SaveChangesAsync(cancellationToken);
     }
 
     public async Task RecordArrivalAsync(
@@ -177,14 +221,44 @@ public sealed class OrderTrackingRepository(StreetBizDbContext db) : IOrderTrack
                     || order.order_status == OrderStatuses.ReadyForPickup))
             .ToDictionaryAsync(order => order.order_id, order => order.order_code, cancellationToken);
 
+        var openIds = open.Keys.ToArray();
+        var acks = (await db.Notifications.AsNoTracking()
+                .Where(notification => notification.related_entity_type == ArrivalAckEntityType
+                    && notification.related_entity_id != null
+                    && openIds.Contains(notification.related_entity_id.Value))
+                .Select(notification => new { OrderId = notification.related_entity_id!.Value, notification.sent_at })
+                .ToListAsync(cancellationToken))
+            .GroupBy(ack => ack.OrderId)
+            .ToDictionary(group => group.Key, group => group.Max(ack => ack.sent_at));
+
         return notices
             .Where(notice => open.ContainsKey(notice.OrderId))
             .GroupBy(notice => notice.OrderId)
             .Select(group => group.OrderByDescending(notice => notice.sent_at).First())
             .OrderByDescending(notice => notice.sent_at)
-            .Select(notice => new OrderArrivalRow(notice.OrderId, open[notice.OrderId], notice.sent_at, notice.body))
+            .Select(notice => new OrderArrivalRow(
+                notice.OrderId,
+                open[notice.OrderId],
+                notice.sent_at,
+                notice.body,
+                Answering(notice.sent_at, acks.TryGetValue(notice.OrderId, out var ackAt) ? ackAt : null)))
             .ToList();
     }
+
+    private Task<int> ArrivalCountAsync(long orderId, CancellationToken cancellationToken) =>
+        db.Notifications.AsNoTracking()
+            .CountAsync(notification => notification.related_entity_type == ArrivalEntityType
+                && notification.related_entity_id == orderId, cancellationToken);
+
+    private Task<DateTime?> LastAckAsync(long orderId, CancellationToken cancellationToken) =>
+        db.Notifications.AsNoTracking()
+            .Where(notification => notification.related_entity_type == ArrivalAckEntityType
+                && notification.related_entity_id == orderId)
+            .MaxAsync(notification => (DateTime?)notification.sent_at, cancellationToken);
+
+    /// <summary>An answer counts only for the notice it answered: a newer notice has not been seen yet.</summary>
+    private static DateTime? Answering(DateTime? noticeAt, DateTime? ackAt) =>
+        noticeAt is not null && ackAt is not null && ackAt >= noticeAt ? ackAt : null;
 
     private Task<DateTime?> LastArrivalAsync(long orderId, CancellationToken cancellationToken) =>
         db.Notifications.AsNoTracking()

@@ -40,6 +40,21 @@ public sealed class OrderTrackingController(ISender sender, IOrderRealtimePublis
     public async Task<ActionResult<IReadOnlyList<OrderArrivalDto>>> Arrivals(CancellationToken cancellationToken) =>
         Ok(await sender.Send(new ListVendorArrivalsQuery(), cancellationToken));
 
+    /// <summary>The seller tells the customer "Đã thấy": the notice was read (once per notice).</summary>
+    [Authorize]
+    [HttpPost("api/vendor/orders/{orderId:long}/arrival-seen")]
+    public async Task<ActionResult<ArrivalAckDto>> AcknowledgeArrival(long orderId, CancellationToken cancellationToken)
+    {
+        var ack = await sender.Send(new AcknowledgeArrivalCommand(orderId), cancellationToken);
+        if (!ack.AlreadyAcknowledged)
+        {
+            // The customer's open tracking screen refetches on this, as on any change to the order.
+            await realtime.PublishAsync(orderId, ack.OrderStatus, cancellationToken);
+        }
+
+        return Ok(ack);
+    }
+
     /// <summary>
     /// Public, like the rest of the marketplace: the checkout screen measures the customer's live
     /// distance against this before the server makes the binding check at checkout.

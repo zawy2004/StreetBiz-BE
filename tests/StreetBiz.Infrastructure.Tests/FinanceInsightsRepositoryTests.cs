@@ -63,7 +63,7 @@ public sealed class FinanceInsightsRepositoryTests
         Assert.Contains(activity, row => row.IsCurrent == false && row.ItemStatus == FeeItemStatuses.Paid);
         Assert.Equal(3, activity.Count(row => row.IsCurrent));
 
-        var zones = await repo.ListZonesAsync(1, default);
+        var zones = await repo.ListZonesAsync(1, DateOnly.FromDateTime(T0), default);
         Assert.Equal([(1, "Zone 1", 1, 1), (2, "Zone 2", 1, 1)],
             zones.OrderBy(z => z.ZoneId).Select(z => (z.ZoneId, z.ZoneName, z.SlotCount, z.RentedSlots)));
     }
@@ -74,8 +74,9 @@ public sealed class FinanceInsightsRepositoryTests
         using var f = await Fixture.Create();
         var repo = new WardCollectionRepository(f.Db);
 
-        await repo.SendDebtReminderAsync(1, 101, 1, "Phường nhắc", "Ô S-01 đang nợ", T0.AddDays(3), default);
-        await repo.SendDebtReminderAsync(1, 101, 1, "Phường nhắc", "Ô S-01 đang nợ", T0.AddDays(5), default);
+        // Two reminders on different days, each with the start of its own day as the cut-off.
+        Assert.Null(await repo.SendDebtReminderAsync(1, 101, 1, "Phường nhắc", "Ô S-01 đang nợ", T0.AddDays(3), T0.AddDays(3).Date, default));
+        Assert.Null(await repo.SendDebtReminderAsync(1, 101, 1, "Phường nhắc", "Ô S-01 đang nợ", T0.AddDays(5), T0.AddDays(5).Date, default));
 
         var last = await repo.GetLastDebtRemindersAsync([1, 2], default);
         Assert.Equal(T0.AddDays(5), Assert.Single(last).Value);

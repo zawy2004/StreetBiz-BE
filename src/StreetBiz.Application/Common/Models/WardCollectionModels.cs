@@ -29,3 +29,23 @@ public sealed record WardFeeItemRow(
 public sealed record WardZoneRow(int ZoneId, string ZoneName, int SlotCount, int RentedSlots);
 
 public sealed record WardPenaltyPaymentRow(decimal Amount, DateTime PaidAt);
+
+/// <summary>
+/// A fee or penalty payment the ward received but could not apply (REFUND_REQUIRED), or has
+/// since paid back (REFUNDED). <c>Kind</c> is FEE or PENALTY; <c>Label</c> says what was being
+/// paid for. <c>RefundedAt</c> comes from the audit entry written when it was marked refunded.
+/// </summary>
+public sealed record WardRefundRow(
+    long TransactionId,
+    string Kind,
+    long VendorUserId,
+    string VendorName,
+    string? VendorPhone,
+    string? SlotCode,
+    string Label,
+    string Provider,
+    string? ProviderReference,
+    decimal Amount,
+    DateTime ReceivedAt,
+    string Status,
+    DateTime? RefundedAt);

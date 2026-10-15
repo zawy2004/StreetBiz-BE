@@ -19,6 +19,21 @@ public static class FeeScheduleProgress
     public static bool IsOutstanding(string status) =>
         status is FeeItemStatuses.Pending or FeeItemStatuses.Overdue;
 
+    /// <summary>
+    /// Every instalment, oldest first, with the oldest unpaid one of each contract marked payable:
+    /// FEE-01 settles them in order.
+    /// </summary>
+    public static IReadOnlyList<ScheduleItemDto> ToDtos(IEnumerable<ScheduleItemRow> rows, DateOnly today)
+    {
+        var ordered = rows.OrderBy(row => row.DueDate).ThenBy(row => row.FeeItemId).ToList();
+        var payable = ordered
+            .Where(row => IsOutstanding(row.ItemStatus))
+            .GroupBy(row => row.ContractId)
+            .Select(contract => contract.First().FeeItemId)
+            .ToHashSet();
+        return ordered.Select(row => ToDto(row, today) with { PayableNow = payable.Contains(row.FeeItemId) }).ToList();
+    }
+
     public static ScheduleItemDto ToDto(ScheduleItemRow row, DateOnly today)
     {
         var outstanding = IsOutstanding(row.ItemStatus);
@@ -42,7 +57,8 @@ public static class FeeScheduleProgress
     public static VendorContractFinanceDto Summarize(
         VendorContractRow contract, IReadOnlyList<ScheduleItemRow> items, DateOnly today)
     {
-        var dtos = items.OrderBy(item => item.DueDate).Select(item => ToDto(item, today)).ToList();
+        // A cancelled instalment was never owed: it is in neither the total nor the count.
+        var dtos = ToDtos(items, today).Where(item => item.ItemStatus != FeeItemStatuses.Cancelled).ToList();
         var paid = dtos.Where(item => item.ItemStatus == FeeItemStatuses.Paid).ToList();
         var outstanding = dtos.Where(item => IsOutstanding(item.ItemStatus)).ToList();
         return new VendorContractFinanceDto(
@@ -111,7 +127,7 @@ public sealed class GetContractScheduleQueryHandler(
 
         return new ContractScheduleDto(
             FeeScheduleProgress.Summarize(contract, items, today),
-            items.OrderBy(item => item.DueDate).Select(item => FeeScheduleProgress.ToDto(item, today)).ToList());
+            FeeScheduleProgress.ToDtos(items, today));
     }
 }
 
@@ -133,8 +149,9 @@ public sealed class GetFeeItemDetailQueryHandler(
             .Single(row => row.ContractId == item.ContractId);
         var today = BusinessCalendar.Today(clock);
 
+        var contractItems = items.Where(row => row.ContractId == item.ContractId).ToList();
         return new FeeItemDetailDto(
-            FeeScheduleProgress.Summarize(contract, items.Where(row => row.ContractId == item.ContractId).ToList(), today),
-            FeeScheduleProgress.ToDto(item, today));
+            FeeScheduleProgress.Summarize(contract, contractItems, today),
+            FeeScheduleProgress.ToDtos(contractItems, today).Single(row => row.FeeItemId == item.FeeItemId));
     }
 }

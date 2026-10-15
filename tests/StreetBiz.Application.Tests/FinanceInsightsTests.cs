@@ -236,7 +236,7 @@ public sealed class FinanceInsightsTests
         result.RemindedAt.Should().Be(Now);
         repo.Verify(x => x.SendDebtReminderAsync(3, 503, 2, It.IsAny<string>(),
             It.Is<string>(body => body.Contains("2 kỳ") && body.Contains("2.080.000") && body.Contains("40 ngày")),
-            Now, It.IsAny<CancellationToken>()));
+            Now, BusinessCalendar.StartOfDayUtc(Today), It.IsAny<CancellationToken>()));
     }
 
     [Fact]
@@ -248,7 +248,22 @@ public sealed class FinanceInsightsTests
 
         await act.Should().ThrowAsync<ConflictException>().WithMessage("*10:30*");
         repo.Verify(x => x.SendDebtReminderAsync(It.IsAny<long>(), It.IsAny<long>(), It.IsAny<long>(),
-            It.IsAny<string>(), It.IsAny<string>(), It.IsAny<DateTime>(), It.IsAny<CancellationToken>()), Times.Never);
+            It.IsAny<string>(), It.IsAny<string>(), It.IsAny<DateTime>(), It.IsAny<DateTime>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task Two_officers_pressing_at_once_send_one_reminder()
+    {
+        // The handler's own read saw no reminder, but another officer's landed before the write:
+        // the repository reports it, and the second officer is told when, instead of a second tin.
+        var (handler, repo) = Reminder([Owed(1, 3, Today.AddDays(-10))]);
+        repo.Setup(x => x.SendDebtReminderAsync(3, 503, 2, It.IsAny<string>(), It.IsAny<string>(),
+                It.IsAny<DateTime>(), It.IsAny<DateTime>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Now.AddSeconds(-5));
+
+        var act = () => handler.Handle(new RemindDebtorCommand(3), default);
+
+        await act.Should().ThrowAsync<ConflictException>().WithMessage("*10:*");
     }
 
     [Fact]
@@ -266,11 +281,11 @@ public sealed class FinanceInsightsTests
     // ---- Tracking: "Tôi đang đến" -------------------------------------------------------------
 
     private static (AnnounceArrivalCommandHandler Handler, Mock<IOrderTrackingRepository> Repo) Arrival(
-        string status, DateTime? lastNotified = null)
+        string status, DateTime? lastNotified = null, int noticeCount = 0)
     {
         var repo = new Mock<IOrderTrackingRepository>();
         repo.Setup(x => x.GetArrivalTargetAsync(42, 6, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new ArrivalTargetRow(6, "SB-6", status, 505, lastNotified));
+            .ReturnsAsync(new ArrivalTargetRow(6, "SB-6", status, 505, lastNotified, noticeCount));
         var customer = new Mock<ICustomerContext>();
         customer.Setup(x => x.RequireCustomerUserIdAsync(It.IsAny<CancellationToken>())).ReturnsAsync(42);
         return (new AnnounceArrivalCommandHandler(customer.Object, repo.Object, Mock.Of<IDateTimeProvider>(c => c.UtcNow == Now)), repo);

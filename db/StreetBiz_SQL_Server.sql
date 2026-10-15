@@ -88,6 +88,11 @@
    The API never runs schema changes (docs/database.md).
 
    CHANGE LOG (newest first)
+     2026-10-09  Fee lifecycle: FeeScheduleItems.item_status accepts CANCELLED (an instalment of a
+                 period that never began, because the contract ended early);
+                 PaymentTransactions.transaction_status accepts REFUND_REQUIRED (money received
+                 for an instalment/penalty already paid) and REFUNDED; filtered unique indexes
+                 on Invoices(fee_item_id) and Invoices(penalty_id): one invoice per obligation.
      2026-09-28  Food-safety (ATTP) certificates: FoodCategories.requires_food_safety, new tables
                  FoodSafetyApplications, FoodSafetyApplicationItems, FoodSafetyEvidence
                  (vendor -> ward -> department result recorded by the ward).
@@ -1156,7 +1161,7 @@ CREATE TABLE FeeScheduleItems (
     item_status         NVARCHAR(20)          NOT NULL DEFAULT 'PENDING',
     paid_at              DATETIME2             NULL,
     CONSTRAINT CK_FeeScheduleItems_Status
-        CHECK (item_status IN ('PENDING','PAID','OVERDUE')),
+        CHECK (item_status IN ('PENDING','PAID','OVERDUE','CANCELLED')),
     CONSTRAINT FK_FeeScheduleItems_Schedule
         FOREIGN KEY (fee_schedule_id) REFERENCES FeeSchedules(fee_schedule_id)
 );
@@ -1188,6 +1193,10 @@ CREATE TABLE Invoices (
         FOREIGN KEY (vendor_id) REFERENCES Vendors(vendor_id)
 );
 CREATE INDEX IX_Invoices_Vendor ON Invoices(vendor_id);
+-- One invoice per obligation. The application checks the instalment/penalty is still payable
+-- before issuing; this is the backstop for two payments settling it at once.
+CREATE UNIQUE INDEX UX_Invoices_FeeItem ON Invoices(fee_item_id) WHERE fee_item_id IS NOT NULL;
+CREATE UNIQUE INDEX UX_Invoices_Penalty ON Invoices(penalty_id) WHERE penalty_id IS NOT NULL;
 
 -- SYS-04: idempotent callback processing (BR-37). order_id FK added later
 -- (ALTER TABLE) once the Phase 2 Orders table exists.
@@ -1209,7 +1218,7 @@ CREATE TABLE PaymentTransactions (
     CONSTRAINT CK_PaymentTransactions_Provider
         CHECK (provider IN ('MOMO','ZALOPAY')),
     CONSTRAINT CK_PaymentTransactions_Status
-        CHECK (transaction_status IN ('PENDING','SUCCESS','FAILED')),
+        CHECK (transaction_status IN ('PENDING','SUCCESS','FAILED','REFUND_REQUIRED','REFUNDED')),
     -- payment_purpose must agree with which target column is filled; without
     -- this a RENTAL_FEE row can carry a penalty_id, or no target at all
     CONSTRAINT CK_PaymentTransactions_PurposeMatchesTarget

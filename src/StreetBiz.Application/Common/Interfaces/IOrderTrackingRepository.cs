@@ -43,6 +43,13 @@ public interface IOrderTrackingRepository
     Task RecordArrivalAsync(
         long orderId, long vendorUserId, string title, string body, DateTime now, CancellationToken cancellationToken);
 
+    /// <summary>Null when the order does not exist or is not at one of the vendor's stalls.</summary>
+    Task<ArrivalAckTargetRow?> GetArrivalAckTargetAsync(long vendorId, long orderId, CancellationToken cancellationToken);
+
+    /// <summary>Tells the customer the stall saw their notice (an in-app notification).</summary>
+    Task RecordArrivalAckAsync(
+        long orderId, long customerUserId, string title, string body, DateTime now, CancellationToken cancellationToken);
+
     /// <summary>The latest arrival notice per still-collectable order of the vendor's stalls since <paramref name="sinceUtc"/>.</summary>
     Task<IReadOnlyList<OrderArrivalRow>> ListVendorArrivalsAsync(
         long vendorId, DateTime sinceUtc, CancellationToken cancellationToken);
