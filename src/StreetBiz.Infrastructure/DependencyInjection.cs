@@ -129,9 +129,13 @@ public static class DependencyInjection
         services.AddScoped<IFinanceRepository, FinanceRepository>();
         services.AddScoped<IWardReportRepository, WardReportRepository>();
         services.AddScoped<StreetBiz.Application.Features.RegistrationIntegrity.IRegistrationIntegrityReader, RegistrationIntegrityReader>();
+        services.AddSingleton<IFinanceDocumentRenderer, Documents.FinanceDocumentRenderer>();
         services.Configure<FeeReminderOptions>(configuration.GetSection(FeeReminderOptions.SectionName));
         services.AddHostedService<FeeReminderHostedService>();
         services.AddScoped<ICommerceRepository, CommerceRepository>();
+        services.AddScoped<IOrderTrackingRepository, OrderTrackingRepository>();
+        services.AddScoped<IVendorFinanceRepository, VendorFinanceRepository>();
+        services.AddScoped<IWardCollectionRepository, WardCollectionRepository>();
         services.AddScoped<StreetBiz.Application.Features.Commerce.ICommerceManagement, CommerceManagement>();
         services.AddScoped<StreetBiz.Application.Features.FoodSafety.IFoodSafetyService, FoodSafetyService>();
         services.AddScoped<StreetBiz.Application.Features.Commerce.IOrderPaymentTesting, OrderPaymentTesting>();
@@ -143,6 +147,8 @@ public static class DependencyInjection
         services.AddSingleton<IOrderPickupTokenService, OrderPickupTokenService>();
 
         services.Configure<Sidewalk.SidewalkSettings>(configuration.GetSection(Sidewalk.SidewalkSettings.SectionName));
+        services.Configure<Commerce.PickupRangeSettings>(configuration.GetSection(Commerce.PickupRangeSettings.SectionName));
+        services.AddSingleton<IPickupRangePolicy, Commerce.PickupRangePolicy>();
         services.AddSingleton<ISidewalkPolicy, Sidewalk.SidewalkPolicy>();
 
         services.Configure<NominatimSettings>(configuration.GetSection(NominatimSettings.SectionName));

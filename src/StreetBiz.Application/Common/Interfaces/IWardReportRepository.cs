@@ -16,7 +16,7 @@ public interface IWardReportRepository
         int wardUnitId, DateOnly from, DateOnly to, CancellationToken cancellationToken);
 
     /// <summary>WARD-15: the ward's current operational snapshot.</summary>
-    Task<WardDashboardRow> GetDashboardAsync(int wardUnitId, CancellationToken cancellationToken);
+    Task<WardDashboardRow> GetDashboardAsync(int wardUnitId, DateOnly today, CancellationToken cancellationToken);
 
     /// <summary>
     /// AIC-08: the extra facts the period summary reads -- the period's violations by type, the
@@ -24,4 +24,10 @@ public interface IWardReportRepository
     /// </summary>
     Task<ReportPeriodFacts> GetPeriodFactsAsync(
         int wardUnitId, DateOnly from, DateOnly to, CancellationToken cancellationToken);
+
+    /// <summary>WARD-14 export: every receipt issued in the ward between two dates (inclusive), oldest first.</summary>
+    Task<IReadOnlyList<WardInvoiceRow>> ListWardInvoicesAsync(
+        int wardUnitId, DateOnly from, DateOnly to, CancellationToken cancellationToken);
+
+    Task<string?> GetWardNameAsync(int wardUnitId, CancellationToken cancellationToken);
 }

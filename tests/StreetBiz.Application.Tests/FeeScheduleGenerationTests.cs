@@ -1,5 +1,6 @@
 using FluentAssertions;
 using Moq;
+using StreetBiz.Application.Common.Events;
 using StreetBiz.Application.Common.Exceptions;
 using StreetBiz.Application.Common.Interfaces;
 using StreetBiz.Application.Common.Models;
@@ -8,12 +9,16 @@ using StreetBiz.Application.DTOs.Sidewalk;
 using StreetBiz.Application.Features.Finance;
 using StreetBiz.Application.Features.Finance.GenerateFeeSchedule;
 using StreetBiz.Application.Features.SidewalkSlots.GetSlotQuote;
+using MediatR;
 
 namespace StreetBiz.Application.Tests;
 
 public sealed class FeeScheduleGenerationTests
 {
     private static readonly DateOnly Start = new(2026, 9, 1);
+
+    /// <summary>Approved ten days ahead of the start, so no grace period moves a due date.</summary>
+    private static readonly DateOnly ApprovedAhead = Start.AddDays(-10);
 
     /// <summary>The seeded Nguyễn Văn Linh zone: 30 000/day, 3 000/day cleaning, 150 000 admin, 500 000 deposit.</summary>
     private static IReadOnlyList<FeeComponentRow> ZoneOneComponents() =>
@@ -23,21 +28,22 @@ public sealed class FeeScheduleGenerationTests
         new(3, "Tiền đặt cọc", FeeBases.PerTerm, 500_000m, 3),
     ];
 
-    private static FeePlan PlanFor(int termDays, decimal pricePerDay = 30_000m) =>
+    private static FeePlan PlanFor(int termDays, decimal pricePerDay = 30_000m, DateOnly? issuedOn = null) =>
         FeeInstalmentPlanner.Plan(
             FeeQuoteCalculator.Calculate(1, pricePerDay, termDays, ZoneOneComponents()),
-            Start);
+            Start,
+            issuedOn ?? ApprovedAhead);
 
     [Fact]
-    public void Plan_total_is_the_quote_total_so_a_contract_never_costs_more_than_quoted()
+    public void Only_the_rent_is_billed_because_the_quote_shows_other_components_as_reference_only()
     {
         var quote = FeeQuoteCalculator.Calculate(1, 30_000m, 90, ZoneOneComponents());
 
-        var plan = FeeInstalmentPlanner.Plan(quote, Start);
+        var plan = FeeInstalmentPlanner.Plan(quote, Start, ApprovedAhead);
 
-        // 90 x (30 000 + 3 000) + 150 000 + 500 000
-        quote.Total.Should().Be(3_620_000m);
-        plan.Total.Should().Be(quote.Total);
+        // "Tiền thuê tính vào hợp đồng" = 90 x 30 000; cleaning, admin fee and deposit are "chưa tính vào hợp đồng".
+        quote.IsReferenceOnly.Should().BeTrue();
+        plan.Total.Should().Be(quote.BaseFee).And.Be(2_700_000m);
     }
 
     [Theory]
@@ -69,14 +75,11 @@ public sealed class FeeScheduleGenerationTests
     }
 
     [Fact]
-    public void Per_term_components_are_charged_once_on_the_first_instalment()
+    public void Every_full_period_costs_the_same_with_nothing_extra_on_the_first()
     {
         var plan = PlanFor(90);
 
-        // 30 x 33 000 = 990 000 recurring, plus 650 000 charged once.
-        plan.Instalments[0].Amount.Should().Be(1_640_000m);
-        plan.Instalments[1].Amount.Should().Be(990_000m);
-        plan.Instalments[2].Amount.Should().Be(990_000m);
+        plan.Instalments.Select(instalment => instalment.Amount).Should().Equal(900_000m, 900_000m, 900_000m);
     }
 
     [Fact]
@@ -88,6 +91,31 @@ public sealed class FeeScheduleGenerationTests
             new DateOnly(2026, 9, 1),
             new DateOnly(2026, 10, 1),
             new DateOnly(2026, 10, 31));
+    }
+
+    [Fact]
+    public void A_contract_starting_the_day_it_is_approved_gets_a_week_to_pay_its_first_instalment()
+    {
+        var plan = PlanFor(90, issuedOn: Start);
+
+        plan.Instalments.Select(instalment => instalment.DueDate).Should().Equal(
+            Start.AddDays(FeeInstalmentPlanner.GraceDays),
+            new DateOnly(2026, 10, 1),
+            new DateOnly(2026, 10, 31));
+        // The period itself is unchanged: only when it is due moves.
+        plan.Instalments[0].PeriodStart.Should().Be(Start);
+    }
+
+    [Fact]
+    public void A_schedule_generated_late_never_opens_with_instalments_already_overdue()
+    {
+        // Generated 40 days into the term: periods 1 and 2 have begun, period 3 has not.
+        var issued = Start.AddDays(40);
+
+        var plan = PlanFor(90, issuedOn: issued);
+
+        plan.Instalments.Select(instalment => instalment.DueDate).Should().Equal(
+            issued.AddDays(7), issued.AddDays(7), new DateOnly(2026, 10, 31));
     }
 
     [Fact]
@@ -114,7 +142,7 @@ public sealed class FeeScheduleGenerationTests
     public void Rounding_leftovers_land_on_the_last_instalment_not_on_the_total()
     {
         // A price that does not divide evenly across the periods.
-        var plan = PlanFor(31, pricePerDay: 33_333m);
+        var plan = PlanFor(31, pricePerDay: 33_333.5m);
 
         plan.Instalments.Sum(instalment => instalment.Amount).Should().Be(plan.Total);
         plan.Instalments.Should().OnlyContain(instalment => instalment.Amount == Math.Round(instalment.Amount, 0));
@@ -224,6 +252,20 @@ public sealed class FeeScheduleGenerationTests
     }
 
     [Fact]
+    public void A_renewal_bills_exactly_the_days_it_adds_from_the_day_after_the_old_end()
+    {
+        // 45 days added after a term ending 29/11, approved well ahead.
+        var plan = FeeInstalmentPlanner.PlanExtension(
+            30_000m, new DateOnly(2026, 11, 30), new DateOnly(2027, 1, 13), new DateOnly(2026, 11, 1));
+
+        plan.Total.Should().Be(45 * 30_000m);
+        plan.Instalments.Select(instalment => (instalment.DueDate, instalment.Amount)).Should().Equal(
+            (new DateOnly(2026, 11, 30), 900_000m),
+            (new DateOnly(2026, 12, 30), 450_000m));
+        plan.Instalments.Last().PeriodEnd.Should().Be(new DateOnly(2027, 1, 13));
+    }
+
+    [Fact]
     public async Task Generation_prices_the_applied_for_term_and_stores_the_matching_total()
     {
         var finance = new Mock<IFinanceRepository>();
@@ -233,14 +275,15 @@ public sealed class FeeScheduleGenerationTests
                 7, 42, It.IsAny<decimal>(), It.IsAny<IReadOnlyList<FeeInstalment>>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(Schedule());
 
-        await new GenerateFeeScheduleCommandHandler(finance.Object)
-            .Handle(new GenerateFeeScheduleCommand(7, 42), CancellationToken.None);
+        await Handler(finance).Handle(new GenerateFeeScheduleCommand(7, 42), CancellationToken.None);
 
         finance.Verify(repository => repository.ReplaceFeeScheduleAsync(
             7,
             42,
-            3_620_000m,
-            It.Is<IReadOnlyList<FeeInstalment>>(instalments => instalments.Count == 3),
+            2_700_000m,
+            It.Is<IReadOnlyList<FeeInstalment>>(instalments => instalments.Count == 3
+                // "Today" (01/09 in Đà Nẵng) is the start date: the first instalment gets the grace week.
+                && instalments[0].DueDate == Start.AddDays(7)),
             It.IsAny<CancellationToken>()));
     }
 
@@ -251,8 +294,7 @@ public sealed class FeeScheduleGenerationTests
         finance.Setup(repository => repository.GetFeeScheduleContextAsync(7, It.IsAny<CancellationToken>()))
             .ReturnsAsync((FeeScheduleContextRow?)null);
 
-        var act = () => new GenerateFeeScheduleCommandHandler(finance.Object)
-            .Handle(new GenerateFeeScheduleCommand(7, 42), CancellationToken.None);
+        var act = () => Handler(finance).Handle(new GenerateFeeScheduleCommand(7, 42), CancellationToken.None);
 
         await act.Should().ThrowAsync<NotFoundException>();
     }
@@ -264,8 +306,7 @@ public sealed class FeeScheduleGenerationTests
         finance.Setup(repository => repository.GetFeeScheduleContextAsync(7, It.IsAny<CancellationToken>()))
             .ReturnsAsync(Context(termDays: 90) with { PricePerDay = 0m });
 
-        var act = () => new GenerateFeeScheduleCommandHandler(finance.Object)
-            .Handle(new GenerateFeeScheduleCommand(7, 42), CancellationToken.None);
+        var act = () => Handler(finance).Handle(new GenerateFeeScheduleCommand(7, 42), CancellationToken.None);
 
         await act.Should().ThrowAsync<DomainRuleException>();
     }
@@ -280,13 +321,51 @@ public sealed class FeeScheduleGenerationTests
         finance.Setup(repository => repository.GetFeeScheduleContextAsync(7, It.IsAny<CancellationToken>()))
             .ReturnsAsync(Context(termDays: 90) with { ContractStatus = status });
 
-        var act = () => new GenerateFeeScheduleCommandHandler(finance.Object)
-            .Handle(new GenerateFeeScheduleCommand(7, 42), CancellationToken.None);
+        var act = () => Handler(finance).Handle(new GenerateFeeScheduleCommand(7, 42), CancellationToken.None);
 
         await act.Should().ThrowAsync<DomainRuleException>().WithMessage(FinanceMessages.ContractNotActive);
         finance.Verify(repository => repository.ReplaceFeeScheduleAsync(
             It.IsAny<long>(), It.IsAny<long>(), It.IsAny<decimal>(),
             It.IsAny<IReadOnlyList<FeeInstalment>>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task A_renewal_appends_its_added_days_to_the_open_schedule()
+    {
+        var finance = new Mock<IFinanceRepository>();
+        finance.Setup(repository => repository.GetFeeScheduleContextAsync(7, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Context(termDays: 90));
+        finance.Setup(repository => repository.AppendInstalmentsAsync(
+                7, 42, It.IsAny<DateOnly>(), It.IsAny<FeePlan>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Schedule());
+        var sender = new Mock<ISender>();
+        sender.Setup(s => s.Send(It.IsAny<ExtendFeeScheduleCommand>(), It.IsAny<CancellationToken>()))
+            .Returns((ExtendFeeScheduleCommand command, CancellationToken token) =>
+                new ExtendFeeScheduleCommandHandler(finance.Object, Clock()).Handle(command, token));
+
+        await new ExtendFeeScheduleOnContractRenewed(sender.Object).Handle(
+            new RentalContractRenewedEvent(7, Start.AddDays(89), Start.AddDays(119), 42), CancellationToken.None);
+
+        finance.Verify(repository => repository.AppendInstalmentsAsync(
+            7,
+            42,
+            Start.AddDays(90),
+            It.Is<FeePlan>(plan => plan.Total == 900_000m && plan.Instalments.Count == 1),
+            It.IsAny<CancellationToken>()));
+        finance.Verify(repository => repository.ReplaceFeeScheduleAsync(
+            It.IsAny<long>(), It.IsAny<long>(), It.IsAny<decimal>(),
+            It.IsAny<IReadOnlyList<FeeInstalment>>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    private static GenerateFeeScheduleCommandHandler Handler(Mock<IFinanceRepository> finance) =>
+        new(finance.Object, Clock());
+
+    /// <summary>10:00 on the start date in Đà Nẵng.</summary>
+    private static TimeProvider Clock() => new FixedClock(new DateTimeOffset(2026, 9, 1, 3, 0, 0, TimeSpan.Zero));
+
+    private sealed class FixedClock(DateTimeOffset now) : TimeProvider
+    {
+        public override DateTimeOffset GetUtcNow() => now;
     }
 
     private static FeeScheduleContextRow Context(int termDays) => new(
@@ -308,8 +387,8 @@ public sealed class FeeScheduleGenerationTests
         FeeScheduleId: 11,
         ContractId: 7,
         Revision: 1,
-        TotalAmount: 3_620_000m,
+        TotalAmount: 2_700_000m,
         GeneratedAt: new DateTime(2026, 9, 1, 3, 0, 0, DateTimeKind.Utc),
         SupersededAt: null,
-        Items: [new FeeItemRow(21, 11, 1, 1, Start, 3_620_000m, FeeItemStatuses.Pending, null)]);
+        Items: [new FeeItemRow(21, 11, 1, 1, Start, 2_700_000m, FeeItemStatuses.Pending, null)]);
 }

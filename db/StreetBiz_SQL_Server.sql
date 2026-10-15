@@ -1320,6 +1320,10 @@ CREATE TABLE Invoices (
         FOREIGN KEY (vendor_id) REFERENCES Vendors(vendor_id)
 );
 CREATE INDEX IX_Invoices_Vendor ON Invoices(vendor_id);
+-- One invoice per obligation. The application checks the instalment/penalty is still payable
+-- before issuing; this is the backstop for two payments settling it at once.
+CREATE UNIQUE INDEX UX_Invoices_FeeItem ON Invoices(fee_item_id) WHERE fee_item_id IS NOT NULL;
+CREATE UNIQUE INDEX UX_Invoices_Penalty ON Invoices(penalty_id) WHERE penalty_id IS NOT NULL;
 
 -- SYS-04: idempotent callback processing (BR-37). order_id FK added later
 -- (ALTER TABLE) once the Phase 2 Orders table exists.
@@ -1342,7 +1346,7 @@ CREATE TABLE PaymentTransactions (
         -- CASH / BANK_TRANSFER: a fee or penalty a ward officer recorded as collected in person.
         CHECK (provider IN ('MOMO','ZALOPAY','CASH','BANK_TRANSFER')),
     CONSTRAINT CK_PaymentTransactions_Status
-        CHECK (transaction_status IN ('PENDING','SUCCESS','FAILED')),
+        CHECK (transaction_status IN ('PENDING','SUCCESS','FAILED','REFUND_REQUIRED','REFUNDED')),
     -- payment_purpose must agree with which target column is filled; without
     -- this a RENTAL_FEE row can carry a penalty_id, or no target at all
     CONSTRAINT CK_PaymentTransactions_PurposeMatchesTarget

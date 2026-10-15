@@ -23,10 +23,16 @@ public static class FeeItemStatuses
     public const string Paid = "PAID";
     public const string Overdue = "OVERDUE";
 
+    /// <summary>
+    /// The contract ended early (slot returned, permit revoked) before this instalment's period
+    /// began, so it is not owed. Closed like PAID: never payable, swept or counted as debt.
+    /// </summary>
+    public const string Cancelled = "CANCELLED";
+
     /// <summary>A fee instalment still owed: PENDING or OVERDUE.</summary>
     public static bool IsOutstanding(string value) => value is Pending or Overdue;
 
-    public static bool IsValid(string value) => value is Pending or Paid or Overdue;
+    public static bool IsValid(string value) => value is Pending or Paid or Overdue or Cancelled;
 }
 
 /// <summary>Penalties.penalty_status values (DB CHECK CK_Penalties_Status).</summary>
@@ -50,8 +56,21 @@ public static class PaymentStatuses
     public const string Success = "SUCCESS";
     public const string Failed = "FAILED";
 
-    /// <summary>SUCCESS and FAILED are terminal: a repeated callback must not re-apply them.</summary>
-    public static bool IsTerminal(string value) => value is Success or Failed;
+    /// <summary>
+    /// The provider took the money but there was nothing left to apply it to: the instalment or
+    /// penalty had already been paid by another attempt, or was closed meanwhile. Nothing is
+    /// invoiced for it; the vendor and the ward see it as owed back.
+    /// </summary>
+    public const string RefundRequired = "REFUND_REQUIRED";
+
+    /// <summary>A <see cref="RefundRequired"/> payment the ward has paid back outside StreetBiz.</summary>
+    public const string Refunded = "REFUNDED";
+
+    /// <summary>
+    /// Final for a provider's report: the money was applied or is owed back. FAILED is not final —
+    /// a payment page left open can still be paid after StreetBiz gave up on it.
+    /// </summary>
+    public static bool IsTerminal(string value) => value is Success or RefundRequired or Refunded;
 }
 
 /// <summary>PaymentCallbackEvents.processing_result values (DB CHECK CK_PaymentCallbackEvents_Result).</summary>
@@ -94,6 +113,18 @@ public static class FeeReminderPolicy
     public const int ReminderWindowDays = 3;
 }
 
+/// <summary>
+/// FEE-01: how long an unsettled fee/penalty payment is left alone. After
+/// <see cref="CheckAfter"/> the provider is asked for its state; a sandbox payment (no provider
+/// page to pay on) is closed then. A MoMo order the provider still reports in flight is closed
+/// after <see cref="CloseAfter"/>; if it is paid later anyway, the late callback is still applied.
+/// </summary>
+public static class StalePaymentPolicy
+{
+    public static readonly TimeSpan CheckAfter = TimeSpan.FromMinutes(30);
+    public static readonly TimeSpan CloseAfter = TimeSpan.FromHours(24);
+}
+
 /// <summary>Messages for the Fee, Payment, Invoice and Reporting workflow (SRS MSG27-MSG32).</summary>
 public static class FinanceMessages
 {
@@ -124,11 +155,32 @@ public static class FinanceMessages
     public const string TransactionNotFound = "Không tìm thấy giao dịch thanh toán.";
     public const string TransactionAlreadyProcessed = "Giao dịch này đã được xử lý.";
 
+    /// <summary>FEE-01/04: the chosen provider has neither merchant keys nor the Development sandbox.</summary>
+    public const string ProviderNotConfigured =
+        "Cổng thanh toán này chưa được cấu hình. Vui lòng chọn phương thức khác.";
+
+    /// <summary>Sandbox-confirm refused for a MoMo transaction once MoMo's merchant keys are configured.</summary>
+    public const string SandboxNotAvailableForRealProvider =
+        "Cổng MoMo đang được cấu hình để thanh toán thật; không thể xác nhận giả lập giao dịch này.";
+
     /// <summary>FEE-01: the instalment moved on (paid by another attempt, or gone OVERDUE/PAID) between the read and the checkout write.</summary>
     public const string FeeItemNoLongerPayable = "Kỳ phí này vừa thay đổi trạng thái. Vui lòng tải lại.";
 
     /// <summary>FEE-04: same race, for a penalty.</summary>
     public const string PenaltyNoLongerPayable = "Biên bản phạt này vừa thay đổi trạng thái. Vui lòng tải lại.";
+
+    /// <summary>
+    /// FEE-01: instalments are paid in order, so an overdue one can never be skipped while a later
+    /// one is settled (the renewal and slot-return debt checks look at the oldest).
+    /// </summary>
+    public static string EarlierInstalmentFirst(int ordinal, DateOnly dueDate) =>
+        $"Vui lòng thanh toán kỳ {ordinal} (hạn {dueDate:dd/MM/yyyy}) trước.";
+
+    /// <summary>WARD-09: the renewal's days already have instalments on the open schedule.</summary>
+    public const string ExtensionAlreadyBilled = "Giai đoạn gia hạn này đã có kỳ phí trên lịch phí hiện tại.";
+
+    /// <summary>WARD-14: marking a payment refunded that is not waiting for a refund.</summary>
+    public const string RefundNotRequired = "Khoản thanh toán này không ở trạng thái chờ hoàn tiền.";
 
     /// <summary>MSG27.</summary>
     public const string FeePaid = "Đã thanh toán phí thuê ô. Hoá đơn đã được phát hành.";

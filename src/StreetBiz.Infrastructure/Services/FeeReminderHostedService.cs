@@ -18,9 +18,15 @@ public sealed class FeeReminderOptions
 }
 
 /// <summary>
-/// FEE-02/SYS-06 background timer. A hosted service is a singleton, so it resolves
-/// <see cref="ISender"/> from a new DI scope per tick rather than injecting it directly — the
-/// same reason ASP.NET Core scopes a request: FinanceRepository holds a scoped DbContext.
+/// FEE-02/SYS-06 background timer. Each tick runs three independent steps, in this order:
+/// reconcile schedules with their contracts (SYS-03: bill contracts nothing bills, close the
+/// instalments of contracts that ended early), the overdue/reminder sweep, then settle or close
+/// payments left PENDING. Reconciling first means no reminder goes out for an instalment that is
+/// about to be closed.
+///
+/// A hosted service is a singleton, so it resolves <see cref="ISender"/> from a new DI scope per
+/// step rather than injecting it directly — the same reason ASP.NET Core scopes a request:
+/// FinanceRepository holds a scoped DbContext.
 /// </summary>
 public sealed class FeeReminderHostedService(
     IServiceScopeFactory scopeFactory,
@@ -44,11 +50,22 @@ public sealed class FeeReminderHostedService(
 
     private async Task RunOnceAsync(CancellationToken cancellationToken)
     {
-        try
+        var today = BusinessCalendar.Today(clock);
+
+        await StepAsync("Fee schedule reconciliation", async sender =>
         {
-            using var scope = scopeFactory.CreateScope();
-            var sender = scope.ServiceProvider.GetRequiredService<ISender>();
-            var today = BusinessCalendar.Today(clock);
+            var result = await sender.Send(new ReconcileFeeSchedulesCommand(today), cancellationToken);
+            if (result.GeneratedCount > 0 || result.CancelledCount > 0 || result.FailedCount > 0)
+            {
+                logger.LogInformation(
+                    "Fee schedules: {Generated} generated for unbilled contracts ({Failed} could not be), "
+                    + "{Cancelled} instalment(s) closed after an early contract end.",
+                    result.GeneratedCount, result.FailedCount, result.CancelledCount);
+            }
+        }, cancellationToken);
+
+        await StepAsync("Fee reminder sweep", async sender =>
+        {
             var result = await sender.Send(new RunFeeReminderSweepCommand(today), cancellationToken);
             if (result.OverdueCount > 0 || result.ReminderCount > 0)
             {
@@ -56,12 +73,32 @@ public sealed class FeeReminderHostedService(
                     "Fee reminder sweep: {OverdueCount} instalment(s) marked OVERDUE, {ReminderCount} reminder(s) sent.",
                     result.OverdueCount, result.ReminderCount);
             }
-        }
-        catch (Exception exception) when (exception is not OperationCanceledException)
+        }, cancellationToken);
+
+        await StepAsync("Stale payment sweep", async sender =>
         {
-            // A failed sweep must not crash the host — the next tick tries again, and nothing here
-            // is destructive (transitions and reminders are each individually idempotent per day).
-            logger.LogError(exception, "Fee reminder sweep failed; will retry on the next tick.");
+            var result = await sender.Send(new SettleStalePaymentsCommand(), cancellationToken);
+            if (result.SettledCount > 0 || result.ClosedCount > 0)
+            {
+                logger.LogInformation(
+                    "Stale payments: {Settled} settled with their provider, {Closed} closed.",
+                    result.SettledCount, result.ClosedCount);
+            }
+        }, cancellationToken);
+    }
+
+    private async Task StepAsync(string name, Func<ISender, Task> step, CancellationToken cancellationToken)
+    {
+        try
+        {
+            using var scope = scopeFactory.CreateScope();
+            await step(scope.ServiceProvider.GetRequiredService<ISender>());
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
+        {
+            // A failed step must not crash the host or stop the other steps — the next tick tries
+            // again, and every step is idempotent.
+            logger.LogError(exception, "{Step} failed; will retry on the next tick.", name);
         }
     }
 }

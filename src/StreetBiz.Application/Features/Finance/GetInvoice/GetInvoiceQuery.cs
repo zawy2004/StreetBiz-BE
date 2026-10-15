@@ -2,6 +2,7 @@ using FluentValidation;
 using MediatR;
 using StreetBiz.Application.Common.Exceptions;
 using StreetBiz.Application.Common.Interfaces;
+using StreetBiz.Application.Common.Models;
 using StreetBiz.Application.Common.Security;
 using StreetBiz.Application.DTOs.Finance;
 
@@ -23,6 +24,16 @@ public sealed class GetInvoiceQueryHandler(IVendorContext vendorContext, IFinanc
         var vendorId = await vendorContext.RequireVendorIdAsync(cancellationToken);
         var invoice = await finance.GetInvoiceAsync(vendorId, request.InvoiceId, cancellationToken)
             ?? throw new NotFoundException(FinanceMessages.InvoiceNotFound);
-        return invoice.ToDetailDto();
+        // The receipt's own fields (the same read the PDF uses), so screen and PDF never differ.
+        var document = await finance.GetInvoiceDocumentAsync(vendorId, request.InvoiceId, cancellationToken);
+        return invoice.ToDetailDto() with
+        {
+            WardName = document?.WardName,
+            PayerName = document?.PayerName,
+            BusinessName = document?.BusinessName,
+            ProviderReference = document?.ProviderReference,
+            DecisionNumber = document?.DecisionNumber,
+            AmountInWords = VietnameseMoneyWords.Of(invoice.Amount),
+        };
     }
 }

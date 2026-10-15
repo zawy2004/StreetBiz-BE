@@ -7,10 +7,11 @@ using StreetBiz.Application.Features.Finance.FeeReminders;
 namespace StreetBiz.API.Extensions;
 
 /// <summary>
-/// Development-only shortcuts for the finance module. WARD-08/09 approval now writes the fee
-/// schedule itself (WardComplianceService.PlanTermAsync, same calculator and planner); these
-/// remain for regenerating the schedule of a seeded contract through
-/// <see cref="RentalContractApprovedEvent"/>. They are never mapped outside Development.
+/// Development-only shortcuts for the finance module. WARD-08/09 approval writes the fee schedule
+/// itself (WardComplianceService.PlanTermAsync, same calculator and planner); these remain for
+/// regenerating the schedule of a seeded contract through <see cref="RentalContractApprovedEvent"/>
+/// and for running the background sweeps now instead of on their timer. They are never mapped
+/// outside Development.
 /// </summary>
 public static class FinanceDevEndpoints
 {
@@ -63,6 +64,22 @@ public static class FinanceDevEndpoints
             var result = await sender.Send(new RunFeeReminderSweepCommand(day), cancellationToken);
             return Results.Ok(result);
         })
+        .AllowAnonymous()
+        .WithTags("Development");
+
+        // The two other steps of FeeReminderHostedService, on demand.
+        app.MapPost("/api/dev/finance/schedules/reconcile", async (
+            ISender sender,
+            TimeProvider clock,
+            CancellationToken cancellationToken) =>
+            Results.Ok(await sender.Send(new ReconcileFeeSchedulesCommand(BusinessCalendar.Today(clock)), cancellationToken)))
+        .AllowAnonymous()
+        .WithTags("Development");
+
+        app.MapPost("/api/dev/finance/payments/settle-stale", async (
+            ISender sender,
+            CancellationToken cancellationToken) =>
+            Results.Ok(await sender.Send(new SettleStalePaymentsCommand(), cancellationToken)))
         .AllowAnonymous()
         .WithTags("Development");
     }
