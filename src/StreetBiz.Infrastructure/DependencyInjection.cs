@@ -39,6 +39,8 @@ public static class DependencyInjection
         services.AddScoped<IWardSlots>(provider => provider.GetRequiredService<WardSlots>());
         services.AddScoped<IWardComplianceService, WardComplianceService>();
         services.AddScoped<StreetBiz.Application.Features.WardConfiguration.IWardConfigurationService, WardConfigurationService>();
+        services.AddScoped<StreetBiz.Application.Features.AiAssistance.IAiAssistanceLogs, AiAssistanceLogs>();
+        services.AddScoped<StreetBiz.Application.Features.AiAssistance.IWardAiInsights, WardAiInsights>();
         services.AddScoped<StreetBiz.Application.Features.WardFinance.IWardFinanceService, WardFinanceService>();
         services.AddScoped<StreetBiz.Application.Common.Models.IRegistrationDocumentGenerator, Services.Documents.RegistrationDocumentGenerator>();
 
@@ -126,6 +128,7 @@ public static class DependencyInjection
         services.AddScoped<IPlatformAdministrationRepository, PlatformAdministrationRepository>();
         services.AddScoped<IFinanceRepository, FinanceRepository>();
         services.AddScoped<IWardReportRepository, WardReportRepository>();
+        services.AddScoped<StreetBiz.Application.Features.RegistrationIntegrity.IRegistrationIntegrityReader, RegistrationIntegrityReader>();
         services.Configure<FeeReminderOptions>(configuration.GetSection(FeeReminderOptions.SectionName));
         services.AddHostedService<FeeReminderHostedService>();
         services.AddScoped<ICommerceRepository, CommerceRepository>();

@@ -21,6 +21,8 @@ public partial class AIAssistanceLog
 
     public bool? accepted { get; set; }
 
+    public DateTime? reviewed_at { get; set; }
+
     public DateTime created_at { get; set; }
 
     public virtual UserAccount? reviewed_byNavigation { get; set; }

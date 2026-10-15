@@ -104,6 +104,15 @@ public sealed class ChatbotService(IChatbotActorResolver actors, IChatbotStore s
         try
         {
             await Emit("started", started.Messages, ct);
+            var earlier = await store.HistoryAsync(actor, conversationId, message.Ordinal - 1, ct);
+            var answeredBefore = earlier.Items.Any(m => m.Status == "COMPLETED" && m.Sender == "ASSISTANT");
+            if (!ChatbotScope.InScope(request.Content, answeredBefore, request.AttachmentIds is { Length: > 0 }, contextTool is not null))
+            {
+                // Not about StreetBiz: a fixed reply, with no model call and no data lookup.
+                ChatbotTelemetry.OutOfScope.Add(1, new KeyValuePair<string, object?>("role", actor.Role));
+                await Delta(ChatbotScope.Refusal(actor.Role), ct);
+                return await Finish();
+            }
             evidence.Add(knowledge.Evidence(actor.Role, request.Content));
             images = await attachments.ReadAsync(actor, request.AttachmentIds ?? [], ct);
             if (images.Count > 0) evidence.Clear();
@@ -117,7 +126,7 @@ public sealed class ChatbotService(IChatbotActorResolver actors, IChatbotStore s
                 else if (contextTool is { } context) await Execute(context.Tool, context.Arguments);
                 else if (ChatbotIntent.Tool(actor.Role, request.Content) is { } intent) await Execute(intent, "{}");
             }
-            var history = (await store.HistoryAsync(actor, conversationId, message.Ordinal - 1, ct)).Items
+            var history = earlier.Items
                 .Where(m => m.Status == "COMPLETED")
                 .TakeLast(8).Select(m => new ChatbotHistoryEntry(m.Sender.ToLowerInvariant(),
                     m.Sources.Any(s => s.Kind == "LIVE_DATA") && !m.Sources.Any(s => s.Id.StartsWith("live:public.food:", StringComparison.Ordinal))
@@ -247,17 +256,7 @@ public sealed class ChatbotService(IChatbotActorResolver actors, IChatbotStore s
                 }
                 if (!complete) throw new ChatbotException(503, "provider_unavailable", "Trợ lý chưa thể trả lời lúc này. Bạn có thể thử lại hoặc mở chức năng bên dưới.");
             }
-            await Flush(ct, true);
-            await EnsureAccess(ct, true);
-            message = message with { Content = evidence.Any(e => e.Source.Kind == "LIVE_DATA" && e.Tool != "public.food") ? body.ToString() : ChatbotPrivacy.Text(body.ToString(), settings.MaxOutputTokens * 16), Status = "COMPLETED",
-                CompletedAt = Now, Version = message.Version + 1, Checklist = ChatbotPresentation.Checklist(evidence),
-                Sources = evidence.Select(e => e.Source).DistinctBy(s => s.Id).ToArray(),
-                Cards = evidence.SelectMany(e => e.Cards).Take(30).ToArray(),
-                Actions = evidence.SelectMany(e => e.Actions).Concat(ChatbotNavigation.ForRole(actor.Role)).DistinctBy(a => a.Id).Take(30).ToArray() };
-            await store.SaveAsync(actor, message, providerName, modelId, usage, ct);
-            var saved = await store.MessageAsync(actor, conversationId, message.Id, ct);
-            await Emit(saved.Status == "COMPLETED" ? "completed" : "cancelled", saved, ct);
-            return new(started.Messages.UserMessage, saved);
+            return await Finish();
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
@@ -288,6 +287,22 @@ public sealed class ChatbotService(IChatbotActorResolver actors, IChatbotStore s
             ChatbotTelemetry.TurnSeconds.Record((clock.GetUtcNow() - startedAt).TotalSeconds, tags);
             ChatbotTelemetry.Turns.Add(1, tags);
             ChatbotTelemetry.Tokens.Add(usage.InputTokens + usage.OutputTokens, tags);
+        }
+
+        // Completes the turn from whatever has been written so far: a model answer, a data card or a refusal.
+        async Task<ChatbotSendResult> Finish()
+        {
+            await Flush(ct, true);
+            await EnsureAccess(ct, true);
+            message = message with { Content = evidence.Any(e => e.Source.Kind == "LIVE_DATA" && e.Tool != "public.food") ? body.ToString() : ChatbotPrivacy.Text(body.ToString(), settings.MaxOutputTokens * 16), Status = "COMPLETED",
+                CompletedAt = Now, Version = message.Version + 1, Checklist = ChatbotPresentation.Checklist(evidence),
+                Sources = evidence.Select(e => e.Source).DistinctBy(s => s.Id).ToArray(),
+                Cards = evidence.SelectMany(e => e.Cards).Take(30).ToArray(),
+                Actions = evidence.SelectMany(e => e.Actions).Concat(ChatbotNavigation.ForRole(actor.Role)).DistinctBy(a => a.Id).Take(30).ToArray() };
+            await store.SaveAsync(actor, message, providerName, modelId, usage, ct);
+            var saved = await store.MessageAsync(actor, conversationId, message.Id, ct);
+            await Emit(saved.Status == "COMPLETED" ? "completed" : "cancelled", saved, ct);
+            return new(started.Messages.UserMessage, saved);
         }
 
         async Task<ChatbotProviderResult> Generate(IChatbotModel model, ChatbotProviderRequest input, Func<string, CancellationToken, Task> delta)
@@ -406,8 +421,11 @@ public sealed class ChatbotService(IChatbotActorResolver actors, IChatbotStore s
         ChatbotPrivacy.Validate(new(Guid.NewGuid().ToString(), request.Content, ResponseStyle: request.ResponseStyle), settings);
         var question = ChatbotPrivacy.Text(request.Content, settings.MaxQuestionCharacters);
         var evidence = knowledge.Evidence("GUEST", question);
+        var inScope = ChatbotScope.InScope(question);
+        if (!inScope) ChatbotTelemetry.OutOfScope.Add(1, new KeyValuePair<string, object?>("role", "GUEST"));
         return new(Guid.NewGuid().ToString("N"), "guest", Guid.NewGuid().ToString(), "ASSISTANT", "COMPLETED",
-            BasicAnswer(ChatbotActor.Guest, question, [evidence], request.ResponseStyle), true, [evidence.Source], [], ChatbotNavigation.ForRole("GUEST"), Now, Now, 0, 1, ResponseStyle: request.ResponseStyle);
+            inScope ? BasicAnswer(ChatbotActor.Guest, question, [evidence], request.ResponseStyle) : ChatbotScope.Refusal("GUEST"),
+            true, inScope ? [evidence.Source] : [], [], ChatbotNavigation.ForRole("GUEST"), Now, Now, 0, 1, ResponseStyle: request.ResponseStyle);
     }
 
     private string BasicAnswer(ChatbotActor actor, string question, IReadOnlyList<ChatbotEvidence> evidence, string? style = null) =>
