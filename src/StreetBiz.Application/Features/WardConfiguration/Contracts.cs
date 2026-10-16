@@ -160,7 +160,8 @@ public sealed record WardSlotDto(
     string? BusinessCategory,
     bool CanHardDelete,
     bool CanEditGeometry,
-    string VersionToken);
+    string VersionToken,
+    IReadOnlyList<string>? ImageUrls = null);
 
 public sealed record WardStreetFeatureDto(
     int FeatureId,
@@ -201,7 +202,8 @@ public sealed record CreateSlotRequest(
     bool HasTrashBin,
     string? BusinessCategory,
     bool AcknowledgeWarnings,
-    string? WarningReason);
+    string? WarningReason,
+    IReadOnlyList<string>? ImageUrls = null);
 
 public sealed record UpdateSlotRequest(
     int ZoneId,
@@ -216,7 +218,9 @@ public sealed record UpdateSlotRequest(
     string? BusinessCategory,
     string VersionToken,
     bool AcknowledgeWarnings,
-    string? WarningReason);
+    string? WarningReason,
+    /// <summary>null keeps the current photos; a list replaces them all (first = cover, max 6).</summary>
+    IReadOnlyList<string>? ImageUrls = null);
 
 public sealed record SetSlotStatusRequest(string Status, string Reason, string VersionToken);
 

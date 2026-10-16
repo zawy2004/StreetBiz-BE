@@ -459,6 +459,77 @@ public sealed class WardConfigurationServiceTests
         Assert.Equal(1, await f.AuditCount("SLOT_CREATED"));
     }
 
+    private const string PhotoA = "/api/uploads/slot-images/5/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.jpg";
+    private const string PhotoB = "/api/uploads/slot-images/5/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.png";
+    private const string PhotoC = "/api/uploads/slot-images/5/cccccccccccccccccccccccccccccccc.webp";
+
+    [Fact]
+    public async Task A_new_slot_keeps_its_photos_in_order_with_the_first_as_cover()
+    {
+        using var f = await Fixture.Create();
+        var created = await f.Service().CreateSlotAsync(f.Actor, Slot(16.050000m, 108.220000m) with { ImageUrls = [PhotoA, PhotoB] }, default);
+
+        Assert.Equal([PhotoA, PhotoB], created.Slot.ImageUrls);
+        var inGrid = (await f.Service().GetSlotGridAsync(f.Actor, null, default)).Slots.Single(s => s.SlotId == created.Slot.SlotId);
+        Assert.Equal([PhotoA, PhotoB], inGrid.ImageUrls);
+    }
+
+    [Fact]
+    public async Task Updating_the_photos_replaces_the_whole_set_and_changes_the_version_token()
+    {
+        using var f = await Fixture.Create();
+        var created = (await f.Service().CreateSlotAsync(f.Actor, Slot(16.050000m, 108.220000m) with { ImageUrls = [PhotoA, PhotoB] }, default)).Slot;
+
+        var updated = (await f.Service().UpdateSlotAsync(f.Actor, created.SlotId,
+            Move(created, created.Latitude) with { ImageUrls = [PhotoC, PhotoA] }, default)).Slot;
+
+        Assert.Equal([PhotoC, PhotoA], updated.ImageUrls);
+        Assert.NotEqual(created.VersionToken, updated.VersionToken);
+    }
+
+    [Fact]
+    public async Task Leaving_the_photos_out_of_an_update_keeps_them()
+    {
+        using var f = await Fixture.Create();
+        var created = (await f.Service().CreateSlotAsync(f.Actor, Slot(16.050000m, 108.220000m) with { ImageUrls = [PhotoA] }, default)).Slot;
+
+        var updated = (await f.Service().UpdateSlotAsync(f.Actor, created.SlotId,
+            Move(created, created.Latitude) with { HasPower = true, ImageUrls = null }, default)).Slot;
+
+        Assert.Equal([PhotoA], updated.ImageUrls);
+        Assert.True(updated.HasPower);
+    }
+
+    [Fact]
+    public async Task An_empty_list_clears_the_photos()
+    {
+        using var f = await Fixture.Create();
+        var created = (await f.Service().CreateSlotAsync(f.Actor, Slot(16.050000m, 108.220000m) with { ImageUrls = [PhotoA, PhotoB] }, default)).Slot;
+
+        var updated = (await f.Service().UpdateSlotAsync(f.Actor, created.SlotId,
+            Move(created, created.Latitude) with { ImageUrls = [] }, default)).Slot;
+
+        Assert.Empty(updated.ImageUrls!);
+    }
+
+    [Fact]
+    public async Task Photos_must_come_from_the_slot_upload_endpoint_and_number_at_most_six()
+    {
+        using var f = await Fixture.Create();
+        var foreign = await Assert.ThrowsAsync<WardException>(() => f.Service().CreateSlotAsync(f.Actor,
+            Slot(16.050000m, 108.220000m) with { ImageUrls = ["https://evil.example/x.jpg"] }, default));
+        Assert.Equal("invalid_image", foreign.Code);
+
+        var evidence = await Assert.ThrowsAsync<WardException>(() => f.Service().CreateSlotAsync(f.Actor,
+            Slot(16.050000m, 108.220000m) with { ImageUrls = ["/api/uploads/evidence/5/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.jpg"] }, default));
+        Assert.Equal("invalid_image", evidence.Code);
+
+        var seven = Enumerable.Range(0, 7).Select(i => $"/api/uploads/slot-images/5/{i:x32}.jpg").ToList();
+        var tooMany = await Assert.ThrowsAsync<WardException>(() => f.Service().CreateSlotAsync(f.Actor,
+            Slot(16.050000m, 108.220000m) with { ImageUrls = seven }, default));
+        Assert.Equal("too_many_images", tooMany.Code);
+    }
+
     [Fact]
     public async Task A_slot_on_a_no_business_feature_is_blocked()
     {

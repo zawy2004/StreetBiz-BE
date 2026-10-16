@@ -479,9 +479,8 @@ CREATE TABLE SidewalkSlots (
     proposal_reviewer_role AS CAST(N'WARD_AUTHORITY' AS NVARCHAR(30)) PERSISTED,
     proposal_review_reason        NVARCHAR(500)         NULL,
     created_at                    DATETIME2             NOT NULL DEFAULT SYSUTCDATETIME(),
-    -- Slot detail (vendor slot workspace). image_url is not proposal_photo_url:
-    -- that one is proposal evidence and is bound by CK_SidewalkSlots_ProposalCoherent.
-    image_url                     NVARCHAR(500)         NULL,
+    -- Slot detail (vendor slot workspace). Photos live in SlotImages, not here, and are
+    -- not proposal_photo_url: that one is proposal evidence bound by CK_SidewalkSlots_ProposalCoherent.
     has_power                     BIT                   NOT NULL DEFAULT 0,
     has_water                     BIT                   NOT NULL DEFAULT 0,
     has_trash_bin                 BIT                   NOT NULL DEFAULT 0,
@@ -526,6 +525,21 @@ CREATE TABLE SidewalkSlots (
 );
 CREATE INDEX IX_SidewalkSlots_Status ON SidewalkSlots(slot_status);
 CREATE INDEX IX_SidewalkSlots_Zone   ON SidewalkSlots(zone_id);
+
+-- Photos of a slot, set by the ward. The cover is the lowest sort_order (ties: lowest image_id).
+-- image_url is a public URL issued by POST /api/uploads/slot-images. No UNIQUE (slot_id, sort_order):
+-- the ward replaces a slot's whole set in one save, and a unique key would make the order of
+-- that delete-and-insert matter.
+CREATE TABLE SlotImages (
+    image_id    BIGINT IDENTITY(1,1)  PRIMARY KEY,
+    slot_id     BIGINT                NOT NULL,
+    image_url   NVARCHAR(500)         NOT NULL,
+    sort_order  INT                   NOT NULL DEFAULT 0,
+    created_at  DATETIME2             NOT NULL DEFAULT SYSUTCDATETIME(),
+    CONSTRAINT FK_SlotImages_Slot
+        FOREIGN KEY (slot_id) REFERENCES SidewalkSlots(slot_id) ON DELETE CASCADE
+);
+CREATE INDEX IX_SlotImages_Slot ON SlotImages(slot_id, sort_order);
 
 -- Fee table of a zone. The vendor's quote, the contract total and the fee schedule
 -- (WARD-08) are all built from these rows plus the zone's rent, so they agree.
@@ -2267,7 +2281,7 @@ GO
    11 Assistant Persistence ...... 3  (ChatbotConversations, ChatbotMessages,
                                       ChatbotAudits)
    ------------------------------------------------------------
-   TOTAL: 61 tables (plus __EFMigrationsHistory), 5 triggers, 2 views
+   TOTAL: 62 tables (plus __EFMigrationsHistory), 5 triggers, 2 views
 
    Use-case coverage: the 70 Core and 31 Phase 2 use cases of the actor
    specification. AIAssistanceLogs backs AIC-01 (document check), AIC-02

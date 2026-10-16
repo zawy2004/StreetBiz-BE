@@ -18,7 +18,7 @@ public sealed record SidewalkSlotDto(
     TimeOnly? AvailableFrom,
     TimeOnly? AvailableTo,
     double? DistanceMeters,
-    string? ImageUrl,
+    IReadOnlyList<string> ImageUrls,
     bool HasPower,
     bool HasWater,
     bool HasTrashBin,
@@ -43,7 +43,7 @@ public static class SlotMapper
         r.Latitude, r.Longitude, r.WidthMeters, r.LengthMeters,
         r.SlotStatus, r.Source, r.Pricing.PricePerDay, r.AvailableFrom, r.AvailableTo,
         distanceMeters,
-        r.ImageUrl, r.HasPower, r.HasWater, r.HasTrashBin, r.BusinessCategory, r.TenantName,
+        r.ImageUrls, r.HasPower, r.HasWater, r.HasTrashBin, r.BusinessCategory, r.TenantName,
         r.HoldExpiresAt is { } holdExpiresAt ? DateTime.SpecifyKind(holdExpiresAt, DateTimeKind.Utc) : null,
         r.PriceDisplayUnit, r.Pricing.BillsByMonth ? r.Pricing.PricePerMonth : r.PricePerMonth, r.RentalMode, r.EventEndDate,
         r.Pricing.MonthlyPrice, r.QuarterDiscountPercent, r.IsPriceOverridden);
