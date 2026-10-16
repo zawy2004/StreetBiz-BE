@@ -1,3 +1,4 @@
+using System.Net;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -7,10 +8,22 @@ using Microsoft.Extensions.Logging;
 namespace StreetBiz.Infrastructure.Services;
 
 /// <summary>
-/// Shared Gemini Vision caller, extracted out of AiComplianceService so a second caller
-/// (FptAiKycService's fallback) does not duplicate the key-pool rotation, 503-retry and
-/// 429/403-failover logic. Behavior is unchanged from before the extraction -- callers that
-/// only had one image keep passing exactly one.
+/// Shared Gemini Vision caller (AiComplianceService and FptAiKycService's fallback), so the key
+/// rotation and failover live in one place.
+///
+/// Order of attempts: the configured model (AiCompliance:Gemini:Model) with every key of the pool,
+/// then each fallback model (AiCompliance:Gemini:FallbackModels, default gemini-3.6-flash) the same
+/// way. What a failure says decides where to go next:
+///   - 429 / 403 / 401: this key is out of quota or refused -- next key, same model.
+///   - 503 / 500 / 504, timeout: the model is overloaded (confirmed 2026-10-16: every key got 503 on
+///     gemini-3.8-flash while gemini-3.6-flash answered in 1.5 s) -- the other keys would get the same,
+///     so go straight to the next model instead of sleeping and retrying.
+///   - 404: the model was retired -- next model.
+/// Each attempt is capped (AiCompliance:Gemini:AttemptTimeoutSeconds, default 10 s) so one hanging
+/// call cannot eat the caller's whole budget, and a model that was overloaded or hung is skipped for
+/// AiCompliance:Gemini:ModelCooldownSeconds (default 120 s), so the next requests go straight to a
+/// model that answers instead of waiting on the hung one again. The key travels in the x-goog-api-key header, never in
+/// the URL, and only its last 4 characters are logged.
 /// </summary>
 public sealed class GeminiVisionClient(
     HttpClient httpClient,
@@ -18,117 +31,165 @@ public sealed class GeminiVisionClient(
     ILogger<GeminiVisionClient> logger,
     AiKeyPools keyPools)
 {
+    private const string DefaultModel = "gemini-3.6-flash";
+
     public async Task<(bool Success, string? Content)> CallAsync(
         string prompt, IReadOnlyList<(byte[] Bytes, string MimeType)> images, CancellationToken ct)
     {
-        var geminiKeyPool = keyPools.Gemini;
-        if (!geminiKeyPool.HasKeys)
+        var keys = keyPools.Gemini.GetAllKeysInOrder();
+        if (keys.Length == 0)
         {
             logger.LogWarning("No Gemini API keys configured in AiCompliance:Gemini:ApiKeys or ApiKey.");
             return (false, null);
         }
 
-        var model = configuration["AiCompliance:Gemini:Model"]?.Trim();
-        // gemini-2.0-flash was retired by Google (confirmed 2026-09-20: the API now returns
-        // 404 "model no longer available, use gemini-3.6-flash"), which silently broke both
-        // CCCD OCR extraction and encroachment-photo analysis -- both always fell through to
-        // an empty/failed result even with valid keys, since this is their shared default.
-        if (string.IsNullOrWhiteSpace(model)) model = "gemini-3.6-flash";
+        var models = Models();
+        var attemptTimeout = TimeSpan.FromSeconds(PositiveInt("AiCompliance:Gemini:AttemptTimeoutSeconds", 10));
+        var cooldown = TimeSpan.FromSeconds(PositiveInt("AiCompliance:Gemini:ModelCooldownSeconds", 120));
+        var withThinking = PayloadJson(prompt, images, includeThinkingConfig: true);
 
-        var maxTokensStr = configuration["AiCompliance:Gemini:MaxOutputTokens"]?.Trim();
-        var maxOutputTokens = int.TryParse(maxTokensStr, out var m) && m > 0 ? m : 4096;
+        foreach (var model in models)
+        {
+            var url = $"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent";
+            var payload = withThinking;
 
+            for (var i = 0; i < keys.Length; i++)
+            {
+                var suffix = keys[i].Length > 4 ? keys[i][^4..] : "****";
+                using var attempt = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                attempt.CancelAfter(attemptTimeout);
+                try
+                {
+                    using var response = await SendAsync(url, keys[i], payload, attempt.Token);
+                    var body = await response.Content.ReadAsStringAsync(attempt.Token);
+
+                    // A model that does not take a thinking setting answers 400; ask again without it.
+                    if (response.StatusCode == HttpStatusCode.BadRequest && payload == withThinking
+                        && body.Contains("thinking", StringComparison.OrdinalIgnoreCase))
+                    {
+                        payload = PayloadJson(prompt, images, includeThinkingConfig: false);
+                        i--;
+                        continue;
+                    }
+
+                    if (response.IsSuccessStatusCode)
+                    {
+                        var text = JsonNode.Parse(body)?["candidates"]?[0]?["content"]?["parts"]?
+                            .AsArray().Select(p => p?["text"]?.GetValue<string>()).LastOrDefault(t => !string.IsNullOrWhiteSpace(t));
+                        return (!string.IsNullOrWhiteSpace(text), text);
+                    }
+
+                    logger.LogWarning(
+                        "Gemini {Model} with key [..{KeySuffix}] failed with {StatusCode}: {Error}",
+                        model, suffix, (int)response.StatusCode, Shorten(body));
+
+                    if (IsKeyProblem(response.StatusCode))
+                    {
+                        continue; // next key, same model
+                    }
+
+                    if (IsModelProblem(response.StatusCode))
+                    {
+                        CoolDown(model, cooldown);
+                        break; // next model
+                    }
+
+                    return (false, null); // 400 and the like: the request itself is wrong
+                }
+                catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+                {
+                    logger.LogWarning(
+                        "Gemini {Model} with key [..{KeySuffix}] did not answer within {Seconds} s -- trying the next model.",
+                        model, suffix, attemptTimeout.TotalSeconds);
+                    CoolDown(model, cooldown);
+                    break;
+                }
+                catch (HttpRequestException ex)
+                {
+                    logger.LogWarning(ex, "Gemini {Model} with key [..{KeySuffix}] unreachable.", model, suffix);
+                }
+                catch (JsonException ex)
+                {
+                    logger.LogWarning(ex, "Gemini {Model} returned a body that is not JSON.", model);
+                    return (false, null);
+                }
+            }
+        }
+
+        logger.LogWarning("Gemini: every key of every model ({Models}) failed.", string.Join(", ", models));
+        return (false, null);
+    }
+
+    private async Task<HttpResponseMessage> SendAsync(string url, string apiKey, string payloadJson, CancellationToken ct)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Post, url)
+        {
+            Content = new StringContent(payloadJson, Encoding.UTF8, "application/json"),
+        };
+        request.Headers.Add("x-goog-api-key", apiKey);
+        return await httpClient.SendAsync(request, ct);
+    }
+
+    /// <summary>The configured model first, then the fallbacks, without duplicates. Models that just
+    /// failed go to the end (they are still tried when nothing else answers).</summary>
+    private IReadOnlyList<string> Models()
+    {
+        var primary = configuration["AiCompliance:Gemini:Model"]?.Trim();
+        var fallbacks = configuration.GetSection("AiCompliance:Gemini:FallbackModels").Get<string[]>()
+            ?? [DefaultModel];
+        var all = new[] { string.IsNullOrWhiteSpace(primary) ? DefaultModel : primary }
+            .Concat(fallbacks.Where(m => !string.IsNullOrWhiteSpace(m)).Select(m => m.Trim()))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        var now = DateTime.UtcNow;
+        bool CoolingDown(string model) =>
+            keyPools.GeminiModelCooldowns.TryGetValue(model, out var until) && until > now;
+        return all.Where(m => !CoolingDown(m)).Concat(all.Where(CoolingDown)).ToArray();
+    }
+
+    private void CoolDown(string model, TimeSpan cooldown)
+    {
+        keyPools.GeminiModelCooldowns[model] = DateTime.UtcNow + cooldown;
+        logger.LogInformation("Gemini {Model} is skipped for {Seconds} s.", model, cooldown.TotalSeconds);
+    }
+
+    private string PayloadJson(string prompt, IReadOnlyList<(byte[] Bytes, string MimeType)> images, bool includeThinkingConfig)
+    {
         var parts = new List<object> { new { text = prompt } };
         parts.AddRange(images.Select(img => (object)new
         {
             inline_data = new { mime_type = img.MimeType, data = Convert.ToBase64String(img.Bytes) }
         }));
 
-        var payload = new
+        var generationConfig = new Dictionary<string, object>
         {
-            contents = new[] { new { parts = parts.ToArray() } },
-            generationConfig = new
-            {
-                temperature = 0.1,
-                maxOutputTokens,
-                responseMimeType = "application/json"
-            }
+            ["temperature"] = 0.1,
+            ["maxOutputTokens"] = PositiveInt("AiCompliance:Gemini:MaxOutputTokens", 4096),
+            ["responseMimeType"] = "application/json",
         };
-
-        var payloadJson = JsonSerializer.Serialize(payload);
-        var keysToTry = geminiKeyPool.GetAllKeysInOrder();
-
-        for (int attempt = 0; attempt < keysToTry.Length; attempt++)
+        if (includeThinkingConfig)
         {
-            var apiKey = keysToTry[attempt];
-            try
-            {
-                var url = $"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={apiKey}";
-
-                // Google's 503 "currently experiencing high demand" is a transient, same-key
-                // condition (confirmed 2026-09-20: retrying the identical request against the
-                // identical key succeeded 2 of the next 3 tries) -- distinct from 429/403, which
-                // mean THIS key is out of quota and only switching keys helps. With a single
-                // configured key (this project's common case), the old code had no recourse for
-                // a transient 503 at all and just failed the whole extraction.
-                HttpResponseMessage response;
-                string responseBody;
-                const int maxTransientRetries = 2;
-                var transientRetry = 0;
-                while (true)
-                {
-                    using var content = new StringContent(payloadJson, Encoding.UTF8, "application/json");
-                    response = await httpClient.PostAsync(url, content, ct);
-                    if (response.StatusCode != System.Net.HttpStatusCode.ServiceUnavailable || transientRetry >= maxTransientRetries)
-                    {
-                        break;
-                    }
-                    transientRetry++;
-                    logger.LogInformation(
-                        "Gemini Vision returned 503 (transient overload) -- retrying same key in 1s ({Retry}/{Max})...",
-                        transientRetry, maxTransientRetries);
-                    await Task.Delay(TimeSpan.FromSeconds(1), ct);
-                }
-
-                if (response.IsSuccessStatusCode)
-                {
-                    responseBody = await response.Content.ReadAsStringAsync(ct);
-                    var doc = JsonNode.Parse(responseBody);
-                    var text = doc?["candidates"]?[0]?["content"]?["parts"]?[0]?["text"]?.GetValue<string>();
-                    return (!string.IsNullOrWhiteSpace(text), text);
-                }
-
-                var error = await response.Content.ReadAsStringAsync(ct);
-                logger.LogWarning(
-                    "Gemini Vision API call with key [..{KeySuffix}] failed with code {StatusCode}: {Error}",
-                    apiKey.Length > 8 ? apiKey[^8..] : apiKey,
-                    response.StatusCode,
-                    error);
-
-                // If 429 (Too Many Requests), 403 (Quota Limit), or 503 (still overloaded after
-                // the same-key retries above), try next key in pool
-                if ((int)response.StatusCode == 429 || (int)response.StatusCode == 403 || (int)response.StatusCode == 503)
-                {
-                    if (attempt < keysToTry.Length - 1)
-                    {
-                        logger.LogInformation("Failing over to next Gemini API key in pool (attempt {Attempt}/{Total})...", attempt + 2, keysToTry.Length);
-                        continue;
-                    }
-                }
-
-                return (false, null);
-            }
-            catch (Exception ex) when (attempt < keysToTry.Length - 1)
-            {
-                logger.LogWarning(ex, "Exception calling Gemini Vision API with key [..{KeySuffix}], failing over to next key...", apiKey.Length > 8 ? apiKey[^8..] : apiKey);
-            }
-            catch (Exception ex)
-            {
-                logger.LogWarning(ex, "Exception calling Gemini Vision API after trying {Total} keys.", keysToTry.Length);
-                return (false, null);
-            }
+            // Reading a card is transcription, not reasoning: thinking only adds latency (and its
+            // tokens count against maxOutputTokens). AiCompliance:Gemini:ThinkingBudget overrides.
+            var budget = int.TryParse(configuration["AiCompliance:Gemini:ThinkingBudget"], out var b) && b >= 0 ? b : 0;
+            generationConfig["thinkingConfig"] = new { thinkingBudget = budget };
         }
 
-        return (false, null);
+        return JsonSerializer.Serialize(new
+        {
+            contents = new[] { new { parts = parts.ToArray() } },
+            generationConfig,
+        });
     }
+
+    private int PositiveInt(string key, int fallback) =>
+        int.TryParse(configuration[key]?.Trim(), out var value) && value > 0 ? value : fallback;
+
+    private static bool IsKeyProblem(HttpStatusCode status) =>
+        status is HttpStatusCode.TooManyRequests or HttpStatusCode.Forbidden or HttpStatusCode.Unauthorized;
+
+    private static bool IsModelProblem(HttpStatusCode status) =>
+        status is HttpStatusCode.NotFound || (int)status >= 500;
+
+    private static string Shorten(string body) => body.Length <= 300 ? body : body[..300] + "…";
 }

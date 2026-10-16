@@ -1056,15 +1056,28 @@ public sealed class ApiKeyPool
     }
 }
 
-/// <summary>Singleton home for both providers' key pools -- see ApiKeyPool's remarks.</summary>
+/// <summary>Singleton home for every provider's key pool -- see ApiKeyPool's remarks.</summary>
 public sealed class AiKeyPools
 {
     public ApiKeyPool Gemini { get; }
     public ApiKeyPool Groq { get; }
 
+    /// <summary>FPT.AI ID Recognition (CCCD OCR): AiCompliance:FptAi:ApiKeys, or the single ApiKey.</summary>
+    public ApiKeyPool FptIdRecognition { get; }
+
+    /// <summary>FPT.AI Facematch is a separate product with its own keys: AiCompliance:FptAi:FaceMatchApiKeys,
+    /// or the single FaceMatchApiKey.</summary>
+    public ApiKeyPool FptFaceMatch { get; }
+
+    /// <summary>Gemini model -> until when it is skipped after it was overloaded or timed out
+    /// (GeminiVisionClient). Lives here because this class is the singleton every caller shares.</summary>
+    public System.Collections.Concurrent.ConcurrentDictionary<string, DateTime> GeminiModelCooldowns { get; } = new();
+
     public AiKeyPools(IConfiguration configuration)
     {
         Gemini = new ApiKeyPool(configuration, "AiCompliance:Gemini:ApiKeys", "AiCompliance:Gemini:ApiKey");
         Groq = new ApiKeyPool(configuration, "AiCompliance:Groq:ApiKeys", "AiCompliance:Groq:ApiKey");
+        FptIdRecognition = new ApiKeyPool(configuration, "AiCompliance:FptAi:ApiKeys", "AiCompliance:FptAi:ApiKey");
+        FptFaceMatch = new ApiKeyPool(configuration, "AiCompliance:FptAi:FaceMatchApiKeys", "AiCompliance:FptAi:FaceMatchApiKey");
     }
 }

@@ -99,6 +99,43 @@ Set a real JWT signing key (>= 32 chars):
 dotnet user-secrets --project src/StreetBiz.API set "Jwt:SigningKey" "<a-long-random-secret>"
 ~~~
 
+### eKYC keys (REG-02: CCCD OCR and face match)
+
+FPT.AI is tried first, then Gemini. Each provider takes a pool of keys, rotated per request:
+
+1. FPT.AI keys, one after another. A key that is rate limited or out of quota (429), refused
+   (401, 403), failing (5xx) or unreachable hands over to the next FPT.AI key.
+2. Only when every FPT.AI key has failed: Gemini, with its own pool
+   (`AiCompliance:Gemini:ApiKeys`), rotated the same way.
+
+A photo FPT.AI reads but rejects (no card found, no face) is not retried on another key; it goes
+straight to Gemini. ID Recognition and Facematch are separate FPT.AI products with separate keys.
+Set them with user-secrets, never in a checked-in file (indexes start at 0; the single `ApiKey` /
+`FaceMatchApiKey` setting still works when there is one key):
+
+~~~powershell
+dotnet user-secrets --project src/StreetBiz.API set "AiCompliance:FptAi:ApiKeys:0" "<fpt-id-recognition-key-1>"
+dotnet user-secrets --project src/StreetBiz.API set "AiCompliance:FptAi:ApiKeys:1" "<fpt-id-recognition-key-2>"
+dotnet user-secrets --project src/StreetBiz.API set "AiCompliance:FptAi:FaceMatchApiKeys:0" "<fpt-facematch-key-1>"
+dotnet user-secrets --project src/StreetBiz.API set "AiCompliance:FptAi:FaceMatchApiKeys:1" "<fpt-facematch-key-2>"
+dotnet user-secrets --project src/StreetBiz.API set "AiCompliance:Gemini:ApiKeys:0" "<gemini-key-1>"
+~~~
+
+FPT.AI's out-of-credit answers seen so far (429 "API rate limit exceeded", 403 "You cannot consume
+this service", 200 with errorCode 1 "Out of transaction") all count as "this key is used up". If
+FPT.AI reads the front and then runs out on the back, Gemini reads the back and the two are merged.
+
+Gemini settings (`AiCompliance:Gemini:*`, all optional): `Model` is tried first, then each of
+`FallbackModels` (default `gemini-3.6-flash`). A model that is overloaded (5xx) or timed out is left
+at once for the next one; a key that is out of quota (429/403) hands over to the next key.
+`AttemptTimeoutSeconds` caps one call (default 20), `ThinkingBudget` defaults to 0 because reading
+a card needs no reasoning and thinking only adds latency. A whole eKYC request stops at 45 s with a
+"enter it by hand" answer, and the web client waits up to 60 s for these two endpoints.
+
+Use keys of accounts that are each entitled to their quota; check FPT.AI's terms before pooling
+free-trial accounts. Restart the API after changing keys. Only the last 4 characters of a key are
+written to the log.
+
 ## Required reference data
 
 `role_code` is a FK to `Roles`. Ensure these exist:
