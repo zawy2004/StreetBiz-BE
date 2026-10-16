@@ -1665,9 +1665,14 @@ public sealed class WardComplianceService(
             created_at = Now
         });
 
+        // The contract names the vendor; the notification belongs to that vendor's account.
+        var vendorUserId = await db.Vendors.AsNoTracking()
+            .Where(v => v.vendor_id == permit.contract.vendor_id)
+            .Select(v => v.user_id)
+            .SingleAsync(ct);
         db.Notifications.Add(new Notification
         {
-            user_id = permit.contract.vendor_id,
+            user_id = vendorUserId,
             notification_type = "PERMIT_STATUS_SUSPENDED",
             title = isSuspend ? "Giấy phép sử dụng hè phố bị tạm đình chỉ" : "Giấy phép sử dụng hè phố đã bị thu hồi",
             body = $"UBND Phường đã {(isSuspend ? "tạm đình chỉ" : "thu hồi")} giấy phép tại ô {permit.contract.slot.slot_code}. Lý do: {request.Reason.Trim()}",
@@ -2231,7 +2236,8 @@ public sealed class WardComplianceService(
                     body = $"UBND Phường đã ban hành Quyết định xử phạt số {request.DecisionNumber.Trim()}. " +
                            $"Số tiền phạt: {fineAmount:N0} VND. Vui lòng nộp phạt theo quy định." +
                            complianceCountNote,
-                    related_entity_type = "Penalty",
+                    // The id is the violation's (a new penalty has no id before save).
+                    related_entity_type = "Violation",
                     related_entity_id = violation.violation_id,
                     is_read = false,
                     sent_at = Now
