@@ -121,7 +121,8 @@ public sealed class FinancePaymentTests
     public async Task Callback_dispatches_a_rental_fee_purpose_to_finance_not_commerce()
     {
         var gateway = new Mock<IPaymentGateway>();
-        gateway.Setup(x => x.VerifyCallbackAsync("MOMO", "payload", "sig", It.IsAny<CancellationToken>()))
+        gateway.Setup(x => x.VerifyCallbackAsync(
+                "MOMO", "payload", new PaymentCallbackHeaders("sig", null, null), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new PaymentGatewayCallback("MOMO-REF", "idem-1", 1_040_000m, "SUCCESS", true));
         var commerce = new Mock<ICommerceRepository>(MockBehavior.Strict);
         var finance = new Mock<IFinanceRepository>();
@@ -144,7 +145,8 @@ public sealed class FinancePaymentTests
     public async Task Callback_falls_back_to_commerce_when_the_purpose_is_an_order_or_unknown()
     {
         var gateway = new Mock<IPaymentGateway>();
-        gateway.Setup(x => x.VerifyCallbackAsync("MOMO", "payload", "sig", It.IsAny<CancellationToken>()))
+        gateway.Setup(x => x.VerifyCallbackAsync(
+                "MOMO", "payload", new PaymentCallbackHeaders("sig", null, null), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new PaymentGatewayCallback("MOMO-REF", "idem-9", 25_000m, "SUCCESS", true));
         var finance = new Mock<IFinanceRepository>();
         finance.Setup(x => x.FindPaymentPurposeAsync("MOMO-REF", "idem-9", It.IsAny<CancellationToken>()))

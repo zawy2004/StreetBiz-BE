@@ -49,7 +49,28 @@ public sealed class OrderPaymentBoundaryTests
             Mock.Of<ISender>(), Mock.Of<IOrderPaymentTesting>(), Mock.Of<IOrderRealtimePublisher>());
         var options = JsonSerializer.SerializeToElement(Assert.IsType<OkObjectResult>(controller.Options()).Value);
         Assert.Equal("SANDBOX", options.GetProperty("mode").GetString());
-        Assert.Equal(2, options.GetProperty("providers").GetArrayLength());
+        Assert.Equal(["MOMO", "ZALOPAY", "SEPAY"],
+            options.GetProperty("providers").EnumerateArray().Select(p => p.GetString()));
         Assert.Contains("không trừ tiền thật", options.GetProperty("message").GetString());
+    }
+
+    [Fact]
+    public void SePay_is_offered_outside_development_once_its_account_is_configured()
+    {
+        var environment = new Mock<IHostEnvironment>();
+        environment.SetupGet(x => x.EnvironmentName).Returns("Production");
+        var configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["Payments:SePay:BankName"] = "MBBank",
+            ["Payments:SePay:AccountNumber"] = "0123456789",
+        }).Build();
+        var controller = new OrderPaymentsController(environment.Object, configuration,
+            Mock.Of<ISender>(), Mock.Of<IOrderPaymentTesting>(), Mock.Of<IOrderRealtimePublisher>());
+
+        var options = JsonSerializer.SerializeToElement(Assert.IsType<OkObjectResult>(controller.Options()).Value);
+
+        Assert.Equal(["SEPAY"], options.GetProperty("providers").EnumerateArray().Select(p => p.GetString()));
+        Assert.Equal("LIVE", options.GetProperty("mode").GetString());
+        Assert.DoesNotContain("không trừ tiền thật", options.GetProperty("message").GetString());
     }
 }

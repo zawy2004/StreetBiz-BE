@@ -11,23 +11,35 @@ namespace StreetBiz.Infrastructure.Payments;
 
 public sealed class ConfiguredPaymentGateway(
     IOptions<PaymentGatewaySettings> options,
-    IHttpClientFactory? httpClientFactory = null) : IPaymentGateway
+    IHttpClientFactory? httpClientFactory = null,
+    TimeProvider? clock = null) : IPaymentGateway
 {
     private readonly PaymentGatewaySettings settings = options.Value;
+    private readonly TimeProvider time = clock ?? TimeProvider.System;
 
     /// <summary>Real MoMo v2 is used for MOMO whenever its credentials are configured.</summary>
     private bool UsesMomo(string provider) =>
         provider == "MOMO" && settings.Momo.IsMomoConfigured && httpClientFactory is not null;
 
+    /// <summary>SePay bank transfers are used for SEPAY whenever the account and an authentication are configured.</summary>
+    private bool UsesSePay(string provider) =>
+        provider == PaymentProviders.SePay && settings.SePay.IsConfigured;
+
     public bool IsProviderAvailable(string provider) =>
         !string.IsNullOrWhiteSpace(settings.For(provider).CheckoutUrlTemplate)
         || UsesMomo(provider)
+        || UsesSePay(provider)
         || settings.SandboxEnabled;
 
     public Task<PaymentGatewayCheckoutResult> CreateCheckoutAsync(
         PaymentGatewayCheckoutRequest request,
         CancellationToken cancellationToken)
     {
+        if (UsesSePay(request.Provider))
+        {
+            return Task.FromResult(SePayGateway.Create(settings.SePay, request));
+        }
+
         if (UsesMomo(request.Provider))
         {
             return MomoGateway.CreateAsync(
@@ -63,9 +75,18 @@ public sealed class ConfiguredPaymentGateway(
     public Task<PaymentGatewayCallback> VerifyCallbackAsync(
         string provider,
         string rawPayload,
-        string? signature,
+        PaymentCallbackHeaders? headers,
         CancellationToken cancellationToken)
     {
+        // SePay authenticates with its own headers and payload, whether or not it is configured
+        // (unconfigured, nothing authenticates, so the callback is recorded as REJECTED).
+        if (provider == PaymentProviders.SePay)
+        {
+            return Task.FromResult(SePayGateway.VerifyWebhook(settings.SePay, rawPayload, headers, time.GetUtcNow()));
+        }
+
+        var signature = headers?.Signature;
+
         // MoMo signs the IPN body itself (no signature header), in its own field layout.
         if (UsesMomo(provider) && MomoGateway.IsIpn(rawPayload))
         {
@@ -112,14 +133,29 @@ public sealed class ConfiguredPaymentGateway(
     public async Task<PaymentGatewayCallback?> QueryPaymentAsync(
         string provider,
         string providerReference,
-        CancellationToken cancellationToken) =>
-        UsesMomo(provider)
-            ? await MomoGateway.QueryAsync(
+        CancellationToken cancellationToken)
+    {
+        if (UsesMomo(provider))
+        {
+            return await MomoGateway.QueryAsync(
                 httpClientFactory!.CreateClient(MomoGateway.HttpClientName),
                 settings.Momo,
                 providerReference,
+                cancellationToken);
+        }
+
+        // Without an API token SePay cannot be asked: the webhook alone settles the payment.
+        return UsesSePay(provider) && !string.IsNullOrWhiteSpace(settings.SePay.ApiToken) && httpClientFactory is not null
+            ? await SePayGateway.QueryAsync(
+                httpClientFactory.CreateClient(SePayGateway.HttpClientName),
+                settings.SePay,
+                providerReference,
                 cancellationToken)
             : null;
+    }
+
+    public BankTransferInstructions? DescribeBankTransfer(string provider, string providerReference, decimal amount) =>
+        UsesSePay(provider) ? SePayGateway.Instructions(settings.SePay, providerReference, amount) : null;
 
     private static string? Text(JsonElement root, string name) =>
         root.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String

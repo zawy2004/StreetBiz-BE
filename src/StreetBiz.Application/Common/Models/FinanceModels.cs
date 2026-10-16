@@ -164,7 +164,8 @@ public sealed record FinancePaymentStateRow(
     string Provider,
     string? ProviderReference,
     string IdempotencyKey,
-    string Status);
+    string Status,
+    decimal? Amount = null);
 
 public sealed record FinanceCallbackMutationResult(
     PaymentCallbackOutcome Outcome,

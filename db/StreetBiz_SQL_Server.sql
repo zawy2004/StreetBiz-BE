@@ -1358,7 +1358,8 @@ CREATE TABLE PaymentTransactions (
         CHECK (payment_purpose IN ('RENTAL_FEE','PENALTY','ORDER')),
     CONSTRAINT CK_PaymentTransactions_Provider
         -- CASH / BANK_TRANSFER: a fee or penalty a ward officer recorded as collected in person.
-        CHECK (provider IN ('MOMO','ZALOPAY','CASH','BANK_TRANSFER')),
+        -- SEPAY: a VietQR bank transfer the payer made themselves, confirmed by SePay's webhook.
+        CHECK (provider IN ('MOMO','ZALOPAY','SEPAY','CASH','BANK_TRANSFER')),
     CONSTRAINT CK_PaymentTransactions_Status
         CHECK (transaction_status IN ('PENDING','SUCCESS','FAILED','REFUND_REQUIRED','REFUNDED')),
     -- payment_purpose must agree with which target column is filled; without
@@ -1391,7 +1392,7 @@ CREATE TABLE PaymentCallbackEvents (
     processing_result    NVARCHAR(20)          NOT NULL,
     received_at          DATETIME2             NOT NULL DEFAULT SYSUTCDATETIME(),
     CONSTRAINT CK_PaymentCallbackEvents_Provider
-        CHECK (provider IN ('MOMO','ZALOPAY')),
+        CHECK (provider IN ('MOMO','ZALOPAY','SEPAY')),
     CONSTRAINT CK_PaymentCallbackEvents_Result
         CHECK (processing_result IN ('APPLIED','DUPLICATE','UNMATCHED','REJECTED')),
     CONSTRAINT FK_PaymentCallbackEvents_Transaction
@@ -1870,7 +1871,8 @@ CREATE TABLE RefundTransactions (
     CONSTRAINT CK_RefundTransactions_Reason
         CHECK (refund_reason IN ('ORDER_REJECTED','ORDER_CANCELLED','COMPLAINT_RESOLVED')),
     CONSTRAINT CK_RefundTransactions_Provider
-        CHECK (provider IN ('MOMO','ZALOPAY')),
+        -- SEPAY has no refund API: its refunds are bank transfers made by hand and recorded here.
+        CHECK (provider IN ('MOMO','ZALOPAY','SEPAY')),
     CONSTRAINT CK_RefundTransactions_Status
         CHECK (refund_status IN ('PENDING','SUCCESS','FAILED')),
     CONSTRAINT CK_RefundTransactions_AmountPositive

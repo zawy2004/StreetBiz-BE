@@ -16,9 +16,36 @@ public sealed record PaymentGatewayCheckoutRequest(
     /// <summary>ORDER, RENTAL_FEE or PENALTY: decides which page the buyer returns to.</summary>
     string Purpose = "ORDER");
 
+/// <summary>
+/// <c>BankTransfer</c> is set for a bank-transfer provider (SEPAY): there is no page to send the
+/// payer to, so the screen shows the VietQR and these details instead of redirecting.
+/// </summary>
 public sealed record PaymentGatewayCheckoutResult(
     string PaymentUrl,
-    string? ProviderReference);
+    string? ProviderReference,
+    BankTransferInstructions? BankTransfer = null);
+
+/// <summary>
+/// What the payer types into (or scans with) their banking app. <c>TransferContent</c> carries
+/// the payment code that matches the incoming transfer back to its transaction.
+/// </summary>
+public sealed record BankTransferInstructions(
+    string BankName,
+    string AccountNumber,
+    string? AccountName,
+    decimal Amount,
+    string TransferContent,
+    string QrImageUrl);
+
+/// <summary>
+/// The parts of a callback request a provider authenticates with: MoMo/ZaloPay sign with
+/// <c>Signature</c>; SePay sends <c>X-SePay-Signature</c> with <c>X-SePay-Timestamp</c>
+/// (HMAC) or an <c>Authorization: Apikey …</c> header.
+/// </summary>
+public sealed record PaymentCallbackHeaders(
+    string? Signature,
+    string? Timestamp = null,
+    string? Authorization = null);
 
 public sealed record PaymentGatewayCallback(
     string? ProviderReference,
@@ -27,7 +54,17 @@ public sealed record PaymentGatewayCallback(
     string? Status,
     bool SignatureValid,
     /// <summary>What the provider actually sent, when it differs from the request body (status queries).</summary>
-    string? RawPayload = null);
+    string? RawPayload = null,
+    /// <summary>
+    /// The provider's own id for this money movement (SePay's transaction id). Two reports with
+    /// the same id are one transfer sent twice; a different id is a second transfer.
+    /// </summary>
+    string? ProviderEventId = null,
+    /// <summary>
+    /// A genuine notification that is not about a StreetBiz payment (money leaving the account,
+    /// another linked account): acknowledged, not recorded.
+    /// </summary>
+    bool Ignored = false);
 
 public interface IPaymentGateway
 {
@@ -45,7 +82,7 @@ public interface IPaymentGateway
     Task<PaymentGatewayCallback> VerifyCallbackAsync(
         string provider,
         string rawPayload,
-        string? signature,
+        PaymentCallbackHeaders? headers,
         CancellationToken cancellationToken);
 
     /// <summary>
@@ -58,6 +95,13 @@ public interface IPaymentGateway
         string providerReference,
         CancellationToken cancellationToken) =>
         Task.FromResult<PaymentGatewayCallback?>(null);
+
+    /// <summary>
+    /// The transfer details for a still-open bank-transfer payment, so its page can show the
+    /// QR again after a reload. Null for providers that are not paid by bank transfer.
+    /// </summary>
+    BankTransferInstructions? DescribeBankTransfer(string provider, string providerReference, decimal amount) =>
+        null;
 }
 
 public sealed record RefundGatewayRequest(

@@ -44,7 +44,12 @@ public static class PaymentProviders
     public const string Momo = "MOMO";
     public const string ZaloPay = "ZALOPAY";
 
-    public static bool IsValid(string value) => value is Momo or ZaloPay;
+    /// <summary>Bank transfer by VietQR, confirmed by SePay's webhook when the money lands.</summary>
+    public const string SePay = "SEPAY";
+
+    public const string InvalidMessage = "Provider must be MOMO, ZALOPAY or SEPAY.";
+
+    public static bool IsValid(string value) => value is Momo or ZaloPay or SePay;
 }
 
 public static class SalesPeriods

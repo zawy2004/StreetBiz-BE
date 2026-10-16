@@ -6,9 +6,67 @@ public sealed class PaymentGatewaySettings
     public bool SandboxEnabled { get; set; }
     public PaymentProviderSettings Momo { get; set; } = new();
     public PaymentProviderSettings ZaloPay { get; set; } = new();
+    public SePaySettings SePay { get; set; } = new();
 
-    public PaymentProviderSettings For(string provider) =>
-        provider == "MOMO" ? Momo : ZaloPay;
+    public PaymentProviderSettings For(string provider) => provider switch
+    {
+        "MOMO" => Momo,
+        "ZALOPAY" => ZaloPay,
+        _ => new PaymentProviderSettings(),
+    };
+}
+
+/// <summary>
+/// SePay (https://developer.sepay.vn): the payer transfers to <c>AccountNumber</c> by VietQR
+/// with the payment code in the content, and SePay's webhook reports the money arriving.
+/// Secrets (<c>WebhookSecret</c>, <c>WebhookApiKey</c>, <c>ApiToken</c>) belong in user-secrets
+/// or environment variables, never in a committed appsettings file.
+/// </summary>
+public sealed class SePaySettings
+{
+    /// <summary>The bank as SePay's QR service names it, e.g. "MBBank", "Vietcombank", "TPBank".</summary>
+    public string? BankName { get; set; }
+
+    public string? AccountNumber { get; set; }
+
+    /// <summary>Shown to the payer so they can check who they are paying.</summary>
+    public string? AccountName { get; set; }
+
+    /// <summary>
+    /// The payment code is this prefix plus the transaction id (SBP42). Set the same prefix in
+    /// My SePay → Cấu hình công ty → Cấu trúc mã thanh toán so SePay fills the webhook's "code".
+    /// </summary>
+    public string PaymentCodePrefix { get; set; } = "SBP";
+
+    /// <summary>The transfer content; "{code}" is replaced by the payment code. Some banks need a fixed prefix.</summary>
+    public string TransferContentTemplate { get; set; } = "{code}";
+
+    /// <summary>The webhook's HMAC-SHA256 secret key (recommended authentication).</summary>
+    public string? WebhookSecret { get; set; }
+
+    /// <summary>The webhook's API key, sent by SePay as "Authorization: Apikey {key}".</summary>
+    public string? WebhookApiKey { get; set; }
+
+    /// <summary>
+    /// A My SePay API token (Cấu hình công ty → API Access). Optional: with it, "Kiểm tra lại" and
+    /// the stale-payment sweep can ask SePay directly when the webhook cannot reach the server.
+    /// </summary>
+    public string? ApiToken { get; set; }
+
+    public string ApiBaseUrl { get; set; } = "https://my.sepay.vn/userapi";
+
+    public string QrImageBaseUrl { get; set; } = "https://qr.sepay.vn/img";
+
+    /// <summary>How far X-SePay-Timestamp may be from now before an HMAC-signed webhook is refused.</summary>
+    public int SignatureToleranceSeconds { get; set; } = 300;
+
+    public bool IsConfigured =>
+        !string.IsNullOrWhiteSpace(BankName)
+        && !string.IsNullOrWhiteSpace(AccountNumber)
+        && !string.IsNullOrWhiteSpace(PaymentCodePrefix)
+        && (!string.IsNullOrWhiteSpace(WebhookSecret)
+            || !string.IsNullOrWhiteSpace(WebhookApiKey)
+            || !string.IsNullOrWhiteSpace(ApiToken));
 }
 
 public sealed class PaymentProviderSettings

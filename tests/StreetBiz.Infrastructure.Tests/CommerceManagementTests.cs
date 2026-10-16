@@ -343,6 +343,28 @@ public sealed class CommerceManagementTests
     }
 
     [Fact]
+    public async Task A_second_sepay_transfer_for_a_paid_order_is_surplus_and_leaves_the_order_alone()
+    {
+        using var f = await Fixture.Create();
+        var cartId = await AddCart(f);
+        var order = (await f.Repository.CheckoutAsync(2, cartId, "SEPAY", "qr-order", default)).Order!;
+        var code = $"SBP{order.PaymentTransactionId}";
+        await f.Repository.SetPaymentProviderReferenceAsync(order.PaymentTransactionId!.Value, code, default);
+
+        Task<PaymentCallbackMutationResult> Transfer(long sePayId) =>
+            f.Repository.ApplyPaymentCallbackAsync(new PaymentCallbackData(
+                "SEPAY", code, null, 25000, "SUCCESS",
+                $$"""{"id":{{sePayId}},"content":"{{code}}","transferType":"in"}""", true, sePayId.ToString()), default);
+
+        Assert.Equal(PaymentCallbackOutcome.Applied, (await Transfer(1)).Outcome);
+        var historyCount = await f.Db.OrderStatusHistories.CountAsync(x => x.order_id == order.OrderId);
+        Assert.Equal(PaymentCallbackOutcome.Duplicate, (await Transfer(1)).Outcome);
+        Assert.Equal(PaymentCallbackOutcome.Surplus, (await Transfer(2)).Outcome);
+        Assert.Equal("PLACED", (await f.Db.Orders.AsNoTracking().SingleAsync(o => o.order_id == order.OrderId)).order_status);
+        Assert.Equal(historyCount, await f.Db.OrderStatusHistories.CountAsync(x => x.order_id == order.OrderId));
+    }
+
+    [Fact]
     public async Task Invalid_signature_callback_is_recorded_and_rejected()
     {
         using var f = await Fixture.Create();
@@ -468,8 +490,8 @@ public sealed class CommerceManagementTests
         {
             Momo = new PaymentProviderSettings { CallbackSecret = secret }
         }));
-        var valid = await gateway.VerifyCallbackAsync("MOMO", raw, signature, default);
-        var invalid = await gateway.VerifyCallbackAsync("MOMO", raw, "00", default);
+        var valid = await gateway.VerifyCallbackAsync("MOMO", raw, new PaymentCallbackHeaders(signature), default);
+        var invalid = await gateway.VerifyCallbackAsync("MOMO", raw, new PaymentCallbackHeaders("00"), default);
         Assert.True(valid.SignatureValid);
         Assert.False(invalid.SignatureValid);
     }

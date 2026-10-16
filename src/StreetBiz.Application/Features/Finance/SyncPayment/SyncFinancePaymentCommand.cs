@@ -55,7 +55,8 @@ public sealed class SyncFinancePaymentCommandHandler(
                 state.Amount,
                 state.Status,
                 state.RawPayload ?? "{}",
-                state.SignatureValid),
+                state.SignatureValid,
+                state.ProviderEventId),
             cancellationToken);
         var after = await finance.GetVendorPaymentAsync(vendorId, request.TransactionId, cancellationToken);
         return new FinancePaymentSyncDto(payment.TransactionId, after?.Status ?? payment.Status);

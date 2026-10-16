@@ -101,7 +101,12 @@ public static class DependencyInjection
             });
         services.AddFileStorage(configuration);
         services.AddHttpClient(MomoGateway.HttpClientName, client => client.Timeout = TimeSpan.FromSeconds(30));
+        services.AddHttpClient(SePayGateway.HttpClientName, client => client.Timeout = TimeSpan.FromSeconds(15));
         services.AddSingleton<IPaymentGateway, ConfiguredPaymentGateway>();
+        services.Configure<AlertSettings>(configuration.GetSection(AlertSettings.SectionName));
+        // Short timeout: the alert is sent while SePay/MoMo waits for the callback's answer.
+        services.AddHttpClient<IPaymentAlertNotifier, DiscordPaymentAlertNotifier>(
+            client => client.Timeout = TimeSpan.FromSeconds(5));
         services.AddSingleton<IRefundGateway, ConfiguredRefundGateway>();
 
         services.AddScoped<IOtpService, OtpService>();

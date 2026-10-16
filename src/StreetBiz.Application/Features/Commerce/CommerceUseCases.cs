@@ -205,7 +205,7 @@ public sealed class PlacePrepaidOrderCommandValidator : AbstractValidator<PlaceP
         RuleFor(x => x.Provider)
             .Cascade(CascadeMode.Stop)
             .NotEmpty()
-            .Must(value => PaymentProviders.IsValid(value.ToUpperInvariant()))
+            .Must(value => value.ToUpperInvariant() is PaymentProviders.Momo or PaymentProviders.ZaloPay)
             .WithMessage("Provider must be MOMO or ZALOPAY.");
         RuleFor(x => x.IdempotencyKey).NotEmpty().MaximumLength(100);
         RuleFor(x => x.Location!).SetValidator(new PickupLocationInputValidator()).When(x => x.Location is not null);

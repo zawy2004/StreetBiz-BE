@@ -4,6 +4,7 @@ using StreetBiz.Application.Common.Exceptions;
 using StreetBiz.Application.Common.Interfaces;
 using StreetBiz.Application.Common.Security;
 using StreetBiz.Application.DTOs.Finance;
+using StreetBiz.Application.DTOs.Payments;
 
 namespace StreetBiz.Application.Features.Finance.PayPenalty;
 
@@ -20,7 +21,7 @@ public sealed class PayPenaltyCommandValidator : AbstractValidator<PayPenaltyCom
             .Cascade(CascadeMode.Stop)
             .NotEmpty()
             .Must(value => PaymentProviders.IsValid(value.Trim().ToUpperInvariant()))
-            .WithMessage("Provider must be MOMO or ZALOPAY.");
+            .WithMessage(PaymentProviders.InvalidMessage);
         RuleFor(x => x.IdempotencyKey).NotEmpty().MaximumLength(100);
     }
 }
@@ -83,6 +84,7 @@ public sealed class PayPenaltyCommandHandler(
             request.PenaltyId,
             checkout.Provider,
             checkout.Amount,
-            gatewayResult.PaymentUrl);
+            gatewayResult.PaymentUrl,
+            BankTransferDto.From(gatewayResult.BankTransfer));
     }
 }

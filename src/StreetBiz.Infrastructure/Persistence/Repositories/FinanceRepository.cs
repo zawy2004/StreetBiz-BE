@@ -813,10 +813,13 @@ public sealed class FinanceRepository(
                 return await Finish(PaymentCallbackOutcome.Rejected, CallbackResults.Rejected);
             }
 
-            // Money already applied or already owed back: a repeated report changes nothing.
+            // Money already applied or already owed back: a repeated report changes nothing. A
+            // second bank transfer for it is new money, though: recorded, not applied, and raised.
             if (PaymentStatuses.IsTerminal(payment.transaction_status))
             {
-                return await Finish(PaymentCallbackOutcome.Duplicate, CallbackResults.Duplicate);
+                return await db.IsNewTransferAsync(payment.transaction_id, callback, cancellationToken)
+                    ? await Finish(PaymentCallbackOutcome.Surplus, CallbackResults.Rejected)
+                    : await Finish(PaymentCallbackOutcome.Duplicate, CallbackResults.Duplicate);
             }
 
             if (normalizedStatus == PaymentStatuses.Failed)
@@ -869,7 +872,8 @@ public sealed class FinanceRepository(
                 && ((row.fee_item != null && row.fee_item.fee_schedule.contract.vendor_id == vendorId)
                     || (row.penalty != null && row.penalty.violation.vendor_id == vendorId)))
             .Select(row => new FinancePaymentStateRow(
-                row.transaction_id, row.provider, row.provider_reference, row.idempotency_key, row.transaction_status))
+                row.transaction_id, row.provider, row.provider_reference, row.idempotency_key, row.transaction_status,
+                row.amount))
             .SingleOrDefaultAsync(cancellationToken);
 
     public async Task<FinanceCallbackMutationResult> ConfirmSandboxSuccessAsync(
