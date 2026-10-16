@@ -2,6 +2,7 @@ using FluentValidation;
 using MediatR;
 using StreetBiz.Application.Common.Exceptions;
 using StreetBiz.Application.Common.Interfaces;
+using StreetBiz.Application.Common.Models;
 using StreetBiz.Application.Common.Security;
 using StreetBiz.Application.DTOs.Finance;
 using StreetBiz.Application.Features.SidewalkSlots.GetSlotQuote;
@@ -10,8 +11,8 @@ namespace StreetBiz.Application.Features.Finance.GenerateFeeSchedule;
 
 /// <summary>
 /// SYS-03: generate (or regenerate) the fee schedule of a rental contract. Raised by WARD-08 on
-/// approval and by WARD-09 on renewal through <see cref="RentalContractApprovedEvent"/>; exposed
-/// directly only through the Development-only endpoint used while WARD-08 is still being built.
+/// approval through <see cref="Common.Events.RentalContractApprovedEvent"/>, by the fee lifecycle
+/// sweep for a contract in force that nothing is billing, and by the Development-only endpoint.
 /// </summary>
 public sealed record GenerateFeeScheduleCommand(long ContractId, long ActorUserId)
     : IRequest<FeeScheduleDto>;
@@ -25,7 +26,7 @@ public sealed class GenerateFeeScheduleCommandValidator : AbstractValidator<Gene
     }
 }
 
-public sealed class GenerateFeeScheduleCommandHandler(IFinanceRepository finance)
+public sealed class GenerateFeeScheduleCommandHandler(IFinanceRepository finance, TimeProvider clock)
     : IRequestHandler<GenerateFeeScheduleCommand, FeeScheduleDto>
 {
     public async Task<FeeScheduleDto> Handle(
@@ -47,11 +48,11 @@ public sealed class GenerateFeeScheduleCommandHandler(IFinanceRepository finance
         }
 
         // Same calculator as the SIDE-02 quote, so the schedule cannot drift from the price the
-        // vendor applied against.
+        // vendor applied against; the planner bills its rent line only.
         var quote = FeeQuoteCalculator.Calculate(
             context.SlotId, context.Pricing, context.TermDays, context.Components);
 
-        var plan = FeeInstalmentPlanner.Plan(quote, context.StartDate);
+        var plan = FeeInstalmentPlanner.Plan(quote, context.StartDate, BusinessCalendar.Today(clock));
 
         var schedule = await finance.ReplaceFeeScheduleAsync(
             context.ContractId, request.ActorUserId, plan.Total, plan.Instalments, cancellationToken);

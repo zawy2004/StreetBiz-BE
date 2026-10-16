@@ -16,12 +16,18 @@ namespace StreetBiz.Application.Features.Finance;
 /// entirely on the first instalment; everything else (rent after discount, PER_DAY fees) is spread
 /// over the periods in proportion to their days; the final instalment absorbs rounding so the
 /// instalments always sum to the total that FeeSchedules.total_amount stores.
+///
+/// When the schedule is generated after the fact (the reconciliation sweep, or a contract approved
+/// without one) the caller passes <c>issuedOn</c>: no instalment is then due sooner than
+/// <see cref="GraceDays"/> after it was issued, so a vendor is not handed an instalment that is
+/// overdue tomorrow. Without it, each instalment is due on the day its period starts.
 /// </summary>
 public static class FeeInstalmentPlanner
 {
     public const int PeriodDays = 30;
+    public const int GraceDays = 7;
 
-    public static FeePlan Plan(FeeQuoteDto quote, DateOnly startDate)
+    public static FeePlan Plan(FeeQuoteDto quote, DateOnly startDate, DateOnly? issuedOn = null)
     {
         ArgumentNullException.ThrowIfNull(quote);
         if (quote.TermDays <= 0)
@@ -35,6 +41,7 @@ public static class FeeInstalmentPlanner
         var oneOff = quote.Lines.Where(line => FeeBases.IsOneOff(line.CalcBasis)).Sum(line => line.Amount);
         var recurring = total - Whole(oneOff);
 
+        var earliestDue = issuedOn?.AddDays(GraceDays);
         var count = (termDays + PeriodDays - 1) / PeriodDays;
         var instalments = new List<FeeInstalment>(count);
         var allocated = 0m;
@@ -54,7 +61,7 @@ public static class FeeInstalmentPlanner
             allocated += amount;
             instalments.Add(new FeeInstalment(
                 ordinal,
-                periodStart,
+                earliestDue is { } floor && periodStart < floor ? floor : periodStart,
                 periodStart,
                 startDate.AddDays(offset + daysInPeriod - 1),
                 amount,

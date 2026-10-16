@@ -30,13 +30,41 @@ public interface IFinanceRepository
     /// <summary>The contract's open (non-superseded) schedule with its instalments, or null.</summary>
     Task<FeeScheduleRow?> GetCurrentFeeScheduleAsync(long contractId, CancellationToken cancellationToken);
 
+    /// <summary>
+    /// SYS-03 safety net: ACTIVE contracts in force on <paramref name="today"/> with nothing to
+    /// bill (no open schedule, or one without instalments) and no instalment ever paid. A renewal
+    /// (a superseded revision with payments) is not listed: it needs its own added days billed.
+    /// </summary>
+    Task<IReadOnlyList<UnbilledContractRow>> ListUnbilledContractsAsync(DateOnly today, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Closes (CANCELLED) the open instalments of a contract that ended early whose period begins
+    /// after it ended: a returned slot (CANCELLED, from cancelled_at) or a revoked permit (REVOKED,
+    /// from the permit's revoked_at), in Vietnam days. The vendor is told once per contract.
+    /// Returns how many instalments were closed.
+    /// </summary>
+    Task<int> CancelInstalmentsAfterEarlyEndAsync(CancellationToken cancellationToken);
+
+    /// <summary>Fee and penalty payments still PENDING that were opened before <paramref name="openedBeforeUtc"/>.</summary>
+    Task<IReadOnlyList<StalePaymentRow>> ListStalePaymentsAsync(DateTime openedBeforeUtc, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Marks a payment nobody settled FAILED, if it is still PENDING. Safe even if its page is paid
+    /// later: a provider's success on a FAILED payment is still applied (or, if the instalment was
+    /// paid meanwhile, recorded as owed back).
+    /// </summary>
+    Task<bool> ClosePendingPaymentAsync(long transactionId, CancellationToken cancellationToken);
+
     /// <summary>FEE-01: the instalment as its owner sees it, or null when it does not exist or belongs to someone else.</summary>
     Task<FeeItemCheckoutRow?> GetFeeItemForCheckoutAsync(long vendorId, long feeItemId, CancellationToken cancellationToken);
 
     /// <summary>
     /// FEE-01: opens a PENDING PaymentTransactions row for the instalment. Re-checks ownership
     /// and that the instalment is still outstanding inside the same transaction as the read on
-    /// GetFeeItemForCheckoutAsync raced with someone else paying it first.
+    /// GetFeeItemForCheckoutAsync raced with someone else paying it first. Instalments are paid in
+    /// due-date order. An instalment holds at most one PENDING payment: another one through the
+    /// same provider is handed back instead of a second being opened, and one through another
+    /// provider is closed first.
     /// </summary>
     Task<FinanceCheckoutTransactionRow> CreateFeeCheckoutAsync(
         long vendorId, long feeItemId, string provider, string idempotencyKey, CancellationToken cancellationToken);
@@ -51,6 +79,15 @@ public interface IFinanceRepository
     /// <summary>Records the provider's own reference for a transaction once checkout returns one.</summary>
     Task SetPaymentProviderReferenceAsync(long transactionId, string providerReference, CancellationToken cancellationToken);
 
+    /// <summary>FEE-03: everything the caller's payment receipt prints, or null when it is not theirs.</summary>
+    Task<InvoiceDocumentRow?> GetInvoiceDocumentAsync(long vendorId, long invoiceId, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// The provider refused to open a checkout for this transaction: mark it FAILED, unless an
+    /// earlier attempt already opened a provider order for it (that page may still be paid).
+    /// </summary>
+    Task AbandonUnopenedCheckoutAsync(long transactionId, CancellationToken cancellationToken);
+
     /// <summary>
     /// SYS-04 dispatch: which purpose (RENTAL_FEE/PENALTY/ORDER) a transaction belongs to, looked
     /// up the same way <see cref="ApplyPaymentCallbackAsync"/> will — provider reference first,
@@ -63,6 +100,9 @@ public interface IFinanceRepository
     /// <summary>
     /// SYS-04 for RENTAL_FEE/PENALTY transactions: verifies, applies idempotently, and on success
     /// marks the instalment/penalty PAID and issues its invoice (SYS-05) in the same transaction.
+    /// A success for a payment whose instalment/penalty is no longer payable (paid by another
+    /// attempt, closed) is money owed back: REFUND_REQUIRED, no invoice. A success on a payment
+    /// StreetBiz had closed as FAILED is still applied.
     /// Every callback is recorded in PaymentCallbackEvents whether or not it matched or verified.
     /// </summary>
     Task<FinanceCallbackMutationResult> ApplyPaymentCallbackAsync(

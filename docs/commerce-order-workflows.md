@@ -66,7 +66,8 @@ Authenticated customer (`CUSTOMER`, active account):
 | PUT | `/api/cart/items/{menuItemId}` | Replace quantity/note. |
 | DELETE | `/api/cart/items/{menuItemId}` | Remove one item. |
 | DELETE | `/api/cart` | Abandon the active cart. |
-| POST | `/api/orders/checkout` | Checkout `{ cartId, provider }` with required `Idempotency-Key` header. |
+| POST | `/api/orders/checkout` | Checkout `{ cartId, provider, location }` with required `Idempotency-Key` header; `location` is required while the pickup range is enforced (see [order-tracking-pickup-range.md](order-tracking-pickup-range.md)). |
+| GET | `/api/orders/{orderId}/tracking` | Ready-time estimate, orders ahead and pickup point (ORD-02). |
 | GET | `/api/orders/me?status=&page=&pageSize=&fromDate=&toDate=&sort=` | Paged current-customer orders. |
 | POST | `/api/orders` | Place `{ provider, idempotencyKey }`. |
 | GET | `/api/orders` | List the current customer's orders. |

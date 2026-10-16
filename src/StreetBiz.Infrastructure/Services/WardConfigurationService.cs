@@ -683,6 +683,7 @@ public sealed class WardConfigurationService(
     public async Task<SlotMutationResultDto> CreateSlotAsync(WardActor actor, CreateSlotRequest request, CancellationToken ct)
     {
         var input = new SlotPlacementInput(request.ZoneId, request.Latitude, request.Longitude, request.WidthMeters, request.LengthMeters);
+        var imageUrls = NormalizeImageUrls(request.ImageUrls);
         long slotId = 0;
         PlacementCheckDto check = null!;
 
@@ -712,6 +713,7 @@ public sealed class WardConfigurationService(
                 business_category = request.BusinessCategory,
                 created_at = Now,
             };
+            foreach (var image in NewSlotImages(imageUrls ?? [])) slot.SlotImages.Add(image);
             db.SidewalkSlots.Add(slot);
             await db.SaveChangesAsync(ct);
             slotId = slot.slot_id;
@@ -731,6 +733,7 @@ public sealed class WardConfigurationService(
     public async Task<SlotMutationResultDto> UpdateSlotAsync(WardActor actor, long slotId, UpdateSlotRequest request, CancellationToken ct)
     {
         PlacementCheckDto check = new(true, []);
+        var imageUrls = NormalizeImageUrls(request.ImageUrls);
 
         await Write(async () =>
         {
@@ -766,6 +769,11 @@ public sealed class WardConfigurationService(
             slot.has_water = request.HasWater;
             slot.has_trash_bin = request.HasTrashBin;
             slot.business_category = request.BusinessCategory;
+            if (imageUrls is not null && !imageUrls.SequenceEqual(OrderedImageUrls(slot)))
+            {
+                db.SlotImages.RemoveRange(slot.SlotImages);
+                foreach (var image in NewSlotImages(imageUrls)) slot.SlotImages.Add(image);
+            }
             Audit(actor, "SLOT_UPDATED", SlotEntity, slot.slot_id, new
             {
                 before,
@@ -953,6 +961,7 @@ public sealed class WardConfigurationService(
     private IQueryable<SidewalkSlot> GridSlotsQuery(WardActor actor) =>
         db.SidewalkSlots.AsNoTracking()
             .Include(s => s.zone)
+            .Include(s => s.SlotImages)
             .Where(s => s.zone.ward_unit_id == actor.WardId
                         && (s.source == SlotSources.WardDefined || s.proposal_review_status == ProposalReviewStatuses.Approved));
 
@@ -982,7 +991,7 @@ public sealed class WardConfigurationService(
         return new WardSlotDto(
             s.slot_id, s.slot_code, s.zone_id, s.zone.zone_name, s.latitude, s.longitude, s.width_meters, s.length_meters,
             s.slot_status, s.source, s.has_power, s.has_water, s.has_trash_bin, s.business_category,
-            editable && !hasHistory, editable, SlotToken(s));
+            editable && !hasHistory, editable, SlotToken(s), OrderedImageUrls(s));
     }
 
     private WardStreetFeatureDto ToFeatureDto(StreetFeature f) =>
@@ -995,7 +1004,7 @@ public sealed class WardConfigurationService(
         ?? throw ZoneNotFound();
 
     private async Task<SidewalkSlot> RequireSlotAsync(WardActor actor, long slotId, CancellationToken ct) =>
-        await db.SidewalkSlots.SingleOrDefaultAsync(s => s.slot_id == slotId && s.zone.ward_unit_id == actor.WardId
+        await db.SidewalkSlots.Include(s => s.SlotImages).SingleOrDefaultAsync(s => s.slot_id == slotId && s.zone.ward_unit_id == actor.WardId
                                                           && (s.source == SlotSources.WardDefined
                                                               || s.proposal_review_status == ProposalReviewStatuses.Approved), ct)
         ?? throw SlotNotFound();
@@ -1192,6 +1201,7 @@ public sealed class WardConfigurationService(
         hasWater = s.has_water,
         hasTrashBin = s.has_trash_bin,
         businessCategory = s.business_category,
+        imageUrls = OrderedImageUrls(s),
     };
 
     private static object FeatureSnapshot(StreetFeature f) => new
@@ -1207,7 +1217,25 @@ public sealed class WardConfigurationService(
 
     private static string SlotToken(SidewalkSlot s) =>
         VersionToken.Compute(s.slot_code, s.zone_id, s.latitude, s.longitude, s.width_meters, s.length_meters, s.slot_status,
-            s.has_power, s.has_water, s.has_trash_bin, s.business_category);
+            s.has_power, s.has_water, s.has_trash_bin, s.business_category, string.Join('|', OrderedImageUrls(s)));
+
+    private static List<string> OrderedImageUrls(SidewalkSlot s) =>
+        s.SlotImages.OrderBy(i => i.sort_order).ThenBy(i => i.image_id).Select(i => i.image_url).ToList();
+
+    private IEnumerable<SlotImage> NewSlotImages(IReadOnlyList<string> urls) =>
+        urls.Select((url, index) => new SlotImage { image_url = url, sort_order = index, created_at = Now });
+
+    /// <summary>null = leave the photos alone; otherwise trimmed, de-duplicated, at most six, all issued by our upload endpoint.</summary>
+    private static List<string>? NormalizeImageUrls(IReadOnlyList<string>? urls)
+    {
+        if (urls is null) return null;
+        var clean = urls.Select(u => u?.Trim() ?? string.Empty).Distinct(StringComparer.Ordinal).ToList();
+        if (clean.Count > SlotImageFiles.MaxPerSlot)
+            throw new WardException(400, "too_many_images", SlotImageFiles.TooMany);
+        if (clean.Any(u => !SlotImageFiles.TryParseUrl(u, out _, out _)))
+            throw new WardException(400, "invalid_image", SlotImageFiles.InvalidUrl);
+        return clean;
+    }
 
     private static string FeatureToken(StreetFeature f) =>
         VersionToken.Compute(f.zone_id, f.feature_type, f.label, f.latitude, f.longitude, f.blocks_business, f.note);

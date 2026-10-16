@@ -1007,6 +1007,48 @@ public sealed class WardComplianceServiceTests
     }
 
     [Fact]
+    public async Task Suspending_a_permit_notifies_the_vendors_account_not_the_user_with_the_vendor_id()
+    {
+        // Regression: the notice was addressed to user_id = vendor_id. The fixture's vendors
+        // share their user ids, so this vendor's two ids differ on purpose.
+        using var f = await Fixture.Create();
+
+        using (var seed = f.NewDb())
+        {
+            seed.UserAccounts.Add(new UserAccount
+            {
+                user_id = 40, phone_number = "0900000040", password_hash = "x",
+                full_name = "Chủ hộ C", role_code = "VENDOR", account_status = "ACTIVE"
+            });
+            seed.Vendors.Add(new Vendor { vendor_id = 30, user_id = 40 });
+            seed.RentalContracts.Add(new RentalContract
+            {
+                contract_id = 902, application_id = 1, slot_id = 100, vendor_id = 30,
+                start_date = DateOnly.FromDateTime(DateTime.UtcNow),
+                end_date = DateOnly.FromDateTime(DateTime.UtcNow).AddDays(30),
+                contract_status = "ACTIVE", created_at = DateTime.UtcNow
+            });
+            await seed.SaveChangesAsync();
+
+            seed.DigitalPermits.Add(new DigitalPermit
+            {
+                permit_id = 951, contract_id = 902, qr_payload = "test-payload-2",
+                permit_status = "ACTIVE", issued_at = DateTime.UtcNow
+            });
+            await seed.SaveChangesAsync();
+        }
+
+        await f.NewService().ExecutePermitActionAsync(f.Actor, 951,
+            new WardPermitActionRequest("SUSPEND", "Lấn chiếm lối đi"), default);
+
+        using var verify = f.NewDb();
+        var recipient = await verify.Notifications
+            .Where(n => n.notification_type == "PERMIT_STATUS_SUSPENDED")
+            .Select(n => n.user_id).SingleAsync();
+        Assert.Equal(40, recipient);
+    }
+
+    [Fact]
     public async Task Risk_queue_flags_registration_with_no_evidence_and_explains_why()
     {
         using var f = await Fixture.Create();

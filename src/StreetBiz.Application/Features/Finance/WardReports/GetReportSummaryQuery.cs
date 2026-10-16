@@ -263,7 +263,7 @@ public sealed class GetReportSummaryQueryHandler(
         // One DbContext behind all of these, so they run one after the other.
         var current = await reports.GetCollectionReportAsync(actor.WardId, from, to, cancellationToken);
         var previous = await reports.GetCollectionReportAsync(actor.WardId, previousFrom, previousTo, cancellationToken);
-        var dashboard = await reports.GetDashboardAsync(actor.WardId, cancellationToken);
+        var dashboard = await reports.GetDashboardAsync(actor.WardId, today, cancellationToken);
         var facts = await reports.GetPeriodFactsAsync(actor.WardId, from, to, cancellationToken);
 
         return ReportSummaryBuilder.Build(from, to, current, previous, dashboard, facts);

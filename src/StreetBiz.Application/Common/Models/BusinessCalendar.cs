@@ -25,6 +25,9 @@ public static class BusinessCalendar
     /// <summary>Overload for the older <c>IDateTimeProvider.UtcNow</c> (a plain UTC DateTime).</summary>
     public static DateOnly Today(DateTime utcNow) =>
         DateOnly.FromDateTime(TimeZoneInfo.ConvertTimeFromUtc(utcNow, TimeZone));
+    /// <summary>The Vietnamese calendar day a stored UTC instant falls on.</summary>
+    public static DateOnly DateOf(DateTime utc) =>
+        DateOnly.FromDateTime(TimeZoneInfo.ConvertTimeFromUtc(DateTime.SpecifyKind(utc, DateTimeKind.Utc), TimeZone));
 
     /// <summary>The UTC instant a Vietnamese calendar day begins.</summary>
     public static DateTime StartOfDayUtc(DateOnly day) =>

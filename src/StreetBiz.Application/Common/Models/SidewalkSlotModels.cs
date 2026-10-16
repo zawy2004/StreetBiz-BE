@@ -21,7 +21,8 @@ public sealed record SlotRow(
     /// <summary>WARD-02's "hạn nhận đơn": null means no deadline; a past date means the zone is
     /// closed to new applications (existing applications, renewals and contracts are unaffected).</summary>
     DateOnly? ApplicationDeadline,
-    string? ImageUrl,
+    /// <summary>The slot photos in order; the first is the cover.</summary>
+    IReadOnlyList<string> ImageUrls,
     bool HasPower,
     bool HasWater,
     bool HasTrashBin,

@@ -188,3 +188,27 @@ public sealed record InvoiceRow(
     string? ViolationLabel,
     string? PaymentProvider,
     DateTime? PaidAt);
+
+/// <summary>
+/// SYS-03 safety net: a contract in force with nothing to bill — no open schedule, or an open
+/// schedule without instalments — and no instalment ever paid. <c>ApprovedBy</c> is the officer
+/// whose approval created it, recorded as the actor of the generated schedule.
+/// </summary>
+public sealed record UnbilledContractRow(long ContractId, long ApprovedBy);
+
+/// <summary>
+/// What the fee lifecycle sweep changed: schedules generated for unbilled contracts and
+/// instalments closed because their contract had ended before their period began.
+/// </summary>
+public sealed record FeeScheduleReconcileResult(int GeneratedCount, int CancelledCount, int FailedCount);
+
+/// <summary>A fee or penalty payment nobody has settled since it was opened.</summary>
+public sealed record StalePaymentRow(
+    long TransactionId,
+    string Provider,
+    string? ProviderReference,
+    string IdempotencyKey,
+    DateTime CreatedAt);
+
+/// <summary>What the stale-payment sweep did: settled through the provider, or closed.</summary>
+public sealed record StalePaymentSweepResult(int SettledCount, int ClosedCount);
