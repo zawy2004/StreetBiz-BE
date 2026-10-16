@@ -109,6 +109,35 @@ dotnet run --project src/StreetBiz.API
 In Development, open /swagger at the URL printed by ASP.NET Core. Check SQL
 Server readiness with GET /health. HTTPS redirection is enabled.
 
+## Uploaded files (Azure Blob Storage)
+
+Uploads (menu images, slot photos, KYC evidence, voice) go through IFileStorage.
+By default they are written to disk under App_Data/uploads. To keep them in Azure
+Blob Storage instead, set Storage:Provider to AzureBlob and give it credentials:
+
+~~~powershell
+# Account key / SAS connection string (keep it in user-secrets or an env var, never in git)
+dotnet user-secrets set "Storage:Provider" "AzureBlob" --project src/StreetBiz.API
+dotnet user-secrets set "Storage:AzureBlob:ConnectionString" "<connection-string>" --project src/StreetBiz.API
+
+# Or managed identity in Azure: no secret, the identity needs "Storage Blob Data Contributor"
+$env:Storage__Provider = "AzureBlob"
+$env:Storage__AzureBlob__AccountUrl = "https://<account>.blob.core.windows.net"
+~~~
+
+The container (default streetbiz-uploads, Storage:AzureBlob:ContainerName) is private and
+is created on the first upload when it does not exist. Files are still served by the API
+after its permission checks, never by a public blob URL. Existing files are not copied:
+move App_Data/uploads into the container (same relative paths) if you switch with data.
+
+To try it locally without an Azure account, run the Azurite emulator and use the
+connection string UseDevelopmentStorage=true:
+
+~~~powershell
+docker run -d -p 10000:10000 mcr.microsoft.com/azure-storage/azurite azurite-blob --blobHost 0.0.0.0 --skipApiVersionCheck
+$env:STREETBIZ_AZURITE_TEST = "1"; dotnet test tests/StreetBiz.Infrastructure.Tests --filter AzureBlobFileStorage
+~~~
+
 ## Docker
 
 Copy .env.example to .env and replace both placeholder values. The Compose file

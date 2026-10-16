@@ -55,7 +55,6 @@ public static class DependencyInjection
         });
 
         services.Configure<JwtSettings>(configuration.GetSection(JwtSettings.SectionName));
-        services.Configure<StorageSettings>(configuration.GetSection(StorageSettings.SectionName));
         services.Configure<PaymentGatewaySettings>(
             configuration.GetSection(PaymentGatewaySettings.SectionName));
 
@@ -100,7 +99,7 @@ public static class DependencyInjection
 
                 settings.HashKey = "dev-only-otp-hash-key";
             });
-        services.AddSingleton<IFileStorage, LocalFileStorage>();
+        services.AddFileStorage(configuration);
         services.AddHttpClient(MomoGateway.HttpClientName, client => client.Timeout = TimeSpan.FromSeconds(30));
         services.AddSingleton<IPaymentGateway, ConfiguredPaymentGateway>();
         services.AddSingleton<IRefundGateway, ConfiguredRefundGateway>();
