@@ -31,7 +31,8 @@ public sealed class WardComplianceService(
     IKycResultRepository kycResults,
     IAiAssistanceLogs aiLogs,
     TimeProvider clock,
-    IRegistrationDocumentGenerator registrationDocuments)
+    IRegistrationDocumentGenerator registrationDocuments,
+    DocumentCheckFailures documentCheckFailures)
     : IWardComplianceService
 {
     private DateTime Now => clock.GetUtcNow().UtcDateTime;
@@ -40,6 +41,9 @@ public sealed class WardComplianceService(
         "Asia/Ho_Chi_Minh", TimeSpan.FromHours(7), "Asia/Ho_Chi_Minh", "Asia/Ho_Chi_Minh");
 
     private DateOnly TodayVn => ToVnDate(Now);
+
+    private static DateTime ToVnTime(DateTime utc) =>
+        TimeZoneInfo.ConvertTimeFromUtc(DateTime.SpecifyKind(utc, DateTimeKind.Utc), VietnamTimeZone);
 
     private static DateOnly ToVnDate(DateTime utc) =>
         DateOnly.FromDateTime(TimeZoneInfo.ConvertTimeFromUtc(DateTime.SpecifyKind(utc, DateTimeKind.Utc), VietnamTimeZone));
@@ -128,9 +132,6 @@ public sealed class WardComplianceService(
         long registrationId,
         CancellationToken ct)
     {
-        // Tracked (not AsNoTracking): a first-time AI-OCR backfill of id_number
-        // below is persisted here, so subsequent opens of the same record reuse
-        // the stored value instead of re-calling the AI provider every time.
         var reg = await db.BusinessRegistrations
             .Include(x => x.vendor).ThenInclude(v => v.user)
             .Include(x => x.RegistrationEvidences)
@@ -150,9 +151,13 @@ public sealed class WardComplianceService(
 
         var ownerName = reg.vendor?.user?.full_name ?? reg.display_name;
 
-        // AI Document Inspector [BR-41/42]: extract real CCCD data from the
-        // uploaded ID photo (multimodal), never compare against phone number.
-        var aiCheck = await RunDocumentCheckAsync(reg, evidence, ownerName, refresh: false, ct);
+        // AI Document Inspector [BR-41/42]: opening a record never calls the AI provider. It shows
+        // the stored check while its inputs are unchanged, or nothing ("not run yet") until the
+        // officer asks for one (ReRunDocumentCheckAsync). Calling the provider here put a slow or
+        // exhausted provider on the page load: 4-45 s per open, and a retry on every open because
+        // failures were never stored.
+        var aiCheck = DocumentCheckPrecondition(reg, evidence)
+            ?? TryReadCachedDocumentCheck(reg.ai_check_result, DocumentCheckKey(reg, evidence, ownerName));
 
         return new WardEnrollmentDetailDto(
             Id(reg.registration_id),
@@ -378,22 +383,22 @@ public sealed class WardComplianceService(
             .ToList();
         var ownerName = reg.vendor?.user?.full_name ?? reg.display_name;
 
-        // An explicit re-run is the officer asking for a fresh answer: skip the cache.
-        return await RunDocumentCheckAsync(reg, evidence, ownerName, refresh: true, ct);
+        // An explicit re-run is the officer asking for a fresh answer: skip the stored one.
+        return await RunDocumentCheckAsync(reg, evidence, ownerName, ct);
     }
 
-    /// <summary>
-    /// [BR-41/42] + biometric-data consent gate: refuses with an honest, non-AI result while
-    /// BusinessRegistrations.biometric_consent_at is unset (Luat Bao ve du lieu ca nhan 2025 /
-    /// Nghi dinh 356/2025/ND-CP requires this consent to be separate and explicit -- captured at
-    /// REG-02 evidence upload, not assumed here).
-    /// </summary>
-    private async Task<AiDocumentCheckResult> RunDocumentCheckAsync(
-        BusinessRegistration reg,
-        IReadOnlyList<WardEvidenceDto> evidence,
-        string ownerName,
-        bool refresh,
-        CancellationToken ct)
+    /// <summary>Longest the officer waits for one AI document check (OCR + compare) before getting a
+    /// "check by hand" answer: room for a hung model (10 s) and its fallback. The web client waits
+    /// 45 s for this call.</summary>
+    private static readonly TimeSpan DocumentCheckBudget = TimeSpan.FromSeconds(30);
+
+    /// <summary>After a failed check, how long the same inputs are not sent to the provider again.</summary>
+    private static readonly TimeSpan DocumentCheckFailureCooldown = TimeSpan.FromMinutes(10);
+
+    /// <summary>The non-AI answers given without calling a provider: no biometric consent, or no
+    /// photo to read. Null when an AI check may run.</summary>
+    private static AiDocumentCheckResult? DocumentCheckPrecondition(
+        BusinessRegistration reg, IReadOnlyList<WardEvidenceDto> evidence)
     {
         if (reg.biometric_consent_at is null)
         {
@@ -417,34 +422,87 @@ public sealed class WardComplianceService(
                 IsAiGenerated: false);
         }
 
-        // Opening a record used to call the provider twice (OCR + compare) every time:
-        // ~3.5 s per page view and paid credits for an answer that cannot change until
-        // the evidence or the declared data does. Reuse the stored result while its
-        // inputs are unchanged.
-        if (!refresh
-            && TryReadCachedDocumentCheck(reg.ai_check_result, DocumentCheckKey(reg, evidence, ownerName)) is { } cached)
+        return null;
+    }
+
+    private static AiDocumentCheckResult DocumentCheckUnavailable(string summary, string discrepancy) =>
+        new(
+            MatchPercentage: 0,
+            IsMatch: false,
+            NeedsManualVerification: true,
+            Summary: summary,
+            Discrepancies: new[] { discrepancy },
+            IsAiGenerated: false);
+
+    /// <summary>
+    /// [BR-41/42] + biometric-data consent gate: refuses with an honest, non-AI result while
+    /// BusinessRegistrations.biometric_consent_at is unset (Luat Bao ve du lieu ca nhan 2025 /
+    /// Nghi dinh 356/2025/ND-CP requires this consent to be separate and explicit -- captured at
+    /// REG-02 evidence upload, not assumed here).
+    /// </summary>
+    private async Task<AiDocumentCheckResult> RunDocumentCheckAsync(
+        BusinessRegistration reg,
+        IReadOnlyList<WardEvidenceDto> evidence,
+        string ownerName,
+        CancellationToken ct)
+    {
+        if (DocumentCheckPrecondition(reg, evidence) is { } precondition)
         {
-            return cached;
+            return precondition;
         }
 
-        var extraction = await aiService.ExtractIdDocumentAsync(evidence, ct);
+        // A check that just failed on these same inputs is not sent to the provider again for a
+        // while: the officer gets the answer at once instead of another 15 s wait and lost quota.
+        var failureKey = $"{reg.registration_id}:{DocumentCheckKey(reg, evidence, ownerName)}";
+        if (documentCheckFailures.TryGet(failureKey, Now, out var failure))
+        {
+            return DocumentCheckUnavailable(
+                $"[Hệ thống — chưa xác minh bằng AI] Lần đối soát AI lúc {ToVnTime(failure.FailedAt):HH:mm} không thành công. "
+                + $"Có thể chạy lại sau {ToVnTime(failure.RetryAfter):HH:mm}; trong lúc chờ, cán bộ đối chiếu CCCD thủ công.",
+                "Chưa có kết quả đối soát AI cho hồ sơ này.");
+        }
 
         var changed = false;
-        if (string.IsNullOrWhiteSpace(reg.id_number) && !string.IsNullOrWhiteSpace(extraction.IdNumber)
-            && extraction.ConfidencePercent >= 85)
+        AiDocumentCheckResult result;
+        using (var budget = CancellationTokenSource.CreateLinkedTokenSource(ct))
         {
-            reg.id_number = extraction.IdNumber;
-            changed = true;
+            budget.CancelAfter(DocumentCheckBudget);
+            try
+            {
+                var extraction = await aiService.ExtractIdDocumentAsync(evidence, budget.Token);
+
+                // Only a real provider reading may fill in the CCCD number.
+                if (extraction.IsAiGenerated
+                    && string.IsNullOrWhiteSpace(reg.id_number) && !string.IsNullOrWhiteSpace(extraction.IdNumber)
+                    && extraction.ConfidencePercent >= 85)
+                {
+                    reg.id_number = extraction.IdNumber;
+                    changed = true;
+                }
+
+                result = await aiService.CompareDeclaredProfileAsync(
+                    ownerName, reg.id_number, reg.declared_address ?? "", extraction, budget.Token);
+            }
+            catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+            {
+                result = DocumentCheckUnavailable(
+                    $"[Hệ thống — chưa xác minh bằng AI] Dịch vụ AI phản hồi quá {DocumentCheckBudget.TotalSeconds:0} giây. "
+                    + "Cán bộ đối chiếu CCCD thủ công hoặc chạy lại sau.",
+                    "Dịch vụ AI không phản hồi kịp.");
+            }
         }
 
-        var result = await aiService.CompareDeclaredProfileAsync(
-            ownerName, reg.id_number, reg.declared_address ?? "", extraction, ct);
-
-        // Only a real provider answer is cached; a fallback ("provider unavailable")
-        // must be retried on the next open. The key is taken after the id_number
-        // backfill so the next read, which sees the stored id_number, matches it.
-        if (result.IsAiGenerated)
+        if (!result.IsAiGenerated)
         {
+            // Nothing is stored for a failed check; it is remembered for a while instead.
+            documentCheckFailures.Record(failureKey, Now, Now + DocumentCheckFailureCooldown);
+        }
+        else
+        {
+            documentCheckFailures.Clear(failureKey);
+
+            // Only a real provider answer is stored. The key is taken after the id_number backfill
+            // so the next open, which sees the stored id_number, matches it.
             var key = DocumentCheckKey(reg, evidence, ownerName);
             // BR-41: log the suggestion before it is cached, so a cache hit (the common case --
             // every later view of this record until something changes) still carries the id an

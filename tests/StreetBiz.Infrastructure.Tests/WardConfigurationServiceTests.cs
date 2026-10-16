@@ -799,7 +799,8 @@ public sealed class WardConfigurationServiceTests
                 new Persistence.Repositories.KycResultRepository(db, new Common.DateTimeProvider()),
                 new AiAssistanceLogs(db, Clock),
                 Clock,
-                new Services.Documents.RegistrationDocumentGenerator());
+                new Services.Documents.RegistrationDocumentGenerator(),
+                new DocumentCheckFailures());
         }
 
         public async Task<int> AuditCount(string action)

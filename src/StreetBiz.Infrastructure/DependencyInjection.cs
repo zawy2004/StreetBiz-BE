@@ -38,6 +38,8 @@ public static class DependencyInjection
         services.AddScoped<WardSlots>();
         services.AddScoped<IWardSlots>(provider => provider.GetRequiredService<WardSlots>());
         services.AddScoped<IWardComplianceService, WardComplianceService>();
+        // Failed AI document checks are remembered across requests (see DocumentCheckFailures).
+        services.AddSingleton<DocumentCheckFailures>();
         services.AddScoped<StreetBiz.Application.Features.WardConfiguration.IWardConfigurationService, WardConfigurationService>();
         services.AddScoped<StreetBiz.Application.Features.AiAssistance.IAiAssistanceLogs, AiAssistanceLogs>();
         services.AddScoped<StreetBiz.Application.Features.AiAssistance.IWardAiInsights, WardAiInsights>();

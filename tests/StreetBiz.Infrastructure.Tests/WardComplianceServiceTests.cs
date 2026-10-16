@@ -616,32 +616,36 @@ public sealed class WardComplianceServiceTests
     }
 
     [Fact]
-    public async Task Opening_an_enrollment_again_reuses_the_cached_ai_check()
+    public async Task Opening_an_enrollment_never_calls_the_ai_provider()
     {
-        // Every open used to call the provider twice (~3.5 s, paid credits).
+        // Opening a record used to run OCR + compare on every view: 4-45 s per open when the
+        // provider was slow or out of quota. Now only the officer's explicit re-run calls it.
         using var f = await Fixture.Create();
         await GiveConsentAndIdPhoto(f, registrationId: 2);
         var ai = new CountingAiComplianceService();
 
-        var first = await f.NewService(ai).GetEnrollmentDetailAsync(f.Actor, 2, default);
-        var second = await f.NewService(ai).GetEnrollmentDetailAsync(f.Actor, 2, default);
+        var notRunYet = await f.NewService(ai).GetEnrollmentDetailAsync(f.Actor, 2, default);
+        Assert.Null(notRunYet.AiCheck);
+        Assert.Equal(0, ai.Extractions);
 
+        var run = await f.NewService(ai).ReRunDocumentCheckAsync(f.Actor, 2, default);
+        Assert.True(run.IsAiGenerated);
+
+        var stored = await f.NewService(ai).GetEnrollmentDetailAsync(f.Actor, 2, default);
+        var again = await f.NewService(ai).GetEnrollmentDetailAsync(f.Actor, 2, default);
         Assert.Equal(1, ai.Extractions);
         Assert.Equal(1, ai.Comparisons);
-        Assert.Equal(first.AiCheck!.Summary, second.AiCheck!.Summary);
-        Assert.True(second.AiCheck!.IsAiGenerated);
+        Assert.Equal(run.Summary, stored.AiCheck!.Summary);
+        Assert.Equal(run.Summary, again.AiCheck!.Summary);
     }
 
     [Fact]
-    public async Task Explicit_rerun_and_changed_evidence_both_bypass_the_cached_ai_check()
+    public async Task Changed_evidence_hides_the_stale_check_until_it_is_run_again()
     {
         using var f = await Fixture.Create();
         await GiveConsentAndIdPhoto(f, registrationId: 2);
         var ai = new CountingAiComplianceService();
-
-        await f.NewService(ai).GetEnrollmentDetailAsync(f.Actor, 2, default);
         await f.NewService(ai).ReRunDocumentCheckAsync(f.Actor, 2, default);
-        Assert.Equal(2, ai.Comparisons);
 
         using (var db = f.NewDb())
         {
@@ -649,23 +653,67 @@ public sealed class WardComplianceServiceTests
             await db.SaveChangesAsync();
         }
 
-        await f.NewService(ai).GetEnrollmentDetailAsync(f.Actor, 2, default);
-        Assert.Equal(3, ai.Comparisons);
+        var afterChange = await f.NewService(ai).GetEnrollmentDetailAsync(f.Actor, 2, default);
+        Assert.Null(afterChange.AiCheck);
+        Assert.Equal(1, ai.Comparisons);
+
+        await f.NewService(ai).ReRunDocumentCheckAsync(f.Actor, 2, default);
+        Assert.Equal(2, ai.Comparisons);
     }
 
     [Fact]
-    public async Task A_fallback_result_is_not_cached_so_the_next_open_retries_the_provider()
+    public async Task Opening_still_shows_the_consent_refusal_without_calling_the_provider()
+    {
+        // Registration 1 in the fixture has no separate biometric consent.
+        using var f = await Fixture.Create();
+        var ai = new CountingAiComplianceService();
+
+        var detail = await f.NewService(ai).GetEnrollmentDetailAsync(f.Actor, 1, default);
+
+        Assert.NotNull(detail.AiCheck);
+        Assert.False(detail.AiCheck!.IsAiGenerated);
+        Assert.Contains(detail.AiCheck.Discrepancies, d => d.Contains("sinh trắc học"));
+        Assert.Equal(0, ai.Extractions);
+    }
+
+    [Fact]
+    public async Task A_failed_check_is_not_retried_for_ten_minutes_then_runs_again()
     {
         using var f = await Fixture.Create();
         await GiveConsentAndIdPhoto(f, registrationId: 2);
         var ai = new CountingAiComplianceService { ProviderDown = true };
+        var start = new DateTimeOffset(2026, 10, 16, 2, 0, 0, TimeSpan.Zero); // 09:00 in Đà Nẵng
 
-        await f.NewService(ai).GetEnrollmentDetailAsync(f.Actor, 2, default);
-        await f.NewService(ai).GetEnrollmentDetailAsync(f.Actor, 2, default);
+        var failed = await f.NewService(ai, new FixedClock(start)).ReRunDocumentCheckAsync(f.Actor, 2, default);
+        Assert.False(failed.IsAiGenerated);
+        Assert.Equal(1, ai.Comparisons);
 
+        var blocked = await f.NewService(ai, new FixedClock(start.AddMinutes(5))).ReRunDocumentCheckAsync(f.Actor, 2, default);
+        Assert.Equal(1, ai.Comparisons); // not sent to the provider again
+        Assert.Contains("09:00", blocked.Summary);
+        Assert.Contains("09:10", blocked.Summary);
+
+        await f.NewService(ai, new FixedClock(start.AddMinutes(11))).ReRunDocumentCheckAsync(f.Actor, 2, default);
         Assert.Equal(2, ai.Comparisons);
+
         using var db = f.NewDb();
         Assert.Null((await db.BusinessRegistrations.SingleAsync(r => r.registration_id == 2)).ai_check_result);
+    }
+
+    [Fact]
+    public async Task A_check_that_runs_past_its_time_budget_answers_check_by_hand()
+    {
+        using var f = await Fixture.Create();
+        await GiveConsentAndIdPhoto(f, registrationId: 2);
+        var service = f.NewService(new HangingAiComplianceService());
+
+        var started = DateTime.UtcNow;
+        var result = await service.ReRunDocumentCheckAsync(f.Actor, 2, default);
+
+        Assert.False(result.IsAiGenerated);
+        Assert.True(result.NeedsManualVerification);
+        Assert.Contains("30 giây", result.Summary);
+        Assert.InRange(DateTime.UtcNow - started, TimeSpan.FromSeconds(29), TimeSpan.FromSeconds(40));
     }
 
     [Fact]
@@ -1670,6 +1718,9 @@ public sealed class WardComplianceServiceTests
         public TestContext NewDb() =>
             new(new DbContextOptionsBuilder<StreetBizDbContext>().UseSqlite(Connection).Options);
 
+        /// <summary>Shared by every service of this fixture, as the singleton is in the API.</summary>
+        public DocumentCheckFailures DocumentCheckFailures { get; } = new();
+
         public WardComplianceService NewService(IAiComplianceService? ai = null, TimeProvider? clock = null)
         {
             // One context per service, shared with its KYC repository, so both see the same
@@ -1682,7 +1733,8 @@ public sealed class WardComplianceServiceTests
                 new KycResultRepository(db, new DateTimeProvider()),
                 new AiAssistanceLogs(db, clock ?? TimeProvider.System),
                 clock ?? TimeProvider.System,
-                new RegistrationDocumentGenerator());
+                new RegistrationDocumentGenerator(),
+                DocumentCheckFailures);
         }
 
         public void Dispose() => Connection.Dispose();
@@ -1777,6 +1829,39 @@ public sealed class WardComplianceServiceTests
             return Task.FromResult(new AiDocumentCheckResult(
                 92, true, false, $"check #{Comparisons}", Array.Empty<string>(), IsAiGenerated: !ProviderDown));
         }
+
+        public Task<AiEncroachmentResult> AnalyzeInspectionPhotoAsync(string photoUrl, double? slotWidth, double? slotLength, CancellationToken ct) =>
+            inner.AnalyzeInspectionPhotoAsync(photoUrl, slotWidth, slotLength, ct);
+
+        public Task<AiLegalSuggestion> ClassifyAndDraftAsync(string? description, IReadOnlyList<PenaltyScheduleItemDto> availableSchedules, CancellationToken ct) =>
+            inner.ClassifyAndDraftAsync(description, availableSchedules, ct);
+
+        public Task<string> AnswerVendorAssistantAsync(string question, string? context, CancellationToken ct) =>
+            inner.AnswerVendorAssistantAsync(question, context, ct);
+
+        public Task<AiProposalAssessment> AssessProposalSiteAsync(AiProposalSiteInput input, CancellationToken ct) =>
+            inner.AssessProposalSiteAsync(input, ct);
+
+        public Task<IReadOnlyDictionary<long, string>?> ExplainGeofenceDriftAsync(IReadOnlyList<GeofenceDriftFacts> items, CancellationToken ct) =>
+            inner.ExplainGeofenceDriftAsync(items, ct);
+
+        public Task<AiPriceAdvice?> AdviseZonePriceAsync(ZonePriceFacts facts, CancellationToken ct) =>
+            inner.AdviseZonePriceAsync(facts, ct);
+    }
+
+    /// Never answers until cancelled, like a provider that hangs.
+    private sealed class HangingAiComplianceService : IAiComplianceService
+    {
+        private readonly NoOpAiComplianceService inner = new();
+
+        public async Task<AiIdExtractionResult> ExtractIdDocumentAsync(IReadOnlyList<WardEvidenceDto> evidence, CancellationToken ct)
+        {
+            await Task.Delay(Timeout.Infinite, ct);
+            throw new InvalidOperationException("unreachable");
+        }
+
+        public Task<AiDocumentCheckResult> CompareDeclaredProfileAsync(string declaredName, string? extractedIdNumber, string declaredAddress, AiIdExtractionResult extraction, CancellationToken ct) =>
+            inner.CompareDeclaredProfileAsync(declaredName, extractedIdNumber, declaredAddress, extraction, ct);
 
         public Task<AiEncroachmentResult> AnalyzeInspectionPhotoAsync(string photoUrl, double? slotWidth, double? slotLength, CancellationToken ct) =>
             inner.AnalyzeInspectionPhotoAsync(photoUrl, slotWidth, slotLength, ct);
