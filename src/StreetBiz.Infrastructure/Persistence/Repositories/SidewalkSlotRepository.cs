@@ -110,7 +110,8 @@ public sealed class SidewalkSlotRepository(StreetBizDbContext dbContext, IDateTi
             s.latitude, s.longitude, s.width_meters, s.length_meters,
             s.slot_status, s.source, s.zone.price_per_day, s.zone.available_from, s.zone.available_to,
             s.zone.application_deadline,
-            s.image_url, s.has_power, s.has_water, s.has_trash_bin, s.business_category,
+            s.SlotImages.OrderBy(i => i.sort_order).ThenBy(i => i.image_id).Select(i => i.image_url).ToList(),
+            s.has_power, s.has_water, s.has_trash_bin, s.business_category,
             s.RentalContracts
                 .Where(c => c.contract_status == ContractStatuses.Active
                          && c.application.registration.vendor_id == c.vendor_id)

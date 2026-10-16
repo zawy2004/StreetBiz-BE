@@ -104,6 +104,8 @@ public partial class StreetBizDbContext : DbContext
 
     public virtual DbSet<SlotHold> SlotHolds { get; set; }
 
+    public virtual DbSet<SlotImage> SlotImages { get; set; }
+
     public virtual DbSet<SlotTransferRequest> SlotTransferRequests { get; set; }
 
     public virtual DbSet<Storefront> Storefronts { get; set; }
@@ -1163,7 +1165,6 @@ public partial class StreetBizDbContext : DbContext
             entity.Property(e => e.has_power).HasDefaultValue(false);
             entity.Property(e => e.has_trash_bin).HasDefaultValue(false);
             entity.Property(e => e.has_water).HasDefaultValue(false);
-            entity.Property(e => e.image_url).HasMaxLength(500);
             entity.Property(e => e.latitude).HasColumnType("decimal(9, 6)");
             entity.Property(e => e.length_meters).HasColumnType("decimal(5, 2)");
             entity.Property(e => e.longitude).HasColumnType("decimal(9, 6)");
@@ -1215,6 +1216,21 @@ public partial class StreetBizDbContext : DbContext
                 .HasForeignKey<SlotHold>(d => d.slot_id)
                 .OnDelete(DeleteBehavior.ClientSetNull)
                 .HasConstraintName("FK_SlotHolds_Slot");
+        });
+
+        modelBuilder.Entity<SlotImage>(entity =>
+        {
+            entity.HasKey(e => e.image_id);
+
+            entity.HasIndex(e => new { e.slot_id, e.sort_order }, "IX_SlotImages_Slot");
+
+            entity.Property(e => e.created_at).HasDefaultValueSql("(sysutcdatetime())");
+            entity.Property(e => e.image_url).HasMaxLength(500);
+
+            entity.HasOne(d => d.slot).WithMany(p => p.SlotImages)
+                .HasForeignKey(d => d.slot_id)
+                .OnDelete(DeleteBehavior.Cascade)
+                .HasConstraintName("FK_SlotImages_Slot");
         });
 
         modelBuilder.Entity<SlotTransferRequest>(entity =>
