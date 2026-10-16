@@ -17,7 +17,10 @@ public sealed class SidewalkSlotRepository(StreetBizDbContext dbContext, IDateTi
 
         if (!area.IncludeUnavailable)
         {
-            query = query.Where(s => s.slot_status == SlotStatuses.Available);
+            // Same meaning as the PENDING_APPLICATION shown by ToRowExpression: a slot with an
+            // application under review is not open to others.
+            query = query.Where(s => s.slot_status == SlotStatuses.Available
+                                  && !s.RentalApplications.Any(a => ApplicationStatuses.Open.Contains(a.application_status)));
         }
 
         if (area.MinLatitude is { } minLat) query = query.Where(s => s.latitude >= minLat);
@@ -108,7 +111,14 @@ public sealed class SidewalkSlotRepository(StreetBizDbContext dbContext, IDateTi
         s => new SlotRow(
             s.slot_id, s.slot_code, s.zone_id, s.zone.zone_name, s.zone.ward_unit_id,
             s.latitude, s.longitude, s.width_meters, s.length_meters,
-            s.slot_status, s.source, s.zone.price_per_day, s.zone.available_from, s.zone.available_to,
+            // Submitting an application does not touch SidewalkSlots.slot_status, so an AVAILABLE slot
+            // with an open application is reported as PENDING_APPLICATION: the map then shows it as
+            // taken and the apply form is replaced by "đang có đơn chờ duyệt".
+            s.slot_status == SlotStatuses.Available
+                && s.RentalApplications.Any(a => ApplicationStatuses.Open.Contains(a.application_status))
+                ? SlotStatuses.PendingApplication
+                : s.slot_status,
+            s.source, s.zone.price_per_day, s.zone.available_from, s.zone.available_to,
             s.zone.application_deadline,
             s.SlotImages.OrderBy(i => i.sort_order).ThenBy(i => i.image_id).Select(i => i.image_url).ToList(),
             s.has_power, s.has_water, s.has_trash_bin, s.business_category,
