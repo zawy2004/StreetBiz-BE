@@ -133,6 +133,40 @@ public sealed class CommerceManagementTests
         await Assert.ThrowsAsync<ConflictException>(() => f.Service.SaveMenu(1, 1, new(1, "Hidden", null, 10000, "AVAILABLE"), default));
     }
 
+    [Theory]
+    [InlineData("PAUSED")] // what hiding a storefront sets
+    [InlineData("CLOSED")]
+    [InlineData("OPEN")]
+    public async Task Store_hidden_by_a_moderator_cannot_be_reopened_or_edited_by_seller(string statusNow)
+    {
+        using var f = await Fixture.Create();
+        (await f.Db.Storefronts.FindAsync(1L))!.availability_status = statusNow;
+        f.Db.ReportedContents.Add(new ReportedContent
+        {
+            content_type = "STOREFRONT", content_id = 1, reporter_user_id = 2, reason = "Test",
+            status = "HIDDEN", created_at = DateTime.UtcNow,
+        });
+        await f.Db.SaveChangesAsync();
+
+        await Assert.ThrowsAsync<ForbiddenException>(() => f.Service.SaveStore(1, new(1, 1, "Store", null, "OPEN"), default));
+        Assert.Equal(statusNow, (await f.Db.Storefronts.FindAsync(1L))!.availability_status);
+    }
+
+    [Fact]
+    public async Task Store_with_only_a_dismissed_report_stays_in_the_sellers_hands()
+    {
+        using var f = await Fixture.Create();
+        f.Db.ReportedContents.Add(new ReportedContent
+        {
+            content_type = "STOREFRONT", content_id = 1, reporter_user_id = 2, reason = "Test",
+            status = "DISMISSED", created_at = DateTime.UtcNow,
+        });
+        await f.Db.SaveChangesAsync();
+
+        await f.Service.SaveStore(1, new(1, 1, "Store", null, "PAUSED"), default);
+        Assert.Equal("PAUSED", (await f.Db.Storefronts.FindAsync(1L))!.availability_status);
+    }
+
     [Fact]
     public async Task Cancelled_contract_cannot_open_a_store()
     {

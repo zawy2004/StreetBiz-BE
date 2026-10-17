@@ -36,7 +36,9 @@ public sealed class CommerceManagement(StreetBizDbContext db, IVendorContext ven
             var store = id.HasValue ? await OwnedStore(id.Value, vendor, ct) : new Storefront();
             if (id.HasValue && (store.registration_id != input.RegistrationId || store.contract_id != input.ContractId))
                 throw new ConflictException("Không thể đổi hồ sơ hoặc hợp đồng của gian hàng.");
-            if (id.HasValue && store.availability_status == "CLOSED" &&
+            // A moderator hides a storefront by pausing it and marking the report HIDDEN; the report
+            // is the record that the seller may not reopen it, whatever status the store shows now.
+            if (id.HasValue &&
                 await db.ReportedContents.AnyAsync(x => x.content_type == "STOREFRONT" &&
                     x.content_id == id.Value && x.status == "HIDDEN", ct))
                 throw new ForbiddenException("Gian hàng đã bị quản trị viên ẩn.");
