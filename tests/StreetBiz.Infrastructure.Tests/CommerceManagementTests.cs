@@ -167,6 +167,89 @@ public sealed class CommerceManagementTests
         Assert.Equal("PAUSED", (await f.Db.Storefronts.FindAsync(1L))!.availability_status);
     }
 
+    /// <summary>Two reports hid store 1 (the second was a duplicate closed with the first); admin 3 reviewed them.</summary>
+    private static async Task<long> HideStoreByModerator(Fixture f)
+    {
+        f.Db.Roles.Add(new Role { role_code = "PLATFORM_ADMIN", role_name = "Admin" });
+        f.Db.UserAccounts.Add(new UserAccount { user_id = 3, phone_number = "0900000003", password_hash = "test-only", full_name = "Admin", role_code = "PLATFORM_ADMIN", account_status = "ACTIVE" });
+        (await f.Db.Storefronts.FindAsync(1L))!.availability_status = "PAUSED";
+        var reports = new[]
+        {
+            new ReportedContent { content_type = "STOREFRONT", content_id = 1, reporter_user_id = 2, reason = "Bán hàng giả", status = "HIDDEN", reviewed_by = 3, reviewed_at = DateTime.UtcNow, created_at = DateTime.UtcNow },
+            new ReportedContent { content_type = "STOREFRONT", content_id = 1, reporter_user_id = 2, reason = "Trùng", status = "HIDDEN", reviewed_by = 3, reviewed_at = DateTime.UtcNow, created_at = DateTime.UtcNow },
+        };
+        f.Db.ReportedContents.AddRange(reports);
+        await f.Db.SaveChangesAsync();
+        f.Db.ChangeTracker.Clear();
+        return reports[0].content_report_id;
+    }
+
+    [Fact]
+    public async Task Restoring_a_hidden_store_lets_its_seller_reopen_it_and_tells_the_seller()
+    {
+        using var f = await Fixture.Create();
+        var reportId = await HideStoreByModerator(f);
+        await Assert.ThrowsAsync<ForbiddenException>(() => f.Service.SaveStore(1, new(1, 1, "Store", null, "OPEN"), default));
+
+        var admin = new PlatformAdministrationRepository(f.Db, TimeProvider.System);
+        var result = await admin.RestoreReportedContentAsync(reportId, "HIDDEN", 3, default);
+
+        Assert.Equal(ContentDecisionOutcome.Updated, result.Outcome);
+        Assert.Equal("DISMISSED", result.Report!.Status);
+        // The duplicate that was hidden with it is closed too, or it would keep the store locked.
+        Assert.All(await f.Db.ReportedContents.AsNoTracking().ToListAsync(), r => Assert.Equal("DISMISSED", r.status));
+        // Restoring does not put the store on sale: it stays paused until the seller decides.
+        Assert.Equal("PAUSED", (await f.Db.Storefronts.AsNoTracking().SingleAsync()).availability_status);
+        Assert.Equal(1, await f.Db.Notifications.CountAsync(n => n.user_id == 1 && n.related_entity_id == reportId));
+        Assert.Equal(1, await f.Db.AuditLogs.CountAsync(a => a.action == "ADM_CONTENT_RESTORE" && a.actor_user_id == 3));
+
+        f.Db.ChangeTracker.Clear();
+        await f.Service.SaveStore(1, new(1, 1, "Store", null, "OPEN"), default);
+        Assert.Equal("OPEN", (await f.Db.Storefronts.AsNoTracking().SingleAsync()).availability_status);
+    }
+
+    [Theory]
+    [InlineData("PENDING")]
+    [InlineData("DISMISSED")]
+    public async Task Only_a_hidden_report_can_be_restored(string status)
+    {
+        using var f = await Fixture.Create();
+        await HideStoreByModerator(f);
+        var other = new ReportedContent { content_type = "STOREFRONT", content_id = 1, reporter_user_id = 2, reason = "x", status = status, created_at = DateTime.UtcNow };
+        f.Db.ReportedContents.Add(other);
+        await f.Db.SaveChangesAsync();
+        f.Db.ChangeTracker.Clear();
+
+        var admin = new PlatformAdministrationRepository(f.Db, TimeProvider.System);
+        var result = await admin.RestoreReportedContentAsync(other.content_report_id, status, 3, default);
+
+        Assert.Equal(ContentDecisionOutcome.Conflict, result.Outcome);
+        Assert.Equal(2, await f.Db.ReportedContents.CountAsync(r => r.status == "HIDDEN"));
+        Assert.Equal(ContentDecisionOutcome.NotFound, (await admin.RestoreReportedContentAsync(9999, "HIDDEN", 3, default)).Outcome);
+    }
+
+    [Fact]
+    public async Task Restoring_a_hidden_dish_returns_it_to_the_seller_as_sold_out()
+    {
+        using var f = await Fixture.Create();
+        f.Db.Roles.Add(new Role { role_code = "PLATFORM_ADMIN", role_name = "Admin" });
+        f.Db.UserAccounts.Add(new UserAccount { user_id = 3, phone_number = "0900000003", password_hash = "test-only", full_name = "Admin", role_code = "PLATFORM_ADMIN", account_status = "ACTIVE" });
+        (await f.Db.MenuItems.FindAsync(1L))!.availability_status = "HIDDEN";
+        var report = new ReportedContent { content_type = "MENU_ITEM", content_id = 1, reporter_user_id = 2, reason = "Ảnh phản cảm", status = "HIDDEN", reviewed_by = 3, reviewed_at = DateTime.UtcNow, created_at = DateTime.UtcNow };
+        f.Db.ReportedContents.Add(report);
+        await f.Db.SaveChangesAsync();
+        f.Db.ChangeTracker.Clear();
+        await Assert.ThrowsAsync<ConflictException>(() => f.Service.SaveMenu(1, 1, new(1, "Meal", null, 25000, "AVAILABLE"), default));
+
+        var admin = new PlatformAdministrationRepository(f.Db, TimeProvider.System);
+        Assert.Equal(ContentDecisionOutcome.Updated, (await admin.RestoreReportedContentAsync(report.content_report_id, "HIDDEN", 3, default)).Outcome);
+        Assert.Equal("SOLD_OUT", (await f.Db.MenuItems.AsNoTracking().SingleAsync()).availability_status);
+
+        f.Db.ChangeTracker.Clear();
+        await f.Service.SaveMenu(1, 1, new(1, "Meal", null, 25000, "AVAILABLE"), default);
+        Assert.Equal("AVAILABLE", (await f.Db.MenuItems.AsNoTracking().SingleAsync()).availability_status);
+    }
+
     [Fact]
     public async Task Cancelled_contract_cannot_open_a_store()
     {

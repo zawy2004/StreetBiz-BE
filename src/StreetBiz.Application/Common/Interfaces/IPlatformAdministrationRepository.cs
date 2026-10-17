@@ -44,6 +44,14 @@ public interface IPlatformAdministrationRepository
         long actorUserId,
         CancellationToken cancellationToken);
 
+    /// <summary>Undoes a HIDE: the report that hid the content (and any duplicate hidden with it)
+    /// is closed as DISMISSED and the content is handed back to its owner.</summary>
+    Task<ContentDecisionResult> RestoreReportedContentAsync(
+        long reportId,
+        string expectedStatus,
+        long actorUserId,
+        CancellationToken cancellationToken);
+
     Task<PlatformPage<OrderComplaintRow>> ListOrderComplaintsAsync(
         string? status,
         int page,

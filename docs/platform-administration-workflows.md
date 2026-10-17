@@ -18,6 +18,7 @@ sufficient.
 | ADM-03 | `GET /api/platform/reported-content/{id}` | Returns the report and a live content snapshot. |
 | ADM-03 | `POST /api/platform/reported-content/{id}/dismiss` | Dismisses an unsubstantiated pending report. |
 | ADM-04 | `POST /api/platform/reported-content/{id}/hide` | Soft-hides the content and closes duplicate pending reports. |
+| ADM-04 | `POST /api/platform/reported-content/{id}/restore` | Undoes a hide (body `{ "expectedStatus": "HIDDEN" }`). Every report that kept the content hidden becomes `DISMISSED`; a dish returns as `SOLD_OUT`, a storefront stays `PAUSED`, so nothing goes on sale until the seller reopens it. The seller is notified and the action is audited as `ADM_CONTENT_RESTORE`. |
 | ADM-05 | `GET /api/platform/order-complaints` | Lists complaints with payment/refund context. |
 | ADM-05 | `GET /api/platform/order-complaints/{id}` | Returns a complaint detail. |
 | ADM-05 | `POST /api/platform/order-complaints/{id}/decision` | Resolves/rejects a complaint and optionally requests a refund. |

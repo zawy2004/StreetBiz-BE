@@ -119,6 +119,57 @@ public sealed class PlatformAdministrationUseCaseTests
         repository.VerifyAll();
     }
 
+    [Fact]
+    public async Task Restore_report_passes_the_hidden_status_and_the_actor_to_the_repository()
+    {
+        var repository = new Mock<IPlatformAdministrationRepository>();
+        repository.Setup(x => x.RestoreReportedContentAsync(
+                11,
+                ReportedContentStatuses.Hidden,
+                7,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ContentDecisionResult(ContentDecisionOutcome.Updated, Report(11)));
+
+        var result = await new RestoreReportedContentCommandHandler(AdminContext().Object, repository.Object)
+            .Handle(new RestoreReportedContentCommand(11, ReportedContentStatuses.Hidden), CancellationToken.None);
+
+        result.ReportId.Should().Be(11);
+        repository.VerifyAll();
+    }
+
+    [Theory]
+    [InlineData(ContentDecisionOutcome.NotFound, typeof(NotFoundException))]
+    [InlineData(ContentDecisionOutcome.ContentNotFound, typeof(DomainRuleException))]
+    [InlineData(ContentDecisionOutcome.Conflict, typeof(ConflictException))]
+    public async Task Restore_report_maps_repository_failures_to_domain_errors(
+        ContentDecisionOutcome outcome,
+        Type exceptionType)
+    {
+        var repository = new Mock<IPlatformAdministrationRepository>();
+        repository.Setup(x => x.RestoreReportedContentAsync(
+                It.IsAny<long>(), It.IsAny<string>(), It.IsAny<long>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ContentDecisionResult(outcome, null));
+
+        var action = () => new RestoreReportedContentCommandHandler(AdminContext().Object, repository.Object)
+            .Handle(new RestoreReportedContentCommand(11, ReportedContentStatuses.Hidden), CancellationToken.None);
+
+        (await action.Should().ThrowAsync<Exception>()).Which.Should().BeOfType(exceptionType);
+    }
+
+    [Theory]
+    [InlineData(ReportedContentStatuses.Pending)]
+    [InlineData(ReportedContentStatuses.Dismissed)]
+    [InlineData("")]
+    public void Only_a_hidden_report_can_be_restored(string expectedStatus)
+    {
+        new RestoreReportedContentCommandValidator()
+            .Validate(new RestoreReportedContentCommand(11, expectedStatus))
+            .IsValid.Should().BeFalse();
+        new RestoreReportedContentCommandValidator()
+            .Validate(new RestoreReportedContentCommand(11, ReportedContentStatuses.Hidden))
+            .IsValid.Should().BeTrue();
+    }
+
     [Theory]
     [InlineData(ComplaintDecisionOutcome.Conflict, typeof(ConflictException))]
     [InlineData(ComplaintDecisionOutcome.RefundNotAllowed, typeof(DomainRuleException))]

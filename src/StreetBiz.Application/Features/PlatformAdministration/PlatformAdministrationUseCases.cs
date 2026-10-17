@@ -242,6 +242,49 @@ public sealed class DecideReportedContentCommandHandler(
     }
 }
 
+public sealed record RestoreReportedContentCommand(long ReportId, string ExpectedStatus)
+    : IRequest<ReportedContentDto>;
+
+public sealed class RestoreReportedContentCommandValidator
+    : AbstractValidator<RestoreReportedContentCommand>
+{
+    public RestoreReportedContentCommandValidator()
+    {
+        RuleFor(x => x.ReportId).GreaterThan(0);
+        RuleFor(x => x.ExpectedStatus)
+            .Equal(ReportedContentStatuses.Hidden)
+            .WithMessage("Only a HIDDEN report can be restored.");
+    }
+}
+
+public sealed class RestoreReportedContentCommandHandler(
+    IPlatformAdminContext actorContext,
+    IPlatformAdministrationRepository repository)
+    : IRequestHandler<RestoreReportedContentCommand, ReportedContentDto>
+{
+    public async Task<ReportedContentDto> Handle(
+        RestoreReportedContentCommand request,
+        CancellationToken cancellationToken)
+    {
+        var actor = await actorContext.RequireAsync(cancellationToken);
+        var result = await repository.RestoreReportedContentAsync(
+            request.ReportId,
+            request.ExpectedStatus,
+            actor.UserId,
+            cancellationToken);
+
+        return result.Outcome switch
+        {
+            ContentDecisionOutcome.Updated => result.Report!.ToDto(),
+            ContentDecisionOutcome.NotFound => throw new NotFoundException(
+                PlatformAdministrationMessages.ReportNotFound),
+            ContentDecisionOutcome.ContentNotFound => throw new DomainRuleException(
+                PlatformAdministrationMessages.ReportedContentNotFound),
+            _ => throw new ConflictException(PlatformAdministrationMessages.RestoreConflict),
+        };
+    }
+}
+
 public sealed record ListOrderComplaintsQuery(string? Status, int Page = 1, int PageSize = 50)
     : IRequest<PlatformPageDto<OrderComplaintDto>>;
 
