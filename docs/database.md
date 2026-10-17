@@ -83,11 +83,12 @@ MORE_INFORMATION_REQUIRED; 6 REJECTED; 7 WITHDRAWN; 8 DRAFT; 10 is a second APPR
 registration for vendor `0905000102` with no contract, the natural receiver of a slot
 transfer). BR-09 holds: vendor 4 carries several registrations but only one open one.
 
-Also seeded: 5 wards in 4 districts of Đà Nẵng, 4 pricing zones and 30 slots (the 20
-`NVL-01..20` sit on the real Nguyễn Văn Linh centreline, 10 per side; three more are
-vendor proposals: PENDING, APPROVED and REJECTED), 2 active contracts with digital
-permits, 6 fee periods (PAID / OVERDUE / PENDING) and 3 invoices, 2 storefronts with 12
-menu items, 5 orders across COMPLETED / READY_FOR_PICKUP / PREPARING / PENDING_PAYMENT /
+Also seeded: 5 wards in 4 districts of Đà Nẵng, 5 pricing zones and 33 slots (30
+ward-defined, of which the 20 `NVL-01..20` sit on the real Nguyễn Văn Linh centreline,
+10 per side; three more are vendor proposals: PENDING, APPROVED and REJECTED), 7
+contracts (5 ACTIVE, 1 CANCELLED, 1 EXPIRED) of which 2 carry digital permits, 2 fee
+schedules with 9 instalments (2 PAID, 1 OVERDUE, 6 PENDING) and 3 invoices, 2
+storefronts with 12 menu items, 5 orders across COMPLETED / READY_FOR_PICKUP / PREPARING / PENDING_PAYMENT /
 REJECTED, 15 violation types and penalty rates for the three wards that have an officer
 (the five legal-citation types carry `legal_basis`). Officers get a
 `sanction_authority_title` for their own ward.
@@ -98,15 +99,18 @@ Every queue and list has something in it:
   renewals (PENDING, REJECTED), 2 address changes that compete for the same slot (a ward
   conflict), 2 slot holds (valid for a day so the demo stays visible; real holds last 15
   minutes).
-- **Ward compliance:** 6 permit scans (one about 95 m from its slot, one forged code), 5
-  violations (awaiting sanction, unpaid penalty, paid penalty, unidentified occupier, raised
-  from a customer report) and 3 vendor reports.
+- **Ward compliance:** 11 permit scans (one about 95 m from its slot, one forged code, and
+  repeated off-tolerance scans on permits 1 and 2 for the AIC-06 drift check), 4 violations
+  (paid penalty, unpaid penalty, a penalty waived on a customer-report violation, and an
+  unidentified occupier with no penalty because the offender cannot be billed) and 3
+  vendor reports.
 - **Mẫu số 01 and eKYC:** registrations 1, 2, 4, 9 and 10 carry the owner-identity fields
   with fictional ID numbers. Approved ones were confirmed by an officer; 2 and 4 were not,
   so the ward must confirm identity before approving them. Registration 1 has household
   members; 2 and 4 have recorded OCR and face-match results (4 does not match).
 - **Moderation and money:** 2 community comments, 1 order review, 3 reported contents, 2
-  complaints, 8 payment transactions with callback events, 1 automatic refund, plus
+  complaints, 10 payment transactions (7 SUCCESS, 2 PENDING, 1 FAILED) with 6 callback
+  events, 1 automatic refund, plus
   notifications and 2 AI log entries.
 
 Things to know:
