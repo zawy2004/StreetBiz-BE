@@ -111,6 +111,7 @@ public static class DependencyInjection
 
         services.AddScoped<IOtpService, OtpService>();
         services.AddScoped<ISecurityEvents, SecurityEvents>();
+        services.AddScoped<IUnitOfWork, StreetBiz.Infrastructure.Persistence.EfUnitOfWork>();
         services.AddScoped<IUserAccountRepository, UserAccountRepository>();
         services.AddScoped<ISessionRepository, SessionRepository>();
         services.AddScoped<IVendorRepository, VendorRepository>();
