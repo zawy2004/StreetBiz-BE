@@ -190,6 +190,34 @@ public sealed class WardComplianceServiceTests
     }
 
     [Fact]
+    public async Task The_violation_list_filters_on_the_stage_it_shows_before_paging()
+    {
+        using var f = await Fixture.Create();
+        var service = f.NewService();
+
+        for (var i = 0; i < 2; i++)
+        {
+            await service.RecordViolationAsync(f.Actor, new RecordWardViolationRequest(
+                null, 100, 10, "UNAUTHORIZED_BUSINESS_USE", $"Vi phạm {i}", null), default);
+        }
+        using var read = f.NewDb();
+        var ids = await read.Violations.OrderBy(v => v.violation_id).Select(v => v.violation_id).ToListAsync();
+        await service.SanctionViolationAsync(f.Actor, ids[0],
+            new SanctionWardViolationRequest(1, "QD-2026-020", null), default);
+
+        var pending = await service.ListViolationsAsync(f.Actor, "PENDING_SANCTION", 1, default);
+        Assert.Equal([ids[1]], pending.Select(v => v.ViolationId));
+
+        var decided = await service.ListViolationsAsync(f.Actor, "unpaid, paid,WAIVED,CANCELLED", 1, default);
+        Assert.Equal([ids[0]], decided.Select(v => v.ViolationId));
+        Assert.All(decided, v => Assert.Equal("UNPAID", v.Status));
+
+        Assert.Empty(await service.ListViolationsAsync(f.Actor, "PAID", 1, default));
+        Assert.Equal(2, (await service.ListViolationsAsync(f.Actor, null, 1, default)).Count);
+        Assert.Equal(2, (await service.ListViolationsAsync(f.Actor, "PENDING_SANCTION,UNPAID", 1, default)).Count);
+    }
+
+    [Fact]
     public async Task Sanctioning_is_refused_while_the_explanation_window_is_still_open()
     {
         using var f = await Fixture.Create();

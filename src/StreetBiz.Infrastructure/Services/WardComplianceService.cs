@@ -1799,6 +1799,17 @@ public sealed class WardComplianceService(
             .Include(v => v.UserAccount)
             .Where(InWard(actor.WardId));
 
+        // Filter on the stage the list itself shows (see WardViolationListStatuses), before paging.
+        var stages = WardViolationListStatuses.Parse(status);
+        if (stages.Count > 0)
+        {
+            var wantsPending = stages.Contains(WardViolationListStatuses.PendingSanction);
+            var penaltyStatuses = stages.Where(s => s != WardViolationListStatuses.PendingSanction).ToList();
+            query = query.Where(v =>
+                (wantsPending && v.Penalty == null)
+                || (v.Penalty != null && penaltyStatuses.Contains(v.Penalty.penalty_status)));
+        }
+
         var offset = (page - 1) * 20;
         var items = await query
             .OrderByDescending(v => v.recorded_at)
@@ -1813,7 +1824,7 @@ public sealed class WardComplianceService(
                     : "Hộ kinh doanh",
                 v.violation_type,
                 v.violation_typeNavigation.description,
-                v.Penalty != null ? v.Penalty.penalty_status : "PENDING_SANCTION",
+                v.Penalty != null ? v.Penalty.penalty_status : WardViolationListStatuses.PendingSanction,
                 v.Penalty != null ? v.Penalty.amount : null,
                 v.recorded_at,
                 v.UserAccount != null ? v.UserAccount.full_name ?? "Cán bộ" : "Cán bộ tuần tra"))

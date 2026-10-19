@@ -439,11 +439,38 @@ public sealed class ListWardPenaltySchedulesQueryHandler(
 
 public sealed record ListWardViolationsQuery(string? Status, int Page = 1) : IRequest<IReadOnlyList<WardViolationListItemDto>>;
 
+/// <summary>
+/// The stage a violation shows in the ward list: PENDING_SANCTION until a sanction decision
+/// exists, then its penalty's own status. The list filters on exactly these values.
+/// </summary>
+public static class WardViolationListStatuses
+{
+    public const string PendingSanction = "PENDING_SANCTION";
+
+    public static bool IsValid(string value) => value == PendingSanction || PenaltyStatuses.IsValid(value);
+
+    /// <summary>
+    /// "?status=" takes one stage or several, comma-separated (e.g. "UNPAID,PAID,WAIVED,CANCELLED"
+    /// for every decided case), case-insensitive. Empty means every stage.
+    /// </summary>
+    public static IReadOnlyList<string> Parse(string? status) =>
+        string.IsNullOrWhiteSpace(status)
+            ? []
+            : status.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .Select(s => s.ToUpperInvariant())
+                .Distinct(StringComparer.Ordinal)
+                .ToList();
+}
+
 public sealed class ListWardViolationsQueryValidator : AbstractValidator<ListWardViolationsQuery>
 {
     public ListWardViolationsQueryValidator()
     {
         RuleFor(x => x.Page).GreaterThan(0);
+        // An unknown stage is refused rather than ignored: ignoring it silently returned every case.
+        RuleFor(x => x.Status)
+            .Must(s => WardViolationListStatuses.Parse(s).All(WardViolationListStatuses.IsValid))
+            .WithMessage("Trạng thái chỉ được là PENDING_SANCTION, UNPAID, PAID, WAIVED hoặc CANCELLED.");
     }
 }
 
