@@ -90,6 +90,17 @@ public sealed class PlatformAdministrationController(ISender sender) : Controlle
             "HIDE",
             request.ExpectedStatus), cancellationToken));
 
+    /// <summary>ADM-04: undo a hide. The seller regains control of the content (a storefront stays
+    /// paused and a dish sold out until the seller reopens them).</summary>
+    [HttpPost("reported-content/{reportId:long}/restore")]
+    public async Task<ActionResult<ReportedContentDto>> RestoreReportedContent(
+        long reportId,
+        ExpectedStatusRequest request,
+        CancellationToken cancellationToken) =>
+        Ok(await sender.Send(new RestoreReportedContentCommand(
+            reportId,
+            request.ExpectedStatus), cancellationToken));
+
     /// <summary>ADM-05: list order complaints.</summary>
     [HttpGet("order-complaints")]
     public async Task<ActionResult<PlatformPageDto<OrderComplaintDto>>> OrderComplaints(

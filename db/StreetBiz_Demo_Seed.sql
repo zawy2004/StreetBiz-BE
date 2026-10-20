@@ -918,7 +918,8 @@ GO
    report. Fictional data throughout.
    ============================================================ */
 
--- Customer and community reports (BUY-05). Report 2 became violation 4.
+-- Customer and community reports (BUY-05). No violation row points at a report: the
+-- violations below leave source_report_id NULL.
 IF NOT EXISTS (SELECT 1 FROM VendorReports)
 BEGIN
     SET IDENTITY_INSERT VendorReports ON;

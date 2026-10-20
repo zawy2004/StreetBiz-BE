@@ -56,6 +56,7 @@ public static class PlatformAdministrationMessages
     public const string ReportNotFound = "The reported-content record was not found.";
     public const string ReportConflict = "The report was already reviewed. Refresh and try again.";
     public const string ReportedContentNotFound = "The referenced content no longer exists.";
+    public const string RestoreConflict = "The content is no longer hidden. Refresh and try again.";
     public const string ComplaintNotFound = "The order complaint was not found.";
     public const string ComplaintConflict = "The complaint status changed. Refresh and try again.";
     public const string RefundNotAllowed = "A refund is only allowed for a refund request.";

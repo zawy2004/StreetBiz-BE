@@ -113,6 +113,7 @@ public sealed class ControllerEndpointContractTests
         "GET /api/platform/reported-content/{reportId}",
         "POST /api/platform/reported-content/{reportId}/dismiss",
         "POST /api/platform/reported-content/{reportId}/hide",
+        "POST /api/platform/reported-content/{reportId}/restore",
         "GET /api/platform/order-complaints",
         "GET /api/platform/order-complaints/{complaintId}",
         "POST /api/platform/order-complaints/{complaintId}/decision",

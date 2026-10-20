@@ -90,6 +90,8 @@ public static class KycMessages
         "[Hệ thống — chưa xác minh bằng AI] Dịch vụ eKYC chưa được cấu hình. Vui lòng nhập thông tin thủ công.";
     public const string ProviderUnavailable =
         "[Hệ thống — chưa xác minh bằng AI] Không gọi được dịch vụ eKYC. Vui lòng nhập thông tin thủ công, cán bộ sẽ đối chiếu trực tiếp.";
+    public const string TookTooLong =
+        "[Hệ thống — chưa xác minh bằng AI] Dịch vụ eKYC phản hồi quá lâu. Vui lòng thử lại sau ít phút hoặc nhập thông tin thủ công, cán bộ sẽ đối chiếu trực tiếp.";
     public const string JpegOnlyForFaceMatch =
         "Đối chiếu khuôn mặt chỉ nhận ảnh JPG. Vui lòng tải lại ảnh chân dung và ảnh CCCD ở định dạng JPG.";
 }

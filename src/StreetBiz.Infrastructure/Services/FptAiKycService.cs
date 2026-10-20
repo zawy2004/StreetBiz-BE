@@ -1,5 +1,7 @@
 using System.Globalization;
+using System.Net;
 using System.Net.Http.Headers;
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
@@ -16,9 +18,13 @@ namespace StreetBiz.Infrastructure.Services;
 ///   - Facematch       POST /dmp/checkface/v1     header `api_key`,  form `file[]` x2
 /// The two FPT products use different key names and different header spellings; that is
 /// FPT's API, not a typo here. FPT.AI's free-tier quota is small enough to exhaust during
-/// ordinary testing (confirmed 2026-09-20: burst limit 4 req/s, 60 req/min) -- falling over to
-/// Gemini (3-key pool, see AiKeyPools) keeps the wizard usable when that happens, instead of
-/// forcing every applicant into manual entry.
+/// ordinary testing (confirmed 2026-09-20: burst limit 4 req/s, 60 req/min). Each product takes a
+/// pool of keys (AiCompliance:FptAi:ApiKeys / FaceMatchApiKeys, or the single ApiKey /
+/// FaceMatchApiKey), rotated like Gemini's: a key that is rate limited, out of quota, refused or
+/// unreachable hands over to the next FPT.AI key, and only when every FPT.AI key fails does the
+/// request fall over to Gemini (its own key pool, see AiKeyPools). An image FPT.AI could read but
+/// rejected (no card found, no face) is an answer about the image, so it is not retried on
+/// another key.
 ///
 /// Both sides of the card are read because the fields live on different faces: the front
 /// carries id/name/dob/sex/nationality/address, while dân tộc, ngày cấp and nơi cấp exist
@@ -34,7 +40,8 @@ public sealed class FptAiKycService(
     IConfiguration configuration,
     ILogger<FptAiKycService> logger,
     IFileStorage fileStorage,
-    GeminiVisionClient geminiVision) : IKycVerificationService
+    GeminiVisionClient geminiVision,
+    AiKeyPools keyPools) : IKycVerificationService
 {
     private const int LowConfidenceThreshold = 85;
 
@@ -42,7 +49,43 @@ public sealed class FptAiKycService(
     /// no such restriction, so this only gates the FPT.AI attempt, not the fallback.</summary>
     private static readonly string[] FaceMatchExtensions = [".jpg", ".jpeg"];
 
+    /// <summary>Longest a vendor waits for one eKYC request (every FPT.AI key, then Gemini), under the
+    /// web client's 60 s timeout for these two endpoints. Past it the answer is "enter it by hand".</summary>
+    private static readonly TimeSpan RequestBudget = TimeSpan.FromSeconds(45);
+
     public async Task<KycIdCardExtraction> ExtractIdCardAsync(
+        string frontFileUrl, string? backFileUrl, CancellationToken ct)
+    {
+        using var budget = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        budget.CancelAfter(RequestBudget);
+        try
+        {
+            return await ExtractIdCardWithinBudgetAsync(frontFileUrl, backFileUrl, budget.Token);
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            logger.LogWarning("CCCD OCR ran past its {Seconds} s budget.", RequestBudget.TotalSeconds);
+            return FailedExtraction(KycMessages.TookTooLong);
+        }
+    }
+
+    public async Task<KycFaceMatchResult> MatchFaceAsync(
+        string selfieFileUrl, string idCardFrontFileUrl, CancellationToken ct)
+    {
+        using var budget = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        budget.CancelAfter(RequestBudget);
+        try
+        {
+            return await MatchFaceWithinBudgetAsync(selfieFileUrl, idCardFrontFileUrl, budget.Token);
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            logger.LogWarning("Face match ran past its {Seconds} s budget.", RequestBudget.TotalSeconds);
+            return FailedFaceMatch(KycMessages.TookTooLong);
+        }
+    }
+
+    private async Task<KycIdCardExtraction> ExtractIdCardWithinBudgetAsync(
         string frontFileUrl, string? backFileUrl, CancellationToken ct)
     {
         var front = await TryReadFileAsync(frontFileUrl, ct);
@@ -54,12 +97,21 @@ public sealed class FptAiKycService(
         var back = string.IsNullOrWhiteSpace(backFileUrl) ? null : await TryReadFileAsync(backFileUrl, ct);
         var hasBackPhoto = !string.IsNullOrWhiteSpace(backFileUrl);
 
-        return await ExtractViaFptAsync(front.Value, hasBackPhoto ? back : null, hasBackPhoto, ct)
+        var fpt = await ExtractViaFptAsync(front.Value, hasBackPhoto ? back : null, hasBackPhoto, ct);
+        if (fpt is { BackKeysExhausted: true } && back is not null)
+        {
+            // FPT.AI read the front, then ran out of quota on the back: Gemini reads the back
+            // rather than leaving dân tộc / ngày cấp / nơi cấp to the vendor.
+            var gemini = await ExtractViaGeminiAsync(front.Value, back, hasBackPhoto: true, ct);
+            return gemini is null ? fpt.Result : MergeBackFromGemini(fpt.Result, gemini);
+        }
+
+        return fpt?.Result
             ?? await ExtractViaGeminiAsync(front.Value, hasBackPhoto ? back : null, hasBackPhoto, ct)
             ?? FailedExtraction(KycMessages.ProviderUnavailable);
     }
 
-    public async Task<KycFaceMatchResult> MatchFaceAsync(
+    private async Task<KycFaceMatchResult> MatchFaceWithinBudgetAsync(
         string selfieFileUrl, string idCardFrontFileUrl, CancellationToken ct)
     {
         var selfie = await TryReadFileAsync(selfieFileUrl, ct);
@@ -78,13 +130,36 @@ public sealed class FptAiKycService(
     /// <summary>Null means "could not get an answer from FPT.AI" (unconfigured, rate limited,
     /// unreachable) -- the caller falls back to Gemini. It does NOT mean "card unreadable";
     /// that case still returns a real (if empty) KycIdCardExtraction.</summary>
-    private async Task<KycIdCardExtraction?> ExtractViaFptAsync(
+    private sealed record FptExtraction(KycIdCardExtraction Result, bool BackKeysExhausted);
+
+    /// <summary>FPT.AI's front-side fields with Gemini's back-side ones (dân tộc, ngày cấp, nơi cấp).</summary>
+    private static KycIdCardExtraction MergeBackFromGemini(KycIdCardExtraction fpt, KycIdCardExtraction gemini)
+    {
+        const string backMissing = "Không đọc được ảnh mặt sau CCCD — dân tộc, ngày cấp và nơi cấp cần nhập thủ công.";
+        var warnings = fpt.Warnings.Where(w => w != backMissing)
+            .Concat(gemini.Warnings.Where(w => !fpt.Warnings.Contains(w)))
+            .ToList();
+        var confidence = Math.Min(fpt.ConfidencePercent, gemini.ConfidencePercent);
+        return fpt with
+        {
+            Ethnicity = gemini.Ethnicity,
+            IdIssuedDate = gemini.IdIssuedDate,
+            IdIssuedPlace = gemini.IdIssuedPlace,
+            ConfidencePercent = confidence,
+            NeedsManualVerification = confidence < LowConfidenceThreshold || warnings.Count > 0,
+            Warnings = warnings,
+            Summary = $"[AI - FPT.AI + Gemini Vision] FPT.AI đọc mặt trước; FPT.AI đã hết lượt nên Gemini đọc mặt sau. "
+                    + $"Độ tin cậy {confidence}%. Vui lòng kiểm tra và sửa lại các trường chưa đúng trước khi nộp hồ sơ.",
+        };
+    }
+
+    private async Task<FptExtraction?> ExtractViaFptAsync(
         (byte[] Bytes, string MimeType) front, (byte[] Bytes, string MimeType)? back, bool hasBackPhoto, CancellationToken ct)
     {
-        var apiKey = configuration["AiCompliance:FptAi:ApiKey"]?.Trim();
-        if (string.IsNullOrWhiteSpace(apiKey))
+        var keys = keyPools.FptIdRecognition.GetAllKeysInOrder();
+        if (keys.Length == 0)
         {
-            logger.LogInformation("AiCompliance:FptAi:ApiKey is not configured -- trying Gemini for CCCD OCR.");
+            logger.LogInformation("AiCompliance:FptAi:ApiKeys / ApiKey is not configured -- trying Gemini for CCCD OCR.");
             return null;
         }
 
@@ -94,17 +169,21 @@ public sealed class FptAiKycService(
             url = "https://api.fpt.ai/vision/idr/vnm";
         }
 
-        var frontData = await ReadSideAsync(url, apiKey, front, "mặt trước", ct);
+        var (frontData, keyIndex) = await ReadSideWithKeysAsync(url, keys, 0, front, "mặt trước", ct);
         if (frontData is null)
         {
             return null;
         }
 
         JsonNode? backData = null;
+        var backKeysExhausted = false;
         var warnings = new List<string>();
         if (hasBackPhoto && back is not null)
         {
-            backData = await ReadSideAsync(url, apiKey, back.Value, "mặt sau", ct);
+            // Start the back side on the key that just read the front: the keys before it have
+            // already failed in this request.
+            (backData, var backKey) = await ReadSideWithKeysAsync(url, keys, keyIndex, back.Value, "mặt sau", ct);
+            backKeysExhausted = backKey < 0;
             if (backData is null)
             {
                 warnings.Add("Không đọc được ảnh mặt sau CCCD — dân tộc, ngày cấp và nơi cấp cần nhập thủ công.");
@@ -132,7 +211,7 @@ public sealed class FptAiKycService(
         var confidence = AverageConfidence(frontData, backData);
         var needsManual = confidence < LowConfidenceThreshold || warnings.Count > 0;
 
-        return new KycIdCardExtraction(
+        return new FptExtraction(new KycIdCardExtraction(
             IdNumber: idNumber,
             FullName: Text(frontData, "name"),
             DateOfBirth: ParseDate(Text(frontData, "dob")),
@@ -147,17 +226,18 @@ public sealed class FptAiKycService(
             Warnings: warnings,
             IsAiGenerated: true,
             Summary: $"[AI - FPT.AI] Đã đọc {(backData is null ? "mặt trước" : "hai mặt")} CCCD, độ tin cậy {confidence}%. "
-                   + "Vui lòng kiểm tra và sửa lại các trường chưa đúng trước khi nộp hồ sơ.");
+                   + "Vui lòng kiểm tra và sửa lại các trường chưa đúng trước khi nộp hồ sơ."),
+            backKeysExhausted);
     }
 
     /// <summary>Null means "could not get an answer from FPT.AI" -- caller falls back to Gemini.</summary>
     private async Task<KycFaceMatchResult?> MatchFaceViaFptAsync(
         (byte[] Bytes, string MimeType) selfie, (byte[] Bytes, string MimeType) idCard, CancellationToken ct)
     {
-        var apiKey = configuration["AiCompliance:FptAi:FaceMatchApiKey"]?.Trim();
-        if (string.IsNullOrWhiteSpace(apiKey))
+        var keys = keyPools.FptFaceMatch.GetAllKeysInOrder();
+        if (keys.Length == 0)
         {
-            logger.LogInformation("AiCompliance:FptAi:FaceMatchApiKey is not configured -- trying Gemini for face match.");
+            logger.LogInformation("AiCompliance:FptAi:FaceMatchApiKeys / FaceMatchApiKey is not configured -- trying Gemini for face match.");
             return null;
         }
 
@@ -176,6 +256,27 @@ public sealed class FptAiKycService(
             url = "https://api.fpt.ai/dmp/checkface/v1";
         }
 
+        for (var i = 0; i < keys.Length; i++)
+        {
+            var (keyUnusable, result) = await MatchFaceWithKeyAsync(url, keys[i], selfie, idCard, ct);
+            if (!keyUnusable)
+            {
+                return result;
+            }
+            LogKeyHandOver("Facematch", "chân dung", keys[i], i, keys.Length);
+        }
+
+        logger.LogWarning("Every FPT.AI Facematch key failed -- trying Gemini instead.");
+        return null;
+    }
+
+    /// <summary>One Facematch call with one key. KeyUnusable = the key, not the photos, is the
+    /// problem (rate limited, out of quota, refused, FPT.AI down or unreachable): try the next key.
+    /// Otherwise Result is FPT.AI's answer, including "no face detected".</summary>
+    private async Task<(bool KeyUnusable, KycFaceMatchResult? Result)> MatchFaceWithKeyAsync(
+        string url, string apiKey, (byte[] Bytes, string MimeType) selfie, (byte[] Bytes, string MimeType) idCard,
+        CancellationToken ct)
+    {
         try
         {
             using var request = new HttpRequestMessage(HttpMethod.Post, url);
@@ -196,18 +297,18 @@ public sealed class FptAiKycService(
             var json = JsonNode.Parse(body);
             var code = json?["code"]?.GetValue<string>();
 
-            if (code is null)
+            if (code is null || IsKeyProblem(response.StatusCode))
             {
                 logger.LogWarning(
-                    "FPT.AI Facematch gave no usable answer ({StatusCode}): {Body} -- trying Gemini instead.",
+                    "FPT.AI Facematch gave no usable answer ({StatusCode}): {Body}",
                     response.StatusCode, body);
-                return null;
+                return (true, null);
             }
 
             if (!response.IsSuccessStatusCode || code != "200")
             {
                 logger.LogInformation("FPT.AI Facematch returned code {Code}: {Body}", code, body);
-                return FailedFaceMatch(FaceMatchErrorMessage(code));
+                return (false, FailedFaceMatch(FaceMatchErrorMessage(code)));
             }
 
             var data = json?["data"];
@@ -225,7 +326,7 @@ public sealed class FptAiKycService(
                 warnings.Add("Khuôn mặt trong ảnh chân dung không khớp với ảnh trên CCCD.");
             }
 
-            return new KycFaceMatchResult(
+            return (false, new KycFaceMatchResult(
                 IsMatch: isMatch && !bothIdCards,
                 SimilarityPercent: Math.Round(similarity, 2),
                 BothImagesAreIdCards: bothIdCards,
@@ -236,12 +337,12 @@ public sealed class FptAiKycService(
                 IsAiGenerated: true,
                 Summary: isMatch && !bothIdCards
                     ? $"[AI - FPT.AI] Ảnh chân dung khớp với ảnh trên CCCD (độ tương đồng {similarity:0.##}%)."
-                    : $"[AI - FPT.AI] Chưa khớp: độ tương đồng {similarity:0.##}% (ngưỡng đạt của FPT.AI là 80%).");
+                    : $"[AI - FPT.AI] Chưa khớp: độ tương đồng {similarity:0.##}% (ngưỡng đạt của FPT.AI là 80%)."));
         }
-        catch (Exception ex)
+        catch (Exception ex) when (!ct.IsCancellationRequested)
         {
-            logger.LogWarning(ex, "Exception calling FPT.AI Facematch -- trying Gemini instead.");
-            return null;
+            logger.LogWarning(ex, "Exception calling FPT.AI Facematch.");
+            return (true, null);
         }
     }
     #endregion
@@ -258,24 +359,46 @@ public sealed class FptAiKycService(
         (byte[] Bytes, string MimeType) front, (byte[] Bytes, string MimeType)? back, bool hasBackPhoto, CancellationToken ct)
     {
         const string prompt = """
-            Bạn là chuyên gia thị giác máy tính đọc Căn cước công dân (CCCD) Việt Nam để hỗ trợ điền
-            trước biểu mẫu đăng ký hộ kinh doanh. Ảnh thứ nhất là MẶT TRƯỚC CCCD. Nếu có ảnh thứ hai,
-            đó là MẶT SAU CCCD.
+            Bạn đọc Căn cước công dân (CCCD) / Thẻ căn cước Việt Nam để điền trước biểu mẫu đăng ký hộ
+            kinh doanh. Ảnh thứ nhất là MẶT TRƯỚC. Nếu có ảnh thứ hai, đó là MẶT SAU. Nếu hai ảnh bị
+            đảo (ảnh thứ nhất có mã MRZ/vân tay), vẫn đọc đúng từng mặt và ghi vào "warning".
 
-            Chỉ ghi nhận thông tin đọc được trực tiếp, tuyệt đối không suy đoán hay bịa thêm.
+            Nguyên tắc: chỉ chép đúng chữ in trên thẻ, giữ nguyên dấu tiếng Việt; trường không có
+            hoặc không đọc rõ thì để null; tuyệt đối không suy đoán, không điền giá trị phổ biến.
 
-            Từ MẶT TRƯỚC, đọc: idNumber (đúng 12 chữ số liên tiếp, null nếu không đủ/không rõ), fullName
-            (in hoa), dob (DD/MM/YYYY), gender ("Nam" hoặc "Nữ"), nationality, permanentAddress (địa chỉ
-            thường trú đầy đủ).
+            Có ba mẫu thẻ:
+            - CCCD mã vạch (2016) và CCCD gắn chip (2021): mặt trước có Số, Họ và tên, Ngày sinh, Giới
+              tính, Quốc tịch, Quê quán, Nơi thường trú. Mặt sau có ngày cấp ("Ngày, tháng, năm") và
+              chức danh "Cục trưởng Cục Cảnh sát quản lý hành chính về trật tự xã hội".
+            - Thẻ căn cước (2024): mặt trước có Số định danh cá nhân, Họ, chữ đệm và tên khai sinh,
+              Ngày sinh, Giới tính, Quốc tịch. Mặt sau có Nơi cư trú, Nơi đăng ký khai sinh, Ngày cấp,
+              cơ quan cấp là Bộ Công an.
 
-            Từ MẶT SAU (chỉ khi có ảnh thứ hai), đọc: ethnicity (dân tộc), idIssuedDate (ngày cấp,
-            DD/MM/YYYY), idIssuedPlace (nơi cấp, ví dụ "Cục Cảnh sát QLHC về TTXH").
+            Các trường:
+            - idNumber: đúng 12 chữ số của Số / Số định danh cá nhân; null nếu không đọc đủ 12 số.
+            - fullName: họ tên viết HOA, đủ dấu, đúng như in.
+            - dob: ngày sinh DD/MM/YYYY.
+            - gender: "Nam" hoặc "Nữ".
+            - nationality: quốc tịch như in (thường "Việt Nam").
+            - permanentAddress: "Nơi thường trú" (mẫu 2016/2021) hoặc "Nơi cư trú" (mẫu 2024), nối các
+              dòng bằng dấu phẩy. KHÔNG lấy "Quê quán" hay "Nơi đăng ký khai sinh".
+            - ethnicity: dân tộc CHỈ khi thẻ có in mục "Dân tộc"; CCCD gắn chip và thẻ căn cước 2024
+              không in mục này nên trả null, không được đoán.
+            - idIssuedDate: ngày cấp DD/MM/YYYY ở mặt sau.
+            - idIssuedPlace: nơi cấp ở mặt sau. Mẫu 2016/2021: "Cục Cảnh sát QLHC về TTXH" (viết gọn
+              chức danh in trên thẻ). Mẫu 2024: "Bộ Công an".
 
-            confidencePercent (0-100): 100 nếu ảnh rõ nét đọc chắc chắn; trừ điểm nếu mờ, nghiêng, loá
-            sáng, hoặc có dấu hiệu chụp lại màn hình/photocopy/chỉnh sửa; dưới 50 nếu nghi giả mạo.
-            warning: mô tả ngắn gọn nếu nghi giả mạo hoặc ảnh kém chất lượng, null nếu ảnh tốt.
+            Đối chiếu bằng mã MRZ ở mặt sau (ba dòng bắt đầu bằng "IDVNM"): dòng 1 có 12 số CCCD sau
+            9 số đầu; dòng 2 bắt đầu bằng ngày sinh YYMMDD, tiếp theo là chữ số kiểm tra và giới tính
+            (M = Nam, F = Nữ). Nếu MRZ khác số CCCD, ngày sinh hoặc giới tính đọc ở mặt trước, giữ giá
+            trị in ở mặt trước và ghi rõ chỗ lệch vào "warning".
 
-            CHỈ trả về DUY NHẤT JSON hợp lệ, không markdown, không giải thích:
+            confidencePercent (0-100): 100 nếu ảnh rõ và mọi trường đọc chắc chắn, MRZ khớp; trừ điểm
+            nếu mờ, nghiêng, lóa, che khuất, MRZ lệch; dưới 50 nếu có dấu hiệu chụp lại màn hình,
+            photocopy hoặc chỉnh sửa.
+            warning: mô tả ngắn các vấn đề trên bằng tiếng Việt, null nếu không có.
+
+            CHỈ trả về DUY NHẤT một JSON hợp lệ, không markdown, không giải thích:
             {
               "idNumber": "chuỗi 12 chữ số hoặc null",
               "fullName": "hoặc null",
@@ -283,9 +406,9 @@ public sealed class FptAiKycService(
               "gender": "Nam/Nữ hoặc null",
               "nationality": "hoặc null",
               "permanentAddress": "hoặc null",
-              "ethnicity": "hoặc null (chỉ có nếu có ảnh mặt sau)",
-              "idIssuedDate": "DD/MM/YYYY hoặc null (chỉ có nếu có ảnh mặt sau)",
-              "idIssuedPlace": "hoặc null (chỉ có nếu có ảnh mặt sau)",
+              "ethnicity": "hoặc null",
+              "idIssuedDate": "DD/MM/YYYY hoặc null",
+              "idIssuedPlace": "hoặc null",
               "confidencePercent": 0-100,
               "warning": "mô tả ngắn hoặc null"
             }
@@ -320,10 +443,15 @@ public sealed class FptAiKycService(
                 warnings.Add("Chưa có ảnh mặt sau CCCD — dân tộc, ngày cấp và nơi cấp cần nhập thủ công.");
             }
 
-            var confidence = doc["confidencePercent"]?.GetValue<int?>() ?? 0;
+            var confidence = Math.Clamp(doc["confidencePercent"]?.GetValue<int?>() ?? 0, 0, 100);
+            var geminiId = doc["idNumber"]?.GetValue<string?>()?.Trim();
+            if (geminiId is not null && !(geminiId.Length == 12 && geminiId.All(char.IsDigit)))
+            {
+                warnings.Add($"Số CCCD đọc được (\"{geminiId}\") không đúng định dạng 12 chữ số — cán bộ cần đối chiếu bản gốc.");
+            }
 
             return new KycIdCardExtraction(
-                IdNumber: doc["idNumber"]?.GetValue<string?>(),
+                IdNumber: geminiId,
                 FullName: doc["fullName"]?.GetValue<string?>(),
                 DateOfBirth: ParseDate(doc["dob"]?.GetValue<string?>()),
                 Gender: MapGender(doc["gender"]?.GetValue<string?>()),
@@ -336,7 +464,7 @@ public sealed class FptAiKycService(
                 NeedsManualVerification: confidence < LowConfidenceThreshold || warnings.Count > 0,
                 Warnings: warnings,
                 IsAiGenerated: true,
-                Summary: $"[AI - Gemini Vision] FPT.AI tạm thời không phản hồi (hết lượt dùng miễn phí/quá tải), "
+                Summary: $"[AI - Gemini Vision] FPT.AI không dùng được (hết lượt hoặc quá tải), "
                        + $"đã dùng Gemini để đọc {(hasBackPhoto ? "hai mặt" : "mặt trước")} CCCD, độ tin cậy {confidence}%. "
                        + "Vui lòng kiểm tra và sửa lại các trường chưa đúng trước khi nộp hồ sơ.");
         }
@@ -444,7 +572,30 @@ public sealed class FptAiKycService(
     };
     #endregion
 
-    private async Task<JsonNode?> ReadSideAsync(
+    /// <summary>Reads one side of the card, trying the keys from <paramref name="start"/> on. Returns
+    /// the side's data (null when FPT.AI answered that it could not read the image, or every key
+    /// failed) and the index of the key that answered (-1 when none did).</summary>
+    private async Task<(JsonNode? Data, int KeyIndex)> ReadSideWithKeysAsync(
+        string url, string[] keys, int start, (byte[] Bytes, string MimeType) file, string sideLabel, CancellationToken ct)
+    {
+        for (var i = Math.Max(0, start); i < keys.Length; i++)
+        {
+            var (keyUnusable, data) = await ReadSideAsync(url, keys[i], file, sideLabel, ct);
+            if (!keyUnusable)
+            {
+                return (data, i);
+            }
+            LogKeyHandOver("ID Recognition", sideLabel, keys[i], i, keys.Length);
+        }
+
+        logger.LogWarning("Every FPT.AI ID Recognition key failed for {Side}.", sideLabel);
+        return (null, -1);
+    }
+
+    /// <summary>One ID Recognition call with one key. KeyUnusable = the key, not the image, is the
+    /// problem: try the next key. Otherwise Data is the side's fields, or null when FPT.AI read the
+    /// image and rejected it (no card found, bad image) -- another key would answer the same.</summary>
+    private async Task<(bool KeyUnusable, JsonNode? Data)> ReadSideAsync(
         string url, string apiKey, (byte[] Bytes, string MimeType) file, string sideLabel, CancellationToken ct)
     {
         try
@@ -459,29 +610,75 @@ public sealed class FptAiKycService(
             using var response = await httpClient.SendAsync(request, ct);
             var body = await response.Content.ReadAsStringAsync(ct);
 
-            if (!response.IsSuccessStatusCode)
+            var json = TryParse(body);
+            var errorCode = json?["errorCode"];
+            // The rate-limit answer ({"message":"API rate limit exceeded."}) carries no errorCode;
+            // a real answer about the image always does. "Out of transaction" (errorCode 1 on a 200)
+            // is FPT.AI's out-of-credit answer: also the key's problem, not the image's.
+            if (IsKeyProblem(response.StatusCode) || errorCode is null || IsOutOfCredit(json))
             {
                 logger.LogWarning(
                     "FPT.AI ID Recognition ({Side}) failed with {StatusCode}: {Body}",
                     sideLabel, response.StatusCode, body);
-                return null;
+                return (true, null);
             }
 
-            var json = JsonNode.Parse(body);
-            if ((json?["errorCode"]?.GetValue<int>() ?? -1) != 0)
+            if (!response.IsSuccessStatusCode || errorCode.GetValue<int>() != 0)
             {
                 logger.LogWarning(
                     "FPT.AI ID Recognition ({Side}) returned errorCode {Code}: {Message}",
-                    sideLabel, json?["errorCode"], json?["errorMessage"]);
-                return null;
+                    sideLabel, errorCode, json?["errorMessage"]);
+                return (false, null);
             }
 
-            return json?["data"]?.AsArray().FirstOrDefault();
+            return (false, json?["data"]?.AsArray().FirstOrDefault());
         }
-        catch (Exception ex)
+        catch (Exception ex) when (!ct.IsCancellationRequested)
         {
             logger.LogWarning(ex, "Exception calling FPT.AI ID Recognition ({Side}).", sideLabel);
+            return (true, null);
+        }
+    }
+
+    /// <summary>The key or the service is the problem, not the image: rate limited or out of quota
+    /// (429), key rejected or suspended (401, 403), FPT.AI failing (5xx).</summary>
+    private static bool IsKeyProblem(HttpStatusCode status) =>
+        status is HttpStatusCode.TooManyRequests or HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden
+        || (int)status >= 500;
+
+    private static bool IsOutOfCredit(JsonNode? json) =>
+        json?["errorMessage"]?.GetValue<string>() is { } message
+        && (message.Contains("transaction", StringComparison.OrdinalIgnoreCase)
+            || message.Contains("quota", StringComparison.OrdinalIgnoreCase)
+            || message.Contains("credit", StringComparison.OrdinalIgnoreCase));
+
+    private static JsonNode? TryParse(string body)
+    {
+        try
+        {
+            return string.IsNullOrWhiteSpace(body) ? null : JsonNode.Parse(body);
+        }
+        catch (JsonException)
+        {
             return null;
+        }
+    }
+
+    /// <summary>Only the last 4 characters of a key are ever logged.</summary>
+    private void LogKeyHandOver(string product, string sideLabel, string apiKey, int index, int total)
+    {
+        var suffix = apiKey.Length > 4 ? apiKey[^4..] : "****";
+        if (index + 1 < total)
+        {
+            logger.LogWarning(
+                "FPT.AI {Product} key [..{KeySuffix}] unusable ({Side}) -- trying FPT.AI key {Next}/{Total}.",
+                product, suffix, sideLabel, index + 2, total);
+        }
+        else
+        {
+            logger.LogWarning(
+                "FPT.AI {Product} key [..{KeySuffix}] unusable ({Side}) -- no FPT.AI key left.",
+                product, suffix, sideLabel);
         }
     }
 
@@ -585,7 +782,9 @@ public sealed class FptAiKycService(
                 // FPT sends these as strings ("0.98"), and as "N/A" for absent fields.
                 if (double.TryParse(value?.ToString(), NumberStyles.Float, CultureInfo.InvariantCulture, out var p))
                 {
-                    probabilities.Add(p);
+                    // Some card types come back as a fraction ("0.991"), others already as a
+                    // percentage ("99.10"); without this a 99.1 % read was shown as 9910 %.
+                    probabilities.Add(Math.Clamp(p > 1 ? p / 100 : p, 0, 1));
                 }
             }
         }

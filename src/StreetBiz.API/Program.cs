@@ -6,6 +6,7 @@ using Serilog;
 using System.Security.Claims;
 using StreetBiz.API.Extensions;
 using StreetBiz.Application;
+using StreetBiz.Application.Common.Models;
 using StreetBiz.Infrastructure;
 using StreetBiz.Infrastructure.Storage;
 using StreetBiz.API.Hubs;
@@ -24,6 +25,10 @@ var databaseConnectionString =
 
 builder.Services.AddApplication();
 builder.Services.AddInfrastructure(builder.Configuration);
+// Holidays and làm-bù Saturdays announced after this release; VietnamPublicHolidays has the rest.
+BusinessCalendar.Configure(
+    builder.Configuration.GetSection("BusinessCalendar:ExtraHolidays").Get<DateOnly[]>() ?? [],
+    builder.Configuration.GetSection("BusinessCalendar:ExtraWorkingDays").Get<DateOnly[]>() ?? []);
 // Resolve a relative upload root against the project, not the bin folder, so
 // uploads survive a rebuild. An absolute Storage:RootPath is used as-is.
 builder.Services.PostConfigure<StorageSettings>(settings =>

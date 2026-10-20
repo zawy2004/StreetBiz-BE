@@ -2047,8 +2047,10 @@ SELECT
         WHEN p.permit_status   = 'SUSPENDED'                   THEN 'SUSPENDED'
         WHEN c.contract_status = 'SUSPENDED'                   THEN 'SUSPENDED'
         WHEN c.contract_status = 'EXPIRED'                     THEN 'EXPIRED'
-        WHEN CAST(SYSUTCDATETIME() AS DATE) > c.end_date       THEN 'EXPIRED'
-        WHEN CAST(SYSUTCDATETIME() AS DATE) < c.start_date     THEN 'NOT_YET_VALID'
+        -- start_date/end_date are Vietnamese calendar days: compare with today in UTC+7, not UTC,
+        -- or a permit stays VALID until 07:00 the morning after it expires.
+        WHEN CAST(SWITCHOFFSET(SYSDATETIMEOFFSET(), '+07:00') AS DATE) > c.end_date   THEN 'EXPIRED'
+        WHEN CAST(SWITCHOFFSET(SYSDATETIMEOFFSET(), '+07:00') AS DATE) < c.start_date THEN 'NOT_YET_VALID'
         ELSE 'VALID'
     END AS effective_status
 FROM DigitalPermits p
@@ -2220,6 +2222,9 @@ CREATE TABLE ChatbotAudits (
     timestamp DATETIME2 NOT NULL
 );
 CREATE INDEX IX_ChatbotAudits_Message ON ChatbotAudits(message_id, timestamp);
+-- The daily voice allowance (Chatbot:Voice:DailySecondsPerUser) sums one actor's
+-- voice_session rows since the start of the Vietnamese day.
+CREATE INDEX IX_ChatbotAudits_ActorOperation ON ChatbotAudits(actor_id, operation, timestamp) INCLUDE (outcome);
 GO
 
 
