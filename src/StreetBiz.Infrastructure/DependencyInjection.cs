@@ -139,10 +139,8 @@ public static class DependencyInjection
         services.AddScoped<StreetBiz.Application.Features.FoodSafety.IFoodSafetyService, FoodSafetyService>();
         services.AddScoped<StreetBiz.Application.Features.Commerce.IOrderPaymentTesting, OrderPaymentTesting>();
 
-        services.Configure<PermitSettings>(configuration.GetSection(PermitSettings.SectionName));
+        services.AddTokenSigningOptions(configuration);
         services.AddSingleton<IPermitTokenService, PermitTokenService>();
-        services.Configure<OrderPickupSettings>(
-            configuration.GetSection(OrderPickupSettings.SectionName));
         services.AddSingleton<IOrderPickupTokenService, OrderPickupTokenService>();
 
         services.Configure<Sidewalk.SidewalkSettings>(configuration.GetSection(Sidewalk.SidewalkSettings.SectionName));
@@ -190,6 +188,46 @@ public static class DependencyInjection
         });
 
         return services;
+    }
+
+    /// <summary>
+    /// Binds the HMAC keys behind permit QR codes and pickup codes. An empty key still
+    /// "signs", so anyone who knows the token format could mint a valid permit or collect
+    /// someone else's order; outside Development and Testing the app refuses to start
+    /// without a real key instead of running that way silently.
+    /// </summary>
+    public static IServiceCollection AddTokenSigningOptions(
+        this IServiceCollection services, IConfiguration configuration)
+    {
+        services.AddOptions<PermitSettings>()
+            .Bind(configuration.GetSection(PermitSettings.SectionName))
+            .PostConfigure<IHostEnvironment>((settings, env) =>
+                RequireSigningKey(env, $"{PermitSettings.SectionName}:SigningKey", settings.SigningKey))
+            .ValidateOnStart();
+        services.AddOptions<OrderPickupSettings>()
+            .Bind(configuration.GetSection(OrderPickupSettings.SectionName))
+            .PostConfigure<IHostEnvironment>((settings, env) =>
+                RequireSigningKey(env, $"{OrderPickupSettings.SectionName}:SigningKey", settings.SigningKey))
+            .ValidateOnStart();
+        return services;
+    }
+
+    /// <summary>HMAC-SHA256 keys shorter than its 32-byte block are weaker than the algorithm.</summary>
+    public const int MinimumSigningKeyLength = 32;
+
+    private static void RequireSigningKey(IHostEnvironment env, string name, string? key)
+    {
+        if (env.IsDevelopment() || env.IsEnvironment("Testing"))
+        {
+            return;
+        }
+
+        if ((key?.Length ?? 0) < MinimumSigningKeyLength)
+        {
+            throw new InvalidOperationException(
+                $"{name} must be set (at least {MinimumSigningKeyLength} characters) outside Development. " +
+                "Set it as an App Setting / environment variable, never in appsettings.json.");
+        }
     }
 
     public static string GetStreetBizDatabaseConnectionString(

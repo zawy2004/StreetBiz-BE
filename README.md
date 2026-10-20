@@ -109,6 +109,12 @@ dotnet run --project src/StreetBiz.API
 In Development, open /swagger at the URL printed by ASP.NET Core. Check SQL
 Server readiness with GET /health. HTTPS redirection is enabled.
 
+## Deploying to Azure
+
+See [docs/deploy-azure.md](docs/deploy-azure.md) for the GitHub settings, the App
+Settings the API needs in Production (it refuses to start without its signing keys)
+and the database steps.
+
 ## Uploaded files (Azure Blob Storage)
 
 Uploads (menu images, slot photos, KYC evidence, voice) go through IFileStorage.
