@@ -13,7 +13,13 @@ public sealed record SubmitEvidenceCommand(
     long RegistrationId,
     string EvidenceType,
     string FileUrl,
-    string? OcrExtractedData) : IRequest<RegistrationEvidenceDto>;
+    string? OcrExtractedData,
+    /// <summary>
+    /// Separate, explicit consent to run AI-OCR on this ID photo later (WARD-04/05/06's
+    /// document check). Only meaningful when true; a false/omitted value never clears an
+    /// already-recorded consent. See docs_system/features/ward-review-permit-compliance.md 6.1.
+    /// </summary>
+    bool BiometricConsent = false) : IRequest<RegistrationEvidenceDto>;
 
 public sealed class SubmitEvidenceCommandValidator : AbstractValidator<SubmitEvidenceCommand>
 {
@@ -29,6 +35,9 @@ public sealed class SubmitEvidenceCommandValidator : AbstractValidator<SubmitEvi
             .Must(url => EvidenceFiles.TryParseUrl(url, out _, out _))
             .WithMessage(RegMessages.UploadValidDocument)
             .MaximumLength(500).WithMessage(RegMessages.UploadValidDocument);
+
+        // OCR output is client-supplied; it only ever needs a few hundred characters.
+        RuleFor(x => x.OcrExtractedData).MaximumLength(4000).WithMessage(RegMessages.FieldTooLong);
     }
 }
 
@@ -46,7 +55,7 @@ public sealed class SubmitEvidenceCommandHandler(
         // BR-62: documents can only be added while the application is still editable.
         if (!RegistrationStatuses.Editable.Contains(registration.RegistrationStatus))
         {
-            throw new DomainRuleException(string.Format(RegMessages.NotEditable, registration.RegistrationStatus));
+            throw new DomainRuleException(string.Format(RegMessages.NotEditable, RegMessages.StatusWord(registration.RegistrationStatus)));
         }
 
         // The file must be one this caller uploaded, not another user's document.
@@ -60,8 +69,20 @@ public sealed class SubmitEvidenceCommandHandler(
             });
         }
 
+        // One file backs one document: attaching the same upload twice (or to another file) would
+        // let a single scan satisfy several requirements.
+        if (await repository.IsEvidenceFileUsedAsync(request.FileUrl, cancellationToken))
+        {
+            throw new ConflictException(RegMessages.EvidenceAlreadyUsed);
+        }
+
         var evidence = new NewRegistrationEvidence(request.EvidenceType, request.FileUrl, request.OcrExtractedData);
         var id = await repository.AddEvidenceAsync(request.RegistrationId, evidence, cancellationToken);
+
+        if (request.BiometricConsent)
+        {
+            await repository.RecordBiometricConsentAsync(request.RegistrationId, cancellationToken);
+        }
 
         return new RegistrationEvidenceDto(
             id, request.RegistrationId, request.EvidenceType, request.FileUrl, DateTime.UtcNow);

@@ -10,11 +10,12 @@ public sealed record RevokeSessionCommand(long SessionId) : IRequest<Unit>;
 
 public sealed class RevokeSessionCommandHandler(
     ICurrentUser currentUser,
-    ISessionRepository sessionRepository) : IRequestHandler<RevokeSessionCommand, Unit>
+    ISessionRepository sessionRepository,
+    ISecurityEvents securityEvents) : IRequestHandler<RevokeSessionCommand, Unit>
 {
     public async Task<Unit> Handle(RevokeSessionCommand request, CancellationToken cancellationToken)
     {
-        var userId = currentUser.UserId ?? throw new AuthenticationException("No active session.");
+        var userId = currentUser.UserId ?? throw new AuthenticationException(AppMessages.SessionExpired);
 
         if (currentUser.SessionId is { } current && current == request.SessionId)
         {
@@ -22,7 +23,7 @@ public sealed class RevokeSessionCommandHandler(
         }
 
         var session = await sessionRepository.GetByIdAsync(request.SessionId, cancellationToken)
-            ?? throw new NotFoundException("Session not found.");
+            ?? throw new NotFoundException(AppMessages.SessionNotFound);
 
         if (session.UserId != userId)
         {
@@ -30,6 +31,8 @@ public sealed class RevokeSessionCommandHandler(
         }
 
         await sessionRepository.RevokeAsync(request.SessionId, cancellationToken);
+        await securityEvents.RecordAsync(
+            userId, SecurityActions.SessionRevoked, session.DeviceInfo, null, cancellationToken);
         return Unit.Value;
     }
 }

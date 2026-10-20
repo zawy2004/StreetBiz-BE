@@ -2,6 +2,7 @@ using FluentValidation;
 using MediatR;
 using StreetBiz.Application.Common.Exceptions;
 using StreetBiz.Application.Common.Interfaces;
+using StreetBiz.Application.Common.Models;
 using StreetBiz.Application.Common.Security;
 using StreetBiz.Application.DTOs.RentalApplications;
 using StreetBiz.Application.Features.SlotHolds;
@@ -45,6 +46,13 @@ public sealed class SubmitOpenSlotApplicationCommandHandler(
         if (slot.SlotStatus != SlotStatuses.Available)
         {
             throw new ConflictException(SideMessages.SlotNotAvailable);
+        }
+
+        // WARD-02: a ward can close a zone to new applications by dating its deadline in the
+        // past, without touching existing applications, renewals or contracts on it.
+        if (slot.ApplicationDeadline is { } deadline && BusinessCalendar.Today(clock.UtcNow) > deadline)
+        {
+            throw new DomainRuleException(SideMessages.ZoneApplicationDeadlinePassed);
         }
 
         if (await applications.HasOpenApplicationForSlotAsync(request.SlotId, cancellationToken))

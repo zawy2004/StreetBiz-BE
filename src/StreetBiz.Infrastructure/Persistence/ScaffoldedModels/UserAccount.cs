@@ -23,9 +23,15 @@ public partial class UserAccount
 
     public DateTime? phone_verified_at { get; set; }
 
+    public int failed_login_count { get; set; }
+
+    public DateTime? lockout_until { get; set; }
+
     public DateTime created_at { get; set; }
 
     public DateTime? updated_at { get; set; }
+
+    public string? sanction_authority_title { get; set; }
 
     public virtual ICollection<AIAssistanceLog> AIAssistanceLogs { get; set; } = new List<AIAssistanceLog>();
 
@@ -36,6 +42,10 @@ public partial class UserAccount
     public virtual ICollection<AuditLog> AuditLogs { get; set; } = new List<AuditLog>();
 
     public virtual ICollection<BusinessRegistration> BusinessRegistrations { get; set; } = new List<BusinessRegistration>();
+
+    public virtual ICollection<ChatConversation> ChatConversations { get; set; } = new List<ChatConversation>();
+
+    public virtual ICollection<ChatMessage> ChatMessages { get; set; } = new List<ChatMessage>();
 
     public virtual ICollection<Complaint> ComplaintUserAccounts { get; set; } = new List<Complaint>();
 

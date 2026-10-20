@@ -4,6 +4,9 @@ using StreetBiz.Application.Common.Exceptions;
 using StreetBiz.Application.Common.Interfaces;
 using StreetBiz.Application.Common.Models;
 using StreetBiz.Application.Common.Security;
+using StreetBiz.Application.DTOs.AdministrativeUnits;
+using StreetBiz.Application.Features.VendorKyc;
+using StreetBiz.Application.Features.VendorRegistration.GenerateRegistrationDocument;
 using StreetBiz.Application.Features.VendorRegistration.SubmitEvidence;
 using StreetBiz.Application.Features.VendorRegistration.SubmitRegistration;
 using StreetBiz.Application.Features.VendorRegistration.UpdateRegistration;
@@ -18,7 +21,9 @@ public sealed class VendorRegistrationHandlerTests
     private const int WardId = 10;
 
     private readonly Mock<IVendorContext> vendorContext = new();
+    private readonly Mock<ICurrentUser> submitCurrentUser = new();
     private readonly Mock<IBusinessRegistrationRepository> registrations = new();
+    private readonly Mock<IKycResultRepository> kycResults = new();
     private readonly Mock<IAdministrativeUnitRepository> units = new();
 
     public VendorRegistrationHandlerTests()
@@ -38,7 +43,8 @@ public sealed class VendorRegistrationHandlerTests
     [Fact]
     public async Task Submitting_with_an_unknown_ward_is_a_400_not_a_foreign_key_500()
     {
-        var handler = new SubmitRegistrationCommandHandler(vendorContext.Object, registrations.Object, units.Object);
+        var handler = new SubmitRegistrationCommandHandler(
+            vendorContext.Object, submitCurrentUser.Object, registrations.Object, kycResults.Object, units.Object);
         var command = new SubmitRegistrationCommand(VendorTypes.Itinerant, "Banh mi", null, null, null, WardUnitId: 999);
 
         var error = await FluentActions.Awaiting(() => handler.Handle(command, CancellationToken.None))
@@ -117,6 +123,39 @@ public sealed class VendorRegistrationHandlerTests
     }
 
     [Fact]
+    public async Task Generating_the_registration_document_uses_the_callers_own_name_and_ward_and_rejects_a_bad_format()
+    {
+        Owns(RegistrationStatuses.Submitted);
+        var currentUser = new Mock<ICurrentUser>();
+        currentUser.Setup(c => c.UserId).Returns(UserId);
+        var users = new Mock<IUserAccountRepository>();
+        users.Setup(u => u.GetByIdAsync(UserId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new AppUser(UserId, "0900000000", "x", "Nguyễn Văn A", RoleCodes.Vendor, null, AccountStatuses.Active, null));
+        units.Setup(u => u.ListWardsAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync([new WardDto(WardId, "Phường Kiểm Thử", null)]);
+        var generator = new Mock<IRegistrationDocumentGenerator>();
+        RegistrationDocumentData? captured = null;
+        generator.Setup(g => g.GenerateAsync(It.IsAny<RegistrationDocumentData>(), "docx", It.IsAny<CancellationToken>()))
+            .Callback<RegistrationDocumentData, string, CancellationToken>((d, _, _) => captured = d)
+            .ReturnsAsync(([1, 2, 3], "DangKyHKD_700.docx"));
+        var handler = new GenerateRegistrationDocumentQueryHandler(
+            vendorContext.Object, currentUser.Object, users.Object, units.Object, generator.Object);
+
+        var (content, fileName) = await handler.Handle(
+            new GenerateRegistrationDocumentQuery(RegistrationId, "docx"), CancellationToken.None);
+
+        content.Should().NotBeEmpty();
+        fileName.Should().Be("DangKyHKD_700.docx");
+        captured.Should().NotBeNull();
+        captured!.OwnerFullName.Should().Be("Nguyễn Văn A");
+        captured.WardName.Should().Be("Phường Kiểm Thử");
+        captured.RegistrationStatus.Should().Be(RegistrationStatuses.Submitted);
+
+        var validator = new GenerateRegistrationDocumentQueryValidator();
+        validator.Validate(new GenerateRegistrationDocumentQuery(RegistrationId, "xlsx")).IsValid.Should().BeFalse();
+    }
+
+    [Fact]
     public void Evidence_validator_rejects_browser_blob_urls()
     {
         var validator = new SubmitEvidenceCommandValidator();
@@ -149,7 +188,53 @@ public sealed class VendorRegistrationHandlerTests
         var result = validator.Validate(command);
 
         result.Errors.Should().ContainSingle(e => e.PropertyName == nameof(UpdateRegistrationCommand.DisplayName))
-            .Which.ErrorMessage.Should().Be("Business/display name is required.");
+            .Which.ErrorMessage.Should().Be(RegMessages.DisplayNameRequired);
+    }
+
+    [Fact]
+    public void Submit_validator_requires_the_Mau_so_01_owner_and_business_fields()
+    {
+        // TT 68/2025/TT-BTC Mẫu số 01: chủ hộ kinh doanh + ngành nghề + cam kết ATTP are all
+        // required on a real submission, even though the record itself defaults them to null
+        // so older callers (e.g. this file's other tests) keep compiling.
+        var validator = new SubmitRegistrationCommandValidator();
+        var command = new SubmitRegistrationCommand(VendorTypes.Itinerant, "Banh mi", null, null, null, WardId);
+
+        var result = validator.Validate(command);
+
+        Assert.False(result.IsValid);
+        result.Errors.Should().Contain(e => e.PropertyName == nameof(SubmitRegistrationCommand.OwnerDateOfBirth));
+        result.Errors.Should().Contain(e => e.PropertyName == nameof(SubmitRegistrationCommand.OwnerGender));
+        result.Errors.Should().Contain(e => e.PropertyName == nameof(SubmitRegistrationCommand.IdType));
+        result.Errors.Should().Contain(e => e.PropertyName == nameof(SubmitRegistrationCommand.PermanentAddress));
+        result.Errors.Should().Contain(e => e.PropertyName == nameof(SubmitRegistrationCommand.BusinessLine));
+        result.Errors.Should().Contain(e => e.PropertyName == nameof(SubmitRegistrationCommand.CapitalAmount));
+        result.Errors.Should().Contain(e => e.PropertyName == nameof(SubmitRegistrationCommand.FoodSafetyCommitment));
+    }
+
+    [Fact]
+    public void Submit_validator_passes_once_every_Mau_so_01_field_is_filled()
+    {
+        var validator = new SubmitRegistrationCommandValidator();
+        var command = new SubmitRegistrationCommand(
+            VendorTypes.Itinerant, "Banh mi", null, null, null, WardId,
+            OwnerDateOfBirth: new DateOnly(1985, 1, 1),
+            OwnerGender: OwnerGenders.Female,
+            OwnerEthnicity: "Kinh",
+            OwnerNationality: "Việt Nam",
+            IdType: OwnerIdTypes.CitizenId,
+            IdIssuedDate: new DateOnly(2021, 1, 1),
+            IdIssuedPlace: "Cục Cảnh sát QLHC về TTXH",
+            PermanentAddress: "12 Le Duan, Da Nang",
+            ContactAddress: null,
+            BusinessLine: "Bán đồ ăn lưu động",
+            BusinessLineCode: null,
+            CapitalAmount: 20_000_000m,
+            LaborCount: 1,
+            PlannedStartDate: new DateOnly(2026, 10, 1),
+            FoodSafetyCommitment: true);
+
+        validator.Validate(command).IsValid.Should().BeTrue();
     }
 
     [Fact]

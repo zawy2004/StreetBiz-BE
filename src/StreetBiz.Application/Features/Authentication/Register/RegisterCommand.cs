@@ -25,22 +25,22 @@ public sealed class RegisterCommandValidator : AbstractValidator<RegisterCommand
     {
         RuleFor(x => x.PhoneNumber)
             .NotEmpty().Must(p => AuthValidationRules.PhoneRegex().IsMatch(p))
-            .WithMessage("Please enter a valid phone number.");
+            .WithMessage(AppMessages.InvalidPhone);
 
         RuleFor(x => x.Password)
             .NotEmpty().Must(p => AuthValidationRules.PasswordRegex().IsMatch(p))
-            .WithMessage("Password must be at least 8 characters and include upper, lower, number and special characters.");
+            .WithMessage(AppMessages.PasswordPolicy);
 
         RuleFor(x => x.RoleCode)
             .Must(r => RoleCodes.SelfRegisterable.Contains(r))
-            .WithMessage("You can only register as a Customer or Vendor.");
+            .WithMessage(AppMessages.RoleNotSelfRegisterable);
 
         RuleFor(x => x.Otp)
             .Must(o => AuthValidationRules.OtpRegex().IsMatch(o))
-            .WithMessage("The verification code must be 6 digits.");
+            .WithMessage(AppMessages.OtpFormat);
 
         RuleFor(x => x.FullName)
-            .MaximumLength(150).WithMessage("Full name must be 150 characters or fewer.");
+            .MaximumLength(150).WithMessage(AppMessages.FullNameTooLong);
     }
 }
 
@@ -60,14 +60,14 @@ public sealed class RegisterCommandHandler(
             await units.EnsureWardAsync(wardUnitId, cancellationToken);
         }
 
-        // 1) Prove phone ownership (consumes the SIGNUP challenge).
-        await otpService.ConsumeAsync(request.PhoneNumber, OtpPurposes.Signup, request.Otp, cancellationToken);
-
-        // 2) Enforce unique phone (BR-04).
+        // 1) Enforce unique phone (BR-04) before the OTP is spent, so a duplicate does not burn the code.
         if (await userRepository.PhoneExistsAsync(request.PhoneNumber, cancellationToken))
         {
             throw new ConflictException(AppMessages.PhoneAlreadyRegistered);
         }
+
+        // 2) Prove phone ownership (consumes the SIGNUP challenge).
+        await otpService.ConsumeAsync(request.PhoneNumber, OtpPurposes.Signup, request.Otp, cancellationToken);
 
         // 3) Create the account (ACTIVE, phone verified). Vendor row is created for VENDOR role.
         var now = clock.UtcNow;

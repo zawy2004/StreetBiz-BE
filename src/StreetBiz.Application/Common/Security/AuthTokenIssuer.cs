@@ -8,13 +8,23 @@ public sealed class AuthTokenIssuer(
     IJwtTokenService jwtTokenService,
     ISessionRepository sessionRepository) : IAuthTokenIssuer
 {
-    public async Task<AuthResultDto> IssueAsync(
+    public Task<AuthResultDto> IssueAsync(
         AppUser user, string? deviceInfo, string? ipAddress, CancellationToken cancellationToken)
+        => CreateAsync(user, deviceInfo, ipAddress, null, cancellationToken);
+
+    public Task<AuthResultDto> RotateAsync(
+        AppUser user, string? deviceInfo, string? ipAddress, DateTime sessionExpiresAtUtc,
+        CancellationToken cancellationToken)
+        => CreateAsync(user, deviceInfo, ipAddress, sessionExpiresAtUtc, cancellationToken);
+
+    private async Task<AuthResultDto> CreateAsync(
+        AppUser user, string? deviceInfo, string? ipAddress, DateTime? cap, CancellationToken cancellationToken)
     {
         var refresh = jwtTokenService.CreateRefreshToken();
+        var expires = cap is { } c && c < refresh.ExpiresAtUtc ? c : refresh.ExpiresAtUtc;
 
         var sessionId = await sessionRepository.CreateAsync(
-            user.Id, refresh.Hash, deviceInfo, ipAddress, refresh.ExpiresAtUtc, cancellationToken);
+            user.Id, refresh.Hash, deviceInfo, ipAddress, expires, cancellationToken);
 
         var access = jwtTokenService.CreateAccessToken(user, sessionId);
 

@@ -59,6 +59,22 @@ public interface ICommerceRepository
         string idempotencyKey,
         CancellationToken cancellationToken);
 
+    Task<OrderMutationResult> CheckoutAsync(
+        long customerUserId,
+        long cartId,
+        string provider,
+        string idempotencyKey,
+        CancellationToken cancellationToken);
+
+    Task SetPaymentProviderReferenceAsync(
+        long transactionId,
+        string providerReference,
+        CancellationToken cancellationToken);
+
+    Task<PaymentCallbackMutationResult> ApplyPaymentCallbackAsync(
+        PaymentCallbackData callback,
+        CancellationToken cancellationToken);
+
     Task<OrderMutationResult> ConfirmSandboxPaymentAsync(
         long customerUserId,
         long orderId,
@@ -79,12 +95,6 @@ public interface ICommerceRepository
         string expectedStatus,
         CancellationToken cancellationToken);
 
-    Task<OrderMutationResult> ConfirmCustomerPickupAsync(
-        long customerUserId,
-        long orderId,
-        string expectedStatus,
-        CancellationToken cancellationToken);
-
     Task<IReadOnlyList<CommerceOrderRow>> ListSellerOrdersAsync(
         long vendorId,
         string? status,
@@ -94,6 +104,9 @@ public interface ICommerceRepository
         long vendorId,
         long orderId,
         CancellationToken cancellationToken);
+
+    /// <summary>The vendor who sells this order, so realtime news reaches their board.</summary>
+    Task<long?> GetOrderVendorIdAsync(long orderId, CancellationToken cancellationToken);
 
     Task<OrderMutationResult> DecideSellerOrderAsync(
         long vendorId,
@@ -112,11 +125,17 @@ public interface ICommerceRepository
         string expectedStatus,
         CancellationToken cancellationToken);
 
+    /// <summary>
+    /// Completes an order. <paramref name="note"/> lands in the order's status
+    /// history and is shown to both sides, so every handover says how it was
+    /// proved - a scan, a typed code, or a seller's written reason for neither.
+    /// </summary>
     Task<OrderMutationResult> ConfirmSellerHandoverAsync(
         long vendorId,
         long actorUserId,
         long orderId,
         string expectedStatus,
+        string note,
         CancellationToken cancellationToken);
 
     Task<CommerceSalesSummaryRow> GetSalesSummaryAsync(

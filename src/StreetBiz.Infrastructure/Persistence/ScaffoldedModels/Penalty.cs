@@ -15,6 +15,12 @@ public partial class Penalty
 
     public string penalty_status { get; set; } = null!;
 
+    public string? decision_number { get; set; }
+
+    public string? signer_name { get; set; }
+
+    public string? signer_title { get; set; }
+
     public DateTime created_at { get; set; }
 
     public DateTime? paid_at { get; set; }

@@ -1,11 +1,14 @@
+using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Microsoft.OpenApi.Models;
 using Serilog;
+using System.Security.Claims;
 using StreetBiz.API.Extensions;
 using StreetBiz.Application;
 using StreetBiz.Infrastructure;
 using StreetBiz.Infrastructure.Storage;
+using StreetBiz.API.Hubs;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -47,6 +50,71 @@ builder.Services.AddSwaggerGen(options =>
 builder.Services.AddProblemDetails();
 builder.Services.AddWardApi();
 builder.Services.AddCommunityApi();
+builder.Services.AddAuthRateLimits(builder.Environment);
+builder.Services.AddChatbotApi();
+// ai/vendor-assistant calls a paid LLM per request; an earlier draft left it [AllowAnonymous]
+// with no limit. Now [Authorize]-only, plus this per-account cap.
+builder.Services.AddRateLimiter(options =>
+{
+    options.AddPolicy("VendorAssistantAi", context =>
+        System.Threading.RateLimiting.RateLimitPartition.GetFixedWindowLimiter(
+            context.User.FindFirstValue("sub")
+            ?? context.Connection.RemoteIpAddress?.ToString()
+            ?? "anonymous",
+            _ => new System.Threading.RateLimiting.FixedWindowRateLimiterOptions
+            {
+                PermitLimit = 15,
+                Window = TimeSpan.FromMinutes(1),
+                QueueLimit = 0,
+            }));
+
+    // REG-02 eKYC: each call spends FPT.AI credits on a paid quota, and a legitimate
+    // applicant only ever needs a handful of scans (front, back, portrait, plus retries).
+    options.AddPolicy("VendorKycAi", context =>
+        System.Threading.RateLimiting.RateLimitPartition.GetFixedWindowLimiter(
+            context.User.FindFirstValue("sub")
+            ?? context.Connection.RemoteIpAddress?.ToString()
+            ?? "anonymous",
+            _ => new System.Threading.RateLimiting.FixedWindowRateLimiterOptions
+            {
+                PermitLimit = 10,
+                Window = TimeSpan.FromMinutes(1),
+                QueueLimit = 0,
+            }));
+
+    // ORD-06: the typed fallback is the one pickup path where the caller supplies
+    // a short secret rather than a signed one. 40 bits is far too wide to guess,
+    // but a cap turns "far too wide" into "not worth attempting".
+    options.AddPolicy("PickupCode", context =>
+        System.Threading.RateLimiting.RateLimitPartition.GetFixedWindowLimiter(
+            context.User.FindFirstValue("sub")
+            ?? context.Connection.RemoteIpAddress?.ToString()
+            ?? "anonymous",
+            _ => new System.Threading.RateLimiting.FixedWindowRateLimiterOptions
+            {
+                PermitLimit = 20,
+                Window = TimeSpan.FromMinutes(1),
+                QueueLimit = 0,
+            }));
+
+    // CHAT-02: the only endpoint where one account writes rows straight into
+    // another account's inbox, so it is the one worth capping. The limit is set
+    // well above real typing - a person sends a handful of lines a minute, a
+    // script sends thousands.
+    options.AddPolicy("ChatSend", context =>
+        System.Threading.RateLimiting.RateLimitPartition.GetFixedWindowLimiter(
+            context.User.FindFirstValue("sub")
+            ?? context.Connection.RemoteIpAddress?.ToString()
+            ?? "anonymous",
+            _ => new System.Threading.RateLimiting.FixedWindowRateLimiterOptions
+            {
+                PermitLimit = 30,
+                Window = TimeSpan.FromMinutes(1),
+                QueueLimit = 0,
+            }));
+});
+builder.Services.AddSingleton<IOrderRealtimePublisher, OrderRealtimePublisher>();
+builder.Services.AddSingleton<IChatRealtimePublisher, ChatRealtimePublisher>();
 builder.Services
     .AddHealthChecks()
     .AddSqlServer(
@@ -57,8 +125,11 @@ builder.Services
 
 var app = builder.Build();
 
-app.UseExceptionHandler();
+// Request logging wraps the exception handler so it records the status the client
+// actually received (a validation failure is a 400, not a 500).
 app.UseSerilogRequestLogging();
+app.UseExceptionHandler();
+app.UseMiddleware<ChatbotEnvelopeMiddleware>();
 
 if (app.Environment.IsDevelopment())
 {
@@ -73,13 +144,34 @@ if (!app.Environment.IsDevelopment())
     app.UseHttpsRedirection();
 }
 
+// Behind a reverse proxy every client shares the proxy IP, so the per-IP auth limits would
+// become one global bucket. Only trust X-Forwarded-For from proxies listed in config.
+if (app.Configuration.GetSection("ForwardedHeaders:KnownProxies").Get<string[]>() is { Length: > 0 } proxies)
+{
+    var forwarded = new ForwardedHeadersOptions { ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto };
+    forwarded.KnownProxies.Clear();
+    forwarded.KnownNetworks.Clear();
+    foreach (var proxy in proxies)
+    {
+        forwarded.KnownProxies.Add(System.Net.IPAddress.Parse(proxy));
+    }
+
+    app.UseForwardedHeaders(forwarded);
+}
+
 app.UseCors(CorsSetup.PolicyName);
 app.UseAuthentication();
 app.UseAuthorization();
 app.UseRateLimiter();
+// SignalR adds this for its own hubs; the chatbot voice relay is a plain WebSocket endpoint.
+app.UseWebSockets(new WebSocketOptions { KeepAliveInterval = TimeSpan.FromSeconds(20) });
 
 app.MapControllers();
+app.MapChatbotApi();
 app.MapWardApi();
+app.MapFinanceDevApi();
+app.MapHub<OrderHub>("/hubs/orders");
+app.MapHub<ChatHub>("/hubs/chat");
 
 app.MapHealthChecks(
     "/health",

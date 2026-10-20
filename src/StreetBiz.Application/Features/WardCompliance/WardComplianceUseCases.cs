@@ -1,0 +1,749 @@
+using FluentValidation;
+using MediatR;
+using StreetBiz.Application.Common.Exceptions;
+using StreetBiz.Application.Common.Security;
+using StreetBiz.Application.Features.AiAssistance;
+using StreetBiz.Application.Features.WardSlots;
+
+namespace StreetBiz.Application.Features.WardCompliance;
+
+#region Enrollment / Registration Use Cases
+public sealed record ListWardEnrollmentsQuery(string? Status, int Page = 1, string? VendorType = null)
+    : IRequest<IReadOnlyList<WardEnrollmentListItemDto>>;
+
+public sealed class ListWardEnrollmentsQueryValidator : AbstractValidator<ListWardEnrollmentsQuery>
+{
+    public ListWardEnrollmentsQueryValidator()
+    {
+        RuleFor(x => x.Page).GreaterThan(0);
+    }
+}
+
+public sealed class ListWardEnrollmentsQueryHandler(
+    IWardActorContext actorContext,
+    IWardComplianceService complianceService)
+    : IRequestHandler<ListWardEnrollmentsQuery, IReadOnlyList<WardEnrollmentListItemDto>>
+{
+    public async Task<IReadOnlyList<WardEnrollmentListItemDto>> Handle(
+        ListWardEnrollmentsQuery request,
+        CancellationToken cancellationToken)
+    {
+        var actor = await actorContext.RequireAsync(cancellationToken);
+        return await complianceService.ListEnrollmentsAsync(
+            actor, request.Status, request.Page, cancellationToken, request.VendorType);
+    }
+}
+
+public sealed record GetWardEnrollmentDetailQuery(long Id) : IRequest<WardEnrollmentDetailDto>;
+
+public sealed class GetWardEnrollmentDetailQueryValidator : AbstractValidator<GetWardEnrollmentDetailQuery>
+{
+    public GetWardEnrollmentDetailQueryValidator()
+    {
+        RuleFor(x => x.Id).GreaterThan(0);
+    }
+}
+
+public sealed class GetWardEnrollmentDetailQueryHandler(
+    IWardActorContext actorContext,
+    IWardComplianceService complianceService)
+    : IRequestHandler<GetWardEnrollmentDetailQuery, WardEnrollmentDetailDto>
+{
+    public async Task<WardEnrollmentDetailDto> Handle(
+        GetWardEnrollmentDetailQuery request,
+        CancellationToken cancellationToken)
+    {
+        var actor = await actorContext.RequireAsync(cancellationToken);
+        return await complianceService.GetEnrollmentDetailAsync(actor, request.Id, cancellationToken);
+    }
+}
+
+public sealed record GenerateEnrollmentDocumentQuery(long Id, string Format) : IRequest<(byte[] Content, string FileName)>;
+
+public sealed class GenerateEnrollmentDocumentQueryValidator : AbstractValidator<GenerateEnrollmentDocumentQuery>
+{
+    public GenerateEnrollmentDocumentQueryValidator()
+    {
+        RuleFor(x => x.Id).GreaterThan(0);
+        RuleFor(x => x.Format).Must(f => f is "docx" or "pdf").WithMessage("Định dạng phải là docx hoặc pdf.");
+    }
+}
+
+public sealed class GenerateEnrollmentDocumentQueryHandler(
+    IWardActorContext actorContext,
+    IWardComplianceService complianceService)
+    : IRequestHandler<GenerateEnrollmentDocumentQuery, (byte[] Content, string FileName)>
+{
+    public async Task<(byte[] Content, string FileName)> Handle(
+        GenerateEnrollmentDocumentQuery request, CancellationToken cancellationToken)
+    {
+        var actor = await actorContext.RequireAsync(cancellationToken);
+        return await complianceService.GenerateEnrollmentDocumentAsync(actor, request.Id, request.Format, cancellationToken);
+    }
+}
+
+public sealed record DecideWardEnrollmentCommand(
+    long Id,
+    WardEnrollmentDecision Decision) : IRequest<WardEnrollmentDetailDto>;
+
+public sealed class DecideWardEnrollmentCommandValidator : AbstractValidator<DecideWardEnrollmentCommand>
+{
+    public DecideWardEnrollmentCommandValidator()
+    {
+        RuleFor(x => x.Id).GreaterThan(0);
+        RuleFor(x => x.Decision.Decision).Must(d => d is "APPROVE" or "REJECT" or "MORE_INFO")
+            .WithMessage("Quyết định phải là APPROVE, REJECT hoặc MORE_INFO.");
+        RuleFor(x => x.Decision.Reason)
+            .NotEmpty().WithMessage("Lý do quyết định không được để trống.")
+            .MaximumLength(500).WithMessage("Lý do quyết định không quá 500 ký tự.");
+        RuleFor(x => x.Decision.ExpectedStatus).NotEmpty().WithMessage("Thiếu trạng thái hồ sơ kỳ vọng.");
+    }
+}
+
+public sealed class DecideWardEnrollmentCommandHandler(
+    IWardActorContext actorContext,
+    IWardComplianceService complianceService)
+    : IRequestHandler<DecideWardEnrollmentCommand, WardEnrollmentDetailDto>
+{
+    public async Task<WardEnrollmentDetailDto> Handle(
+        DecideWardEnrollmentCommand request,
+        CancellationToken cancellationToken)
+    {
+        var actor = await actorContext.RequireAsync(cancellationToken);
+        return await complianceService.DecideEnrollmentAsync(actor, request.Id, request.Decision, cancellationToken);
+    }
+}
+
+/// <summary>BR-41 KYC gate: the officer's manual confirmation that they compared the vendor
+/// against their physical/chip CCCD. Required before DecideWardEnrollmentCommand's APPROVE.</summary>
+public sealed record ConfirmEnrollmentIdentityCommand(
+    long Id,
+    ConfirmEnrollmentIdentity Request) : IRequest<WardEnrollmentDetailDto>;
+
+public sealed class ConfirmEnrollmentIdentityCommandValidator : AbstractValidator<ConfirmEnrollmentIdentityCommand>
+{
+    public ConfirmEnrollmentIdentityCommandValidator()
+    {
+        RuleFor(x => x.Id).GreaterThan(0);
+        RuleFor(x => x.Request.Note)
+            .NotEmpty().WithMessage(RegMessages.IdentityVerificationNoteRequired)
+            .MaximumLength(500);
+    }
+}
+
+public sealed class ConfirmEnrollmentIdentityCommandHandler(
+    IWardActorContext actorContext,
+    IWardComplianceService complianceService)
+    : IRequestHandler<ConfirmEnrollmentIdentityCommand, WardEnrollmentDetailDto>
+{
+    public async Task<WardEnrollmentDetailDto> Handle(
+        ConfirmEnrollmentIdentityCommand request,
+        CancellationToken cancellationToken)
+    {
+        var actor = await actorContext.RequireAsync(cancellationToken);
+        return await complianceService.ConfirmIdentityAsync(actor, request.Id, request.Request, cancellationToken);
+    }
+}
+#endregion
+
+public sealed record ClaimWardEnrollmentCommand(long Id) : IRequest<WardEnrollmentDetailDto>;
+
+public sealed class ClaimWardEnrollmentCommandHandler(
+    IWardActorContext actorContext,
+    IWardComplianceService complianceService)
+    : IRequestHandler<ClaimWardEnrollmentCommand, WardEnrollmentDetailDto>
+{
+    public async Task<WardEnrollmentDetailDto> Handle(ClaimWardEnrollmentCommand request, CancellationToken cancellationToken)
+    {
+        var actor = await actorContext.RequireAsync(cancellationToken);
+        return await complianceService.ClaimEnrollmentAsync(actor, request.Id, cancellationToken);
+    }
+}
+
+#region Rental Application Use Cases
+public sealed record ListWardRentalApplicationsQuery(string? Status, int Page = 1) : IRequest<IReadOnlyList<WardRentalApplicationListItemDto>>;
+
+public sealed class ListWardRentalApplicationsQueryValidator : AbstractValidator<ListWardRentalApplicationsQuery>
+{
+    public ListWardRentalApplicationsQueryValidator()
+    {
+        RuleFor(x => x.Page).GreaterThan(0);
+    }
+}
+
+public sealed class ListWardRentalApplicationsQueryHandler(
+    IWardActorContext actorContext,
+    IWardComplianceService complianceService)
+    : IRequestHandler<ListWardRentalApplicationsQuery, IReadOnlyList<WardRentalApplicationListItemDto>>
+{
+    public async Task<IReadOnlyList<WardRentalApplicationListItemDto>> Handle(
+        ListWardRentalApplicationsQuery request,
+        CancellationToken cancellationToken)
+    {
+        var actor = await actorContext.RequireAsync(cancellationToken);
+        return await complianceService.ListRentalApplicationsAsync(actor, request.Status, request.Page, cancellationToken);
+    }
+}
+
+public sealed record GetWardRentalApplicationDetailQuery(long Id) : IRequest<WardRentalApplicationDetailDto>;
+
+public sealed class GetWardRentalApplicationDetailQueryValidator : AbstractValidator<GetWardRentalApplicationDetailQuery>
+{
+    public GetWardRentalApplicationDetailQueryValidator()
+    {
+        RuleFor(x => x.Id).GreaterThan(0);
+    }
+}
+
+public sealed class GetWardRentalApplicationDetailQueryHandler(
+    IWardActorContext actorContext,
+    IWardComplianceService complianceService)
+    : IRequestHandler<GetWardRentalApplicationDetailQuery, WardRentalApplicationDetailDto>
+{
+    public async Task<WardRentalApplicationDetailDto> Handle(
+        GetWardRentalApplicationDetailQuery request,
+        CancellationToken cancellationToken)
+    {
+        var actor = await actorContext.RequireAsync(cancellationToken);
+        return await complianceService.GetRentalApplicationDetailAsync(actor, request.Id, cancellationToken);
+    }
+}
+
+public sealed record DecideWardRentalApplicationCommand(
+    long Id,
+    WardRentalApplicationDecision Decision) : IRequest<WardRentalApplicationDetailDto>;
+
+public sealed class DecideWardRentalApplicationCommandValidator : AbstractValidator<DecideWardRentalApplicationCommand>
+{
+    public DecideWardRentalApplicationCommandValidator()
+    {
+        RuleFor(x => x.Id).GreaterThan(0);
+        RuleFor(x => x.Decision.Decision).Must(d => d is "APPROVE" or "REJECT")
+            .WithMessage("Quyết định phải là APPROVE hoặc REJECT.");
+        RuleFor(x => x.Decision.Reason)
+            .NotEmpty().WithMessage("Lý do quyết định không được để trống.")
+            .MaximumLength(500).WithMessage("Lý do quyết định không quá 500 ký tự.");
+        RuleFor(x => x.Decision.ExpectedStatus).NotEmpty().WithMessage("Thiếu trạng thái hồ sơ kỳ vọng.");
+    }
+}
+
+public sealed class DecideWardRentalApplicationCommandHandler(
+    IWardActorContext actorContext,
+    IWardComplianceService complianceService)
+    : IRequestHandler<DecideWardRentalApplicationCommand, WardRentalApplicationDetailDto>
+{
+    public async Task<WardRentalApplicationDetailDto> Handle(
+        DecideWardRentalApplicationCommand request,
+        CancellationToken cancellationToken)
+    {
+        var actor = await actorContext.RequireAsync(cancellationToken);
+        return await complianceService.DecideRentalApplicationAsync(actor, request.Id, request.Decision, cancellationToken);
+    }
+}
+#endregion
+
+#region Renewal Requests (WARD-09) Use Cases
+public sealed record ListWardRenewalsQuery(string? Status, int Page = 1) : IRequest<IReadOnlyList<WardRenewalListItemDto>>;
+
+public sealed class ListWardRenewalsQueryValidator : AbstractValidator<ListWardRenewalsQuery>
+{
+    public ListWardRenewalsQueryValidator()
+    {
+        RuleFor(x => x.Page).GreaterThan(0);
+    }
+}
+
+public sealed class ListWardRenewalsQueryHandler(
+    IWardActorContext actorContext,
+    IWardComplianceService complianceService)
+    : IRequestHandler<ListWardRenewalsQuery, IReadOnlyList<WardRenewalListItemDto>>
+{
+    public async Task<IReadOnlyList<WardRenewalListItemDto>> Handle(
+        ListWardRenewalsQuery request,
+        CancellationToken cancellationToken)
+    {
+        var actor = await actorContext.RequireAsync(cancellationToken);
+        return await complianceService.ListRenewalsAsync(actor, request.Status, request.Page, cancellationToken);
+    }
+}
+
+public sealed record GetWardRenewalDetailQuery(long Id) : IRequest<WardRenewalDetailDto>;
+
+public sealed class GetWardRenewalDetailQueryValidator : AbstractValidator<GetWardRenewalDetailQuery>
+{
+    public GetWardRenewalDetailQueryValidator()
+    {
+        RuleFor(x => x.Id).GreaterThan(0);
+    }
+}
+
+public sealed class GetWardRenewalDetailQueryHandler(
+    IWardActorContext actorContext,
+    IWardComplianceService complianceService)
+    : IRequestHandler<GetWardRenewalDetailQuery, WardRenewalDetailDto>
+{
+    public async Task<WardRenewalDetailDto> Handle(
+        GetWardRenewalDetailQuery request,
+        CancellationToken cancellationToken)
+    {
+        var actor = await actorContext.RequireAsync(cancellationToken);
+        return await complianceService.GetRenewalDetailAsync(actor, request.Id, cancellationToken);
+    }
+}
+
+public sealed record DecideWardRenewalCommand(
+    long Id,
+    WardRenewalDecision Decision) : IRequest<WardRenewalDetailDto>;
+
+public sealed class DecideWardRenewalCommandValidator : AbstractValidator<DecideWardRenewalCommand>
+{
+    public DecideWardRenewalCommandValidator()
+    {
+        RuleFor(x => x.Id).GreaterThan(0);
+        RuleFor(x => x.Decision.Decision).Must(d => d is "APPROVE" or "REJECT")
+            .WithMessage("Quyết định phải là APPROVE hoặc REJECT.");
+        RuleFor(x => x.Decision.Reason)
+            .NotEmpty().WithMessage("Lý do quyết định không được để trống.")
+            .MaximumLength(500).WithMessage("Lý do quyết định không quá 500 ký tự.");
+        RuleFor(x => x.Decision.ExpectedStatus).NotEmpty().WithMessage("Thiếu trạng thái hồ sơ kỳ vọng.");
+    }
+}
+
+public sealed class DecideWardRenewalCommandHandler(
+    IWardActorContext actorContext,
+    IWardComplianceService complianceService)
+    : IRequestHandler<DecideWardRenewalCommand, WardRenewalDetailDto>
+{
+    public async Task<WardRenewalDetailDto> Handle(
+        DecideWardRenewalCommand request,
+        CancellationToken cancellationToken)
+    {
+        var actor = await actorContext.RequireAsync(cancellationToken);
+        return await complianceService.DecideRenewalAsync(actor, request.Id, request.Decision, cancellationToken);
+    }
+}
+
+public sealed record BatchDecideWardRenewalsCommand(
+    WardRenewalBatchDecisionRequest Request) : IRequest<WardRenewalBatchDecisionResult>;
+
+public sealed class BatchDecideWardRenewalsCommandValidator : AbstractValidator<BatchDecideWardRenewalsCommand>
+{
+    public BatchDecideWardRenewalsCommandValidator()
+    {
+        RuleFor(x => x.Request.Items).NotEmpty().WithMessage("Danh sách hồ sơ không được để trống.");
+        RuleFor(x => x.Request.Items.Count).LessThanOrEqualTo(50).WithMessage("Số lượng hồ sơ duyệt cùng lúc tối đa là 50.");
+        RuleForEach(x => x.Request.Items).ChildRules(item =>
+        {
+            item.RuleFor(i => i.RenewalId).GreaterThan(0);
+            item.RuleFor(i => i.ExpectedStatus).NotEmpty().WithMessage("Thiếu trạng thái kỳ vọng của hồ sơ.");
+        });
+        RuleFor(x => x.Request.Decision).Must(d => d is "APPROVE" or "REJECT")
+            .WithMessage("Quyết định phải là APPROVE hoặc REJECT.");
+        RuleFor(x => x.Request.Reason)
+            .NotEmpty().WithMessage("Lý do quyết định không được để trống.")
+            .MaximumLength(500).WithMessage("Lý do quyết định không quá 500 ký tự.");
+    }
+}
+
+public sealed class BatchDecideWardRenewalsCommandHandler(
+    IWardActorContext actorContext,
+    IWardComplianceService complianceService)
+    : IRequestHandler<BatchDecideWardRenewalsCommand, WardRenewalBatchDecisionResult>
+{
+    public async Task<WardRenewalBatchDecisionResult> Handle(
+        BatchDecideWardRenewalsCommand request,
+        CancellationToken cancellationToken)
+    {
+        var actor = await actorContext.RequireAsync(cancellationToken);
+        return await complianceService.BatchDecideRenewalsAsync(actor, request.Request, cancellationToken);
+    }
+}
+#endregion
+
+#region On-site Inspection & Permit Use Cases
+public sealed record InspectWardPermitQuery(InspectWardPermitRequest Request) : IRequest<InspectWardPermitResult>;
+
+public sealed class InspectWardPermitQueryValidator : AbstractValidator<InspectWardPermitQuery>
+{
+    public InspectWardPermitQueryValidator()
+    {
+        RuleFor(x => x.Request.PermitCodeOrPayload).NotEmpty().WithMessage("Mã giấy phép hoặc payload QR không được để trống.");
+        RuleFor(x => x.Request.Latitude).InclusiveBetween(-90, 90).When(x => x.Request.Latitude.HasValue);
+        RuleFor(x => x.Request.Longitude).InclusiveBetween(-180, 180).When(x => x.Request.Longitude.HasValue);
+    }
+}
+
+public sealed class InspectWardPermitQueryHandler(
+    IWardActorContext actorContext,
+    IWardComplianceService complianceService)
+    : IRequestHandler<InspectWardPermitQuery, InspectWardPermitResult>
+{
+    public async Task<InspectWardPermitResult> Handle(
+        InspectWardPermitQuery request,
+        CancellationToken cancellationToken)
+    {
+        var actor = await actorContext.RequireAsync(cancellationToken);
+        return await complianceService.InspectPermitAsync(actor, request.Request, cancellationToken);
+    }
+}
+
+public sealed record ExecuteWardPermitActionCommand(
+    long PermitId,
+    WardPermitActionRequest Request) : IRequest<bool>;
+
+public sealed class ExecuteWardPermitActionCommandValidator : AbstractValidator<ExecuteWardPermitActionCommand>
+{
+    public ExecuteWardPermitActionCommandValidator()
+    {
+        RuleFor(x => x.PermitId).GreaterThan(0);
+        RuleFor(x => x.Request.Action).Must(a => a is "SUSPEND" or "REVOKE")
+            .WithMessage("Hành động phải là SUSPEND hoặc REVOKE.");
+        RuleFor(x => x.Request.Reason).NotEmpty().WithMessage("Lý do đình chỉ/thu hồi không được để trống.")
+            .MaximumLength(500).WithMessage("Lý do không quá 500 ký tự.");
+    }
+}
+
+public sealed class ExecuteWardPermitActionCommandHandler(
+    IWardActorContext actorContext,
+    IWardComplianceService complianceService)
+    : IRequestHandler<ExecuteWardPermitActionCommand, bool>
+{
+    public async Task<bool> Handle(
+        ExecuteWardPermitActionCommand request,
+        CancellationToken cancellationToken)
+    {
+        var actor = await actorContext.RequireAsync(cancellationToken);
+        return await complianceService.ExecutePermitActionAsync(actor, request.PermitId, request.Request, cancellationToken);
+    }
+}
+#endregion
+
+#region Violations & Sanctions Use Cases
+/// <summary>Rates in force on <paramref name="AsOf"/> (default: today, Vietnam time). Pass the violation
+/// date when sanctioning: the rate that applies is the one in force when the violation happened.</summary>
+public sealed record ListWardPenaltySchedulesQuery(DateOnly? AsOf = null) : IRequest<IReadOnlyList<PenaltyScheduleItemDto>>;
+
+public sealed class ListWardPenaltySchedulesQueryHandler(
+    IWardActorContext actorContext,
+    IWardComplianceService complianceService)
+    : IRequestHandler<ListWardPenaltySchedulesQuery, IReadOnlyList<PenaltyScheduleItemDto>>
+{
+    public async Task<IReadOnlyList<PenaltyScheduleItemDto>> Handle(
+        ListWardPenaltySchedulesQuery request,
+        CancellationToken cancellationToken)
+    {
+        var actor = await actorContext.RequireAsync(cancellationToken);
+        return await complianceService.ListPenaltySchedulesAsync(actor, request.AsOf, cancellationToken);
+    }
+}
+
+public sealed record ListWardViolationsQuery(string? Status, int Page = 1) : IRequest<IReadOnlyList<WardViolationListItemDto>>;
+
+public sealed class ListWardViolationsQueryValidator : AbstractValidator<ListWardViolationsQuery>
+{
+    public ListWardViolationsQueryValidator()
+    {
+        RuleFor(x => x.Page).GreaterThan(0);
+    }
+}
+
+public sealed class ListWardViolationsQueryHandler(
+    IWardActorContext actorContext,
+    IWardComplianceService complianceService)
+    : IRequestHandler<ListWardViolationsQuery, IReadOnlyList<WardViolationListItemDto>>
+{
+    public async Task<IReadOnlyList<WardViolationListItemDto>> Handle(
+        ListWardViolationsQuery request,
+        CancellationToken cancellationToken)
+    {
+        var actor = await actorContext.RequireAsync(cancellationToken);
+        return await complianceService.ListViolationsAsync(actor, request.Status, request.Page, cancellationToken);
+    }
+}
+
+public sealed record GetWardViolationDetailQuery(long Id) : IRequest<WardViolationDetailDto>;
+
+public sealed class GetWardViolationDetailQueryValidator : AbstractValidator<GetWardViolationDetailQuery>
+{
+    public GetWardViolationDetailQueryValidator()
+    {
+        RuleFor(x => x.Id).GreaterThan(0);
+    }
+}
+
+public sealed class GetWardViolationDetailQueryHandler(
+    IWardActorContext actorContext,
+    IWardComplianceService complianceService)
+    : IRequestHandler<GetWardViolationDetailQuery, WardViolationDetailDto>
+{
+    public async Task<WardViolationDetailDto> Handle(
+        GetWardViolationDetailQuery request,
+        CancellationToken cancellationToken)
+    {
+        var actor = await actorContext.RequireAsync(cancellationToken);
+        return await complianceService.GetViolationDetailAsync(actor, request.Id, cancellationToken);
+    }
+}
+
+public sealed record RecordWardViolationCommand(RecordWardViolationRequest Request) : IRequest<WardViolationDetailDto>;
+
+public sealed class RecordWardViolationCommandValidator : AbstractValidator<RecordWardViolationCommand>
+{
+    public RecordWardViolationCommandValidator()
+    {
+        RuleFor(x => x.Request.ViolationType).NotEmpty().WithMessage("Loại vi phạm không được để trống.");
+        RuleFor(x => x.Request.Description).NotEmpty().WithMessage("Mô tả vi phạm không được để trống.")
+            .MaximumLength(1000).WithMessage("Mô tả không quá 1000 ký tự.");
+        RuleFor(x => x.Request.ExplanationMethod)
+            .Must(m => m is "DIRECT" or "WRITTEN")
+            .When(x => x.Request.ExplanationRequired)
+            .WithMessage("Chọn hình thức giải trình (trực tiếp hoặc bằng văn bản).");
+        RuleFor(x => x.Request.WitnessRole)
+            .Must(r => r is "WITNESS" or "WARD_REPRESENTATIVE")
+            .When(x => x.Request.WitnessRole is not null)
+            .WithMessage("Vai trò người chứng kiến không hợp lệ.");
+    }
+}
+
+public sealed class RecordWardViolationCommandHandler(
+    IWardActorContext actorContext,
+    IWardComplianceService complianceService)
+    : IRequestHandler<RecordWardViolationCommand, WardViolationDetailDto>
+{
+    public async Task<WardViolationDetailDto> Handle(
+        RecordWardViolationCommand request,
+        CancellationToken cancellationToken)
+    {
+        var actor = await actorContext.RequireAsync(cancellationToken);
+        return await complianceService.RecordViolationAsync(actor, request.Request, cancellationToken);
+    }
+}
+
+public sealed record RecordWardExplanationCommand(
+    long ViolationId,
+    RecordExplanationRequest Request) : IRequest<WardViolationDetailDto>;
+
+public sealed class RecordWardExplanationCommandValidator : AbstractValidator<RecordWardExplanationCommand>
+{
+    public RecordWardExplanationCommandValidator()
+    {
+        RuleFor(x => x.ViolationId).GreaterThan(0);
+        RuleFor(x => x.Request.Content).NotEmpty().WithMessage("Nội dung giải trình không được để trống.")
+            .MaximumLength(1000).WithMessage("Nội dung giải trình không quá 1000 ký tự.");
+    }
+}
+
+public sealed class RecordWardExplanationCommandHandler(
+    IWardActorContext actorContext,
+    IWardComplianceService complianceService)
+    : IRequestHandler<RecordWardExplanationCommand, WardViolationDetailDto>
+{
+    public async Task<WardViolationDetailDto> Handle(RecordWardExplanationCommand request, CancellationToken ct)
+    {
+        var actor = await actorContext.RequireAsync(ct);
+        return await complianceService.RecordExplanationAsync(actor, request.ViolationId, request.Request, ct);
+    }
+}
+
+public sealed record DeliverWardViolationCommand(
+    long ViolationId,
+    DeliverViolationRequest Request) : IRequest<WardViolationDetailDto>;
+
+public sealed class DeliverWardViolationCommandValidator : AbstractValidator<DeliverWardViolationCommand>
+{
+    public DeliverWardViolationCommandValidator()
+    {
+        RuleFor(x => x.ViolationId).GreaterThan(0);
+        RuleFor(x => x.Request.RefusalReason).NotEmpty()
+            .When(x => x.Request.Refused)
+            .WithMessage("Ghi rõ lý do từ chối nhận biên bản.");
+        RuleFor(x => x.Request.DeliveredToName).NotEmpty()
+            .When(x => !x.Request.Refused)
+            .WithMessage("Ghi rõ tên người nhận biên bản.");
+    }
+}
+
+public sealed class DeliverWardViolationCommandHandler(
+    IWardActorContext actorContext,
+    IWardComplianceService complianceService)
+    : IRequestHandler<DeliverWardViolationCommand, WardViolationDetailDto>
+{
+    public async Task<WardViolationDetailDto> Handle(DeliverWardViolationCommand request, CancellationToken ct)
+    {
+        var actor = await actorContext.RequireAsync(ct);
+        return await complianceService.DeliverViolationAsync(actor, request.ViolationId, request.Request, ct);
+    }
+}
+
+public sealed record SanctionWardViolationCommand(
+    long ViolationId,
+    SanctionWardViolationRequest Request) : IRequest<WardViolationDetailDto>;
+
+public sealed class SanctionWardViolationCommandValidator : AbstractValidator<SanctionWardViolationCommand>
+{
+    public SanctionWardViolationCommandValidator()
+    {
+        RuleFor(x => x.ViolationId).GreaterThan(0);
+        RuleFor(x => x.Request.PenaltyScheduleId).GreaterThan(0).WithMessage("Phải chọn biểu khung phạt hợp lệ.");
+        RuleFor(x => x.Request.DecisionNumber).NotEmpty().WithMessage("Số quyết định xử phạt không được để trống.");
+    }
+}
+
+public sealed class SanctionWardViolationCommandHandler(
+    IWardActorContext actorContext,
+    IWardComplianceService complianceService)
+    : IRequestHandler<SanctionWardViolationCommand, WardViolationDetailDto>
+{
+    public async Task<WardViolationDetailDto> Handle(
+        SanctionWardViolationCommand request,
+        CancellationToken cancellationToken)
+    {
+        var actor = await actorContext.RequireAsync(cancellationToken);
+        return await complianceService.SanctionViolationAsync(actor, request.ViolationId, request.Request, cancellationToken);
+    }
+}
+
+public sealed record GenerateViolationDocumentQuery(long Id) : IRequest<WardViolationDocumentDto>;
+
+public sealed class GenerateViolationDocumentQueryValidator : AbstractValidator<GenerateViolationDocumentQuery>
+{
+    public GenerateViolationDocumentQueryValidator()
+    {
+        RuleFor(x => x.Id).GreaterThan(0);
+    }
+}
+
+public sealed class GenerateViolationDocumentQueryHandler(
+    IWardActorContext actorContext,
+    IWardComplianceService complianceService)
+    : IRequestHandler<GenerateViolationDocumentQuery, WardViolationDocumentDto>
+{
+    public async Task<WardViolationDocumentDto> Handle(
+        GenerateViolationDocumentQuery request,
+        CancellationToken cancellationToken)
+    {
+        var actor = await actorContext.RequireAsync(cancellationToken);
+        return await complianceService.GenerateViolationDocumentAsync(actor, request.Id, cancellationToken);
+    }
+}
+#endregion
+
+#region AI Assistance Queries
+/// <summary>
+/// Takes only a registration id -- never a client-supplied evidence list or declared
+/// name/address (an earlier draft did, and its FE/BE request shapes drifted out of sync as a
+/// result). The handler loads the registration's own stored evidence and checks biometric
+/// consent server-side, the same way GetEnrollmentDetailAsync's first-view backfill does.
+/// </summary>
+public sealed record GetAiDocumentExtractQuery(long RegistrationId) : IRequest<AiDocumentCheckResult>;
+
+public sealed class GetAiDocumentExtractQueryValidator : AbstractValidator<GetAiDocumentExtractQuery>
+{
+    public GetAiDocumentExtractQueryValidator()
+    {
+        RuleFor(x => x.RegistrationId).GreaterThan(0);
+    }
+}
+
+public sealed class GetAiDocumentExtractQueryHandler(
+    IWardActorContext actorContext,
+    IWardComplianceService complianceService)
+    : IRequestHandler<GetAiDocumentExtractQuery, AiDocumentCheckResult>
+{
+    public async Task<AiDocumentCheckResult> Handle(GetAiDocumentExtractQuery request, CancellationToken cancellationToken)
+    {
+        var actor = await actorContext.RequireAsync(cancellationToken);
+        return await complianceService.ReRunDocumentCheckAsync(actor, request.RegistrationId, cancellationToken);
+    }
+}
+
+/// <summary>
+/// An earlier draft had no ward-actor check at all, so any authenticated account -- not just a
+/// ward officer -- could spend AI credits here and have the server fetch an arbitrary http(s)
+/// URL on their behalf. SlotId is optional: when given, the slot's own stored width/length are
+/// used (SlotWidth/SlotLength from the client are ignored) and the result is logged against that
+/// slot; without it the client-supplied dimensions are used as before and the log is against the
+/// ward itself.
+/// </summary>
+public sealed record GetAiEncroachmentCheckQuery(
+    string PhotoUrl,
+    double? SlotWidth,
+    double? SlotLength,
+    long? SlotId = null) : IRequest<AiEncroachmentResult>;
+
+public sealed class GetAiEncroachmentCheckQueryValidator : AbstractValidator<GetAiEncroachmentCheckQuery>
+{
+    public GetAiEncroachmentCheckQueryValidator()
+    {
+        RuleFor(x => x.PhotoUrl).NotEmpty().MaximumLength(2000);
+    }
+}
+
+public sealed class GetAiEncroachmentCheckQueryHandler(
+    IWardActorContext actorContext,
+    IWardAiInsights insights) : IRequestHandler<GetAiEncroachmentCheckQuery, AiEncroachmentResult>
+{
+    public async Task<AiEncroachmentResult> Handle(GetAiEncroachmentCheckQuery request, CancellationToken cancellationToken)
+    {
+        // Ward officers only, and only photos we store ourselves (or an inline image): the URL is
+        // caller-supplied, so fetching anything else would be a server-side request forgery vector.
+        var actor = await actorContext.RequireAsync(cancellationToken);
+        if (!EvidenceFiles.TryParseUrl(request.PhotoUrl, out _, out _)
+            && request.PhotoUrl?.StartsWith("data:image/", StringComparison.OrdinalIgnoreCase) != true)
+        {
+            throw new DomainRuleException("Ảnh hiện trường phải được tải lên từ hệ thống.");
+        }
+
+        return await insights.CheckEncroachmentAsync(
+            actor, request.PhotoUrl, request.SlotWidth, request.SlotLength, request.SlotId, cancellationToken);
+    }
+}
+#endregion
+
+#region Insights Use Cases (rule-based, no LLM)
+public sealed record GetWardRiskQueueQuery : IRequest<IReadOnlyList<WardRiskQueueItemDto>>;
+
+public sealed class GetWardRiskQueueQueryHandler(
+    IWardActorContext actorContext,
+    IWardComplianceService complianceService)
+    : IRequestHandler<GetWardRiskQueueQuery, IReadOnlyList<WardRiskQueueItemDto>>
+{
+    public async Task<IReadOnlyList<WardRiskQueueItemDto>> Handle(
+        GetWardRiskQueueQuery request,
+        CancellationToken cancellationToken)
+    {
+        var actor = await actorContext.RequireAsync(cancellationToken);
+        return await complianceService.GetRiskQueueAsync(actor, cancellationToken);
+    }
+}
+
+public sealed record GetWardPatrolHeatmapQuery : IRequest<IReadOnlyList<WardPatrolHeatmapPointDto>>;
+
+public sealed class GetWardPatrolHeatmapQueryHandler(
+    IWardActorContext actorContext,
+    IWardComplianceService complianceService)
+    : IRequestHandler<GetWardPatrolHeatmapQuery, IReadOnlyList<WardPatrolHeatmapPointDto>>
+{
+    public async Task<IReadOnlyList<WardPatrolHeatmapPointDto>> Handle(
+        GetWardPatrolHeatmapQuery request,
+        CancellationToken cancellationToken)
+    {
+        var actor = await actorContext.RequireAsync(cancellationToken);
+        return await complianceService.GetPatrolHeatmapAsync(actor, cancellationToken);
+    }
+}
+#endregion
+
+public sealed record CheckWardFastTrackQuery(long Id) : IRequest<FastTrackCheckDto>;
+
+public sealed class CheckWardFastTrackQueryHandler(
+    IWardActorContext actorContext,
+    IWardComplianceService complianceService)
+    : IRequestHandler<CheckWardFastTrackQuery, FastTrackCheckDto>
+{
+    public async Task<FastTrackCheckDto> Handle(CheckWardFastTrackQuery request, CancellationToken cancellationToken)
+    {
+        var actor = await actorContext.RequireAsync(cancellationToken);
+        return await complianceService.CheckFastTrackAsync(actor, request.Id, cancellationToken);
+    }
+}

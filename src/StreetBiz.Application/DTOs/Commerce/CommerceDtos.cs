@@ -10,7 +10,8 @@ public sealed record MarketplaceMenuItemDto(
     decimal UnitPrice,
     string AvailabilityStatus,
     int CategoryId,
-    string CategoryName);
+    string CategoryName,
+    bool FoodSafetyCertified = false);
 
 public sealed record CartItemDto(
     long CartItemId,
@@ -28,7 +29,16 @@ public sealed record CartDto(
     string StorefrontName,
     string StorefrontStatus,
     IReadOnlyList<CartItemDto> Items,
-    decimal Subtotal);
+    decimal Subtotal)
+{
+    public string? StorefrontAddress { get; init; }
+
+    /// <summary>
+    /// Set while an order from this cart awaits payment. The cart cannot be edited until
+    /// that order is paid or cancelled, so the client shows a way to do either.
+    /// </summary>
+    public long? PendingOrderId { get; init; }
+}
 
 public sealed record OrderItemDto(
     long OrderItemId,
@@ -36,7 +46,10 @@ public sealed record OrderItemDto(
     string ItemName,
     decimal UnitPrice,
     int Quantity,
-    string? Note);
+    string? Note)
+{
+    public decimal LineTotal => UnitPrice * Quantity;
+}
 
 public sealed record OrderHistoryDto(
     long HistoryId,
@@ -44,6 +57,12 @@ public sealed record OrderHistoryDto(
     string ToStatus,
     string? Note,
     DateTime ChangedAt);
+
+public sealed record OrderStorefrontDto(
+    long StorefrontId,
+    string StorefrontName,
+    string? ImageUrl,
+    string? Address);
 
 public sealed record OrderDto(
     long OrderId,
@@ -67,7 +86,61 @@ public sealed record OrderDto(
     DateTime? CompletedAt,
     DateTime CreatedAt,
     IReadOnlyList<OrderItemDto> Items,
-    IReadOnlyList<OrderHistoryDto> History);
+    IReadOnlyList<OrderHistoryDto> History)
+{
+    public string? StorefrontImageUrl { get; init; }
+    public string? StorefrontAddress { get; init; }
+    public OrderStorefrontDto Storefront => new(
+        StorefrontId, StorefrontName, StorefrontImageUrl, StorefrontAddress);
+    public IReadOnlyList<OrderHistoryDto> StatusHistory => History;
+}
+
+public sealed record CheckoutPaymentDto(
+    long TransactionId,
+    string Provider,
+    decimal Amount,
+    string Status,
+    string PaymentUrl);
+
+public sealed record CheckoutDto(
+    long OrderId,
+    string OrderCode,
+    string OrderStatus,
+    long PaymentTransactionId,
+    string Provider,
+    decimal Amount,
+    string PaymentUrl);
+
+public sealed record PaymentCallbackReceiptDto(
+    string Result,
+    long CallbackEventId,
+    long? TransactionId,
+    long? OrderId,
+    string? OrderStatus);
+
+public sealed record PagedResultDto<T>(
+    IReadOnlyList<T> Items,
+    int Page,
+    int PageSize,
+    int TotalItems,
+    int TotalPages);
+
+public sealed record SalesBucketDto(
+    string Key,
+    int CompletedOrderCount,
+    decimal GrossSales,
+    decimal RefundedAmount,
+    decimal NetSales);
+
+public sealed record DetailedSalesSummaryDto(
+    DateTime FromDate,
+    DateTime ToDate,
+    string GroupBy,
+    int CompletedOrderCount,
+    decimal GrossSales,
+    decimal RefundedAmount,
+    decimal NetSales,
+    IReadOnlyList<SalesBucketDto> Buckets);
 
 public sealed record SalesSummaryDto(
     string Period,
@@ -78,3 +151,14 @@ public sealed record SalesSummaryDto(
     decimal RefundedAmount,
     decimal NetSales,
     IReadOnlyList<OrderDto> Orders);
+
+/// <summary>ORD-06: what the customer shows at the stall to collect an order.</summary>
+public sealed record OrderPickupCodeDto(
+    long OrderId,
+    string OrderCode,
+    string OrderStatus,
+    string StorefrontName,
+    // The signed payload the client renders as a QR image.
+    string Token,
+    // The same proof, short enough to read out when a camera is not an option.
+    string ShortCode);

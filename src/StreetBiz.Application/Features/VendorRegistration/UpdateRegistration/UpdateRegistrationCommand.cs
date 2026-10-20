@@ -8,7 +8,9 @@ using StreetBiz.Application.DTOs.VendorRegistration;
 
 namespace StreetBiz.Application.Features.VendorRegistration.UpdateRegistration;
 
-/// <summary>REG-04: edit an editable registration and re-submit it for review.</summary>
+/// <summary>REG-04: edit an editable registration and re-submit it for review. Field set mirrors
+/// SubmitRegistrationCommand -- see its remarks for why (Mẫu số 01 Phụ lục II, Thông tư
+/// 68/2025/TT-BTC).</summary>
 public sealed record UpdateRegistrationCommand(
     long RegistrationId,
     string VendorType,
@@ -16,25 +18,25 @@ public sealed record UpdateRegistrationCommand(
     string? DeclaredAddress,
     decimal? AddressLatitude,
     decimal? AddressLongitude,
-    int WardUnitId) : IRequest<BusinessRegistrationDto>;
+    int WardUnitId,
+    DateOnly? OwnerDateOfBirth = null,
+    string? OwnerGender = null,
+    string? OwnerEthnicity = null,
+    string? OwnerNationality = null,
+    string? IdType = null,
+    DateOnly? IdIssuedDate = null,
+    string? IdIssuedPlace = null,
+    string? PermanentAddress = null,
+    string? ContactAddress = null,
+    string? BusinessLine = null,
+    string? BusinessLineCode = null,
+    decimal? CapitalAmount = null,
+    int? LaborCount = null,
+    DateOnly? PlannedStartDate = null,
+    bool FoodSafetyCommitment = false,
+    IReadOnlyList<NewHouseholdMember>? HouseholdMembers = null) : IRequest<BusinessRegistrationDto>, IRegistrationFields;
 
-public sealed class UpdateRegistrationCommandValidator : AbstractValidator<UpdateRegistrationCommand>
-{
-    public UpdateRegistrationCommandValidator()
-    {
-        RuleFor(x => x.VendorType)
-            .Must(t => VendorTypes.All.Contains(t))
-            .WithMessage(RegMessages.SelectVendorType);
-        RuleFor(x => x.DisplayName)
-            .NotEmpty().WithMessage("Business/display name is required.")
-            .MaximumLength(180).WithMessage("Business/display name must be 180 characters or fewer.");
-        RuleFor(x => x.DeclaredAddress)
-            .NotEmpty()
-            .When(x => x.VendorType == VendorTypes.FixedStorefront)
-            .WithMessage(RegMessages.FixedNeedsAddress);
-        RuleFor(x => x.WardUnitId).GreaterThan(0).WithMessage(AppMessages.InvalidWard);
-    }
-}
+public sealed class UpdateRegistrationCommandValidator : RegistrationFieldsValidator<UpdateRegistrationCommand>;
 
 public sealed class UpdateRegistrationCommandHandler(
     IVendorContext vendorContext,
@@ -49,7 +51,7 @@ public sealed class UpdateRegistrationCommandHandler(
         if (!RegistrationStatuses.Editable.Contains(registration.RegistrationStatus))
         {
             throw new DomainRuleException(
-                string.Format(RegMessages.NotEditable, registration.RegistrationStatus));
+                string.Format(RegMessages.NotEditable, RegMessages.StatusWord(registration.RegistrationStatus)));
         }
 
         await units.EnsureWardAsync(request.WardUnitId, cancellationToken);
@@ -64,7 +66,11 @@ public sealed class UpdateRegistrationCommandHandler(
 
         var data = new NewBizRegistration(
             request.VendorType, request.DisplayName, request.DeclaredAddress,
-            request.AddressLatitude, request.AddressLongitude, request.WardUnitId);
+            request.AddressLatitude, request.AddressLongitude, request.WardUnitId,
+            request.OwnerDateOfBirth, request.OwnerGender, request.OwnerEthnicity, request.OwnerNationality,
+            request.IdType, request.IdIssuedDate, request.IdIssuedPlace, request.PermanentAddress, request.ContactAddress,
+            request.BusinessLine, request.BusinessLineCode, request.CapitalAmount, request.LaborCount, request.PlannedStartDate,
+            request.FoodSafetyCommitment, request.HouseholdMembers);
 
         await repository.UpdateAndResubmitAsync(request.RegistrationId, data, cancellationToken);
 

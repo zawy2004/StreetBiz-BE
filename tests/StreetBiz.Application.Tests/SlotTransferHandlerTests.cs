@@ -18,6 +18,8 @@ public sealed class SlotTransferHandlerTests
     private const long ContractId = 600;
     private const long TransferId = 900;
     private const string ReceiverPhone = "0905123456";
+    private static readonly DateOnly ContractStart = new(2026, 9, 1);
+    private static readonly DateOnly ContractEnd = new(2026, 12, 1);
 
     private readonly Mock<IVendorContext> vendorContext = new();
     private readonly Mock<IVendorRepository> vendors = new();
@@ -147,13 +149,17 @@ public sealed class SlotTransferHandlerTests
             .ReturnsAsync(TransferId);
         transfers.Setup(t => t.GetByIdAsync(TransferId, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new SlotTransferRequestRow(TransferId, ContractId, VendorId, ReceiverVendorId,
-                TransferStatuses.Pending, DateTime.UtcNow, null, null, null));
+                TransferStatuses.Pending, DateTime.UtcNow, null, null, null, "HQ-DH-01", "Zone", ContractStart, ContractEnd));
 
         var command = new RequestTransferCommand(ContractId, ReceiverPhone);
         var result = await RequestHandler().Handle(command, CancellationToken.None);
 
         result.TransferId.Should().Be(TransferId);
         result.TransferStatus.Should().Be(TransferStatuses.Pending);
+        result.SlotCode.Should().Be("HQ-DH-01");
+        result.ZoneName.Should().Be("Zone");
+        result.ContractStartDate.Should().Be(ContractStart);
+        result.ContractEndDate.Should().Be(ContractEnd);
     }
 
     [Fact]
@@ -162,7 +168,7 @@ public sealed class SlotTransferHandlerTests
         vendorContext.Setup(v => v.RequireVendorIdAsync(It.IsAny<CancellationToken>())).ReturnsAsync(OtherVendorId);
         transfers.Setup(t => t.GetByIdAsync(TransferId, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new SlotTransferRequestRow(TransferId, ContractId, VendorId, ReceiverVendorId,
-                TransferStatuses.Pending, DateTime.UtcNow, null, null, null));
+                TransferStatuses.Pending, DateTime.UtcNow, null, null, null, "HQ-DH-01", "Zone", ContractStart, ContractEnd));
 
         var handler = new AcceptTransferCommandHandler(vendorContext.Object, transfers.Object, clock.Object);
 
@@ -178,7 +184,7 @@ public sealed class SlotTransferHandlerTests
         vendorContext.Setup(v => v.RequireVendorIdAsync(It.IsAny<CancellationToken>())).ReturnsAsync(ReceiverVendorId);
         transfers.Setup(t => t.GetByIdAsync(TransferId, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new SlotTransferRequestRow(TransferId, ContractId, VendorId, ReceiverVendorId,
-                TransferStatuses.AcceptedByReceiver, DateTime.UtcNow, DateTime.UtcNow, null, null));
+                TransferStatuses.AcceptedByReceiver, DateTime.UtcNow, DateTime.UtcNow, null, null, "HQ-DH-01", "Zone", ContractStart, ContractEnd));
 
         var handler = new AcceptTransferCommandHandler(vendorContext.Object, transfers.Object, clock.Object);
 
@@ -192,7 +198,7 @@ public sealed class SlotTransferHandlerTests
         vendorContext.Setup(v => v.RequireVendorIdAsync(It.IsAny<CancellationToken>())).ReturnsAsync(ReceiverVendorId);
         transfers.Setup(t => t.GetByIdAsync(TransferId, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new SlotTransferRequestRow(TransferId, ContractId, VendorId, ReceiverVendorId,
-                TransferStatuses.Pending, DateTime.UtcNow, null, null, null));
+                TransferStatuses.Pending, DateTime.UtcNow, null, null, null, "HQ-DH-01", "Zone", ContractStart, ContractEnd));
 
         var handler = new AcceptTransferCommandHandler(vendorContext.Object, transfers.Object, clock.Object);
         await handler.Handle(new AcceptTransferCommand(TransferId), CancellationToken.None);
@@ -206,7 +212,7 @@ public sealed class SlotTransferHandlerTests
         vendorContext.Setup(v => v.RequireVendorIdAsync(It.IsAny<CancellationToken>())).ReturnsAsync(ReceiverVendorId);
         transfers.Setup(t => t.GetByIdAsync(TransferId, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new SlotTransferRequestRow(TransferId, ContractId, VendorId, ReceiverVendorId,
-                TransferStatuses.Pending, DateTime.UtcNow, null, null, null));
+                TransferStatuses.Pending, DateTime.UtcNow, null, null, null, "HQ-DH-01", "Zone", ContractStart, ContractEnd));
 
         var handler = new DeclineTransferCommandHandler(vendorContext.Object, transfers.Object);
         await handler.Handle(new DeclineTransferCommand(TransferId), CancellationToken.None);

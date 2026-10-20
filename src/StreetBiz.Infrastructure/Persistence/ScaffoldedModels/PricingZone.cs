@@ -35,6 +35,18 @@ public partial class PricingZone
 
     public DateOnly? application_deadline { get; set; }
 
+    public string price_display_unit { get; set; } = null!;
+
+    public decimal? price_per_month { get; set; }
+
+    public string rental_mode { get; set; } = null!;
+
+    public DateOnly? event_start_date { get; set; }
+
+    public DateOnly? event_end_date { get; set; }
+
+    public decimal? quarter_discount_percent { get; set; }
+
     public virtual AdministrativeUnit? AdministrativeUnit { get; set; }
 
     public virtual ICollection<SidewalkSlot> SidewalkSlots { get; set; } = new List<SidewalkSlot>();

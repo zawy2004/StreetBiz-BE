@@ -40,6 +40,37 @@ public sealed class RenewalRequestRepository(StreetBizDbContext dbContext) : IRe
             .Select(ToRowExpression)
             .ToListAsync(cancellationToken);
 
+    public async Task<bool> WithdrawAsync(long renewalId, CancellationToken cancellationToken)
+    {
+        var entity = await dbContext.RenewalRequests
+            .FirstOrDefaultAsync(r => r.renewal_id == renewalId, cancellationToken);
+        if (entity is null || !RenewalStatuses.Open.Contains(entity.renewal_status))
+        {
+            return false;
+        }
+
+        entity.renewal_status = RenewalStatuses.Withdrawn;
+        await dbContext.SaveChangesAsync(cancellationToken);
+        return true;
+    }
+
+    public async Task CloseOpenForContractAsync(long contractId, CancellationToken cancellationToken)
+    {
+        var open = await dbContext.RenewalRequests
+            .Where(r => r.contract_id == contractId && RenewalStatuses.Open.Contains(r.renewal_status))
+            .ToListAsync(cancellationToken);
+        if (open.Count == 0)
+        {
+            return;
+        }
+
+        foreach (var r in open)
+        {
+            r.renewal_status = RenewalStatuses.Withdrawn;
+        }
+        await dbContext.SaveChangesAsync(cancellationToken);
+    }
+
     private static readonly System.Linq.Expressions.Expression<Func<RenewalRequest, RenewalRequestRow>> ToRowExpression =
         r => new RenewalRequestRow(
             r.renewal_id, r.contract_id, r.requested_term_days, r.renewal_status,

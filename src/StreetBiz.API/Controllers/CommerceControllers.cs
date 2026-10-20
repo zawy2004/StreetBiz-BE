@@ -1,8 +1,13 @@
 using MediatR;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 using StreetBiz.Application.DTOs.Commerce;
+using StreetBiz.Application.Common.Exceptions;
+using StreetBiz.Application.Common.Security;
 using StreetBiz.Application.Features.Commerce;
+using StreetBiz.Application.Features.Commerce.OrderTracking;
+using StreetBiz.API.Hubs;
 
 namespace StreetBiz.API.Controllers;
 
@@ -112,19 +117,50 @@ public sealed class CartController(ISender sender) : ControllerBase
 public sealed class OrdersController(
     ISender sender,
     IHostEnvironment environment,
-    IConfiguration configuration) : ControllerBase
+    IConfiguration configuration,
+    IOrderRealtimePublisher realtime) : ControllerBase
 {
+    [HttpPost("checkout")]
+    public async Task<ActionResult<CheckoutDto>> Checkout(
+        CheckoutOrderRequest request,
+        [FromHeader(Name = "Idempotency-Key")] string idempotencyKey,
+        CancellationToken cancellationToken)
+    {
+        var result = await sender.Send(new CheckoutOrderCommand(
+            request.CartId, request.Provider, idempotencyKey, request.Location), cancellationToken);
+        await realtime.PublishAsync(result.OrderId, result.OrderStatus, cancellationToken);
+        return Ok(result);
+    }
+
     [HttpGet]
     public async Task<ActionResult<IReadOnlyList<OrderDto>>> List(
         CancellationToken cancellationToken) =>
         Ok(await sender.Send(new ListCustomerOrdersQuery(), cancellationToken));
 
+    [HttpGet("me")]
+    public async Task<ActionResult<PagedResultDto<OrderDto>>> ListMine(
+        [FromQuery] string? status,
+        [FromQuery] int page = 1,
+        [FromQuery] int pageSize = 20,
+        [FromQuery] DateTime? fromDate = null,
+        [FromQuery] DateTime? toDate = null,
+        [FromQuery] string sort = "createdAt_desc",
+        CancellationToken cancellationToken = default)
+    {
+        var orders = await sender.Send(new ListCustomerOrdersQuery(), cancellationToken);
+        return Ok(OrderApiPaging.Filter(orders, status, page, pageSize, fromDate, toDate, sort));
+    }
+
     [HttpPost]
     public async Task<ActionResult<OrderDto>> Place(
         PlaceOrderRequest request,
-        CancellationToken cancellationToken) =>
-        Ok(await sender.Send(new PlacePrepaidOrderCommand(
-            request.Provider, request.IdempotencyKey), cancellationToken));
+        CancellationToken cancellationToken)
+    {
+        var result = await sender.Send(new PlacePrepaidOrderCommand(
+            request.Provider, request.IdempotencyKey, request.Location), cancellationToken);
+        await realtime.PublishAsync(result, cancellationToken);
+        return Ok(result);
+    }
 
     [HttpGet("{orderId:long}")]
     public async Task<ActionResult<OrderDto>> Get(
@@ -135,18 +171,37 @@ public sealed class OrdersController(
     [HttpPost("{orderId:long}/cancel")]
     public async Task<ActionResult<OrderDto>> Cancel(
         long orderId,
-        ExpectedOrderStatusRequest request,
-        CancellationToken cancellationToken) =>
-        Ok(await sender.Send(new CancelCustomerOrderCommand(
-            orderId, request.ExpectedStatus), cancellationToken));
+        ExpectedOrderStatusRequest? request,
+        CancellationToken cancellationToken)
+    {
+        var expected = request?.ExpectedStatus
+            ?? (await sender.Send(new GetCustomerOrderQuery(orderId), cancellationToken)).OrderStatus;
+        var result = await sender.Send(new CancelCustomerOrderCommand(
+            orderId, expected), cancellationToken);
+        await realtime.PublishAsync(result, cancellationToken);
+        return Ok(result);
+    }
 
-    [HttpPost("{orderId:long}/confirm-pickup")]
-    public async Task<ActionResult<OrderDto>> ConfirmPickup(
+    /// <summary>ORD-06: the signed code the buyer shows at the stall to collect.</summary>
+    [HttpGet("{orderId:long}/pickup-code")]
+    public async Task<ActionResult<OrderPickupCodeDto>> PickupCode(
         long orderId,
-        ExpectedOrderStatusRequest request,
         CancellationToken cancellationToken) =>
-        Ok(await sender.Send(new ConfirmCustomerPickupCommand(
-            orderId, request.ExpectedStatus), cancellationToken));
+        Ok(await sender.Send(new GetOrderPickupCodeQuery(orderId), cancellationToken));
+
+    /// <summary>
+    /// Called when the buyer returns from the payment page: the backend asks the provider
+    /// for the real transaction state. Never trusts the return URL's query string.
+    /// </summary>
+    [HttpPost("{orderId:long}/payment/sync")]
+    public async Task<ActionResult<OrderDto>> SyncPayment(
+        long orderId,
+        CancellationToken cancellationToken)
+    {
+        var result = await sender.Send(new SyncOrderPaymentCommand(orderId), cancellationToken);
+        await realtime.PublishAsync(result, cancellationToken);
+        return Ok(result);
+    }
 
     [HttpPost("{orderId:long}/payment/sandbox-confirm")]
     [ApiExplorerSettings(IgnoreApi = true)]
@@ -160,15 +215,52 @@ public sealed class OrdersController(
             return NotFound();
         }
 
-        return Ok(await sender.Send(
-            new ConfirmSandboxOrderPaymentCommand(orderId), cancellationToken));
+        var result = await sender.Send(
+            new ConfirmSandboxOrderPaymentCommand(orderId), cancellationToken);
+        await realtime.PublishAsync(result, cancellationToken);
+        return Ok(result);
+    }
+}
+
+[ApiController]
+[AllowAnonymous]
+[Route("api/payments")]
+public sealed class PaymentCallbacksController(
+    ISender sender,
+    IOrderRealtimePublisher realtime) : ControllerBase
+{
+    [HttpPost("{provider}/callback")]
+    public async Task<ActionResult<PaymentCallbackReceiptDto>> Callback(
+        string provider,
+        CancellationToken cancellationToken)
+    {
+        using var reader = new StreamReader(Request.Body);
+        var rawPayload = await reader.ReadToEndAsync(cancellationToken);
+        var signature = Request.Headers["X-Payment-Signature"].FirstOrDefault();
+        var result = await sender.Send(
+            new ProcessPaymentCallbackCommand(provider, rawPayload, signature),
+            cancellationToken);
+        if (result.OrderId is { } orderId && result.OrderStatus is { } orderStatus)
+        {
+            await realtime.PublishAsync(orderId, orderStatus, cancellationToken);
+        }
+
+        // MoMo's IPN contract: acknowledge with 204 No Content, or it keeps retrying.
+        if (string.Equals(provider, "momo", StringComparison.OrdinalIgnoreCase))
+        {
+            return NoContent();
+        }
+
+        return Ok(result);
     }
 }
 
 [ApiController]
 [Authorize]
 [Route("api/seller/orders")]
-public sealed class SellerOrdersController(ISender sender) : ControllerBase
+public sealed class SellerOrdersController(
+    ISender sender,
+    IOrderRealtimePublisher realtime) : ControllerBase
 {
     [HttpGet]
     public async Task<ActionResult<IReadOnlyList<OrderDto>>> List(
@@ -186,30 +278,25 @@ public sealed class SellerOrdersController(ISender sender) : ControllerBase
     public async Task<ActionResult<OrderDto>> Decide(
         long orderId,
         SellerOrderDecisionRequest request,
-        CancellationToken cancellationToken) =>
-        Ok(await sender.Send(new DecideSellerOrderCommand(
-            orderId,
-            request.Decision,
-            request.Reason,
-            request.ExpectedStatus), cancellationToken));
+        CancellationToken cancellationToken)
+    {
+        var result = await sender.Send(new DecideSellerOrderCommand(
+            orderId, request.Decision, request.Reason, request.ExpectedStatus), cancellationToken);
+        await realtime.PublishAsync(result, cancellationToken);
+        return Ok(result);
+    }
 
     [HttpPost("{orderId:long}/status")]
     public async Task<ActionResult<OrderDto>> UpdateStatus(
         long orderId,
         SellerOrderStatusRequest request,
-        CancellationToken cancellationToken) =>
-        Ok(await sender.Send(new UpdateSellerOrderStatusCommand(
-            orderId,
-            request.TargetStatus,
-            request.ExpectedStatus), cancellationToken));
-
-    [HttpPost("{orderId:long}/handover")]
-    public async Task<ActionResult<OrderDto>> ConfirmHandover(
-        long orderId,
-        ExpectedOrderStatusRequest request,
-        CancellationToken cancellationToken) =>
-        Ok(await sender.Send(new ConfirmSellerHandoverCommand(
-            orderId, request.ExpectedStatus), cancellationToken));
+        CancellationToken cancellationToken)
+    {
+        var result = await sender.Send(new UpdateSellerOrderStatusCommand(
+            orderId, request.TargetStatus, request.ExpectedStatus), cancellationToken);
+        await realtime.PublishAsync(result, cancellationToken);
+        return Ok(result);
+    }
 
     [HttpGet("sales-summary")]
     public async Task<ActionResult<SalesSummaryDto>> SalesSummary(
@@ -218,9 +305,261 @@ public sealed class SellerOrdersController(ISender sender) : ControllerBase
         Ok(await sender.Send(new GetSalesSummaryQuery(period), cancellationToken));
 }
 
+[ApiController]
+[Authorize]
+[Route("api/vendor/orders")]
+public sealed class VendorOrdersController(
+    ISender sender,
+    IOrderRealtimePublisher realtime) : ControllerBase
+{
+    [HttpGet]
+    public async Task<ActionResult<PagedResultDto<OrderDto>>> List(
+        [FromQuery] string? status,
+        [FromQuery] int page = 1,
+        [FromQuery] int pageSize = 20,
+        [FromQuery] DateTime? fromDate = null,
+        [FromQuery] DateTime? toDate = null,
+        [FromQuery] string sort = "createdAt_desc",
+        CancellationToken cancellationToken = default)
+    {
+        // One status is filtered in the database; a list is filtered while paging.
+        var single = status is null || status.Contains(',') ? null : status;
+        var orders = await sender.Send(new ListSellerOrdersQuery(single), cancellationToken);
+        return Ok(OrderApiPaging.Filter(
+            orders, single is null ? status : null, page, pageSize, fromDate, toDate, sort));
+    }
+
+    [HttpGet("{orderId:long}")]
+    public async Task<ActionResult<OrderDto>> Get(
+        long orderId,
+        CancellationToken cancellationToken) =>
+        Ok(await sender.Send(new GetSellerOrderQuery(orderId), cancellationToken));
+
+    [HttpPost("{orderId:long}/accept")]
+    public async Task<ActionResult<OrderDto>> Accept(
+        long orderId,
+        CancellationToken cancellationToken)
+    {
+        var result = await sender.Send(new DecideSellerOrderCommand(
+            orderId, SellerOrderDecisions.Accept, null, OrderStatuses.Placed), cancellationToken);
+        await realtime.PublishAsync(result, cancellationToken);
+        return Ok(result);
+    }
+
+    [HttpPost("{orderId:long}/reject")]
+    public async Task<ActionResult<OrderDto>> Reject(
+        long orderId,
+        VendorRejectOrderRequest request,
+        CancellationToken cancellationToken)
+    {
+        var result = await sender.Send(new DecideSellerOrderCommand(
+            orderId, SellerOrderDecisions.Reject, request.Reason, OrderStatuses.Placed), cancellationToken);
+        await realtime.PublishAsync(result, cancellationToken);
+        return Ok(result);
+    }
+
+    [HttpPost("{orderId:long}/preparing")]
+    public async Task<ActionResult<OrderDto>> Preparing(
+        long orderId,
+        CancellationToken cancellationToken)
+    {
+        var result = await sender.Send(new UpdateSellerOrderStatusCommand(
+            orderId, OrderStatuses.Preparing, OrderStatuses.Accepted), cancellationToken);
+        await realtime.PublishAsync(result, cancellationToken);
+        return Ok(result);
+    }
+
+    [HttpPost("{orderId:long}/ready-for-pickup")]
+    public async Task<ActionResult<OrderDto>> ReadyForPickup(
+        long orderId,
+        CancellationToken cancellationToken)
+    {
+        var result = await sender.Send(new UpdateSellerOrderStatusCommand(
+            orderId, OrderStatuses.ReadyForPickup, OrderStatuses.Preparing), cancellationToken);
+        await realtime.PublishAsync(result, cancellationToken);
+        return Ok(result);
+    }
+
+    /// <summary>
+    /// ORD-06: hand the order over by scanning the buyer's code. The order is
+    /// identified by the code itself, so there is no order id in the route - a
+    /// seller scanning somebody else's code gets a refusal, not another order.
+    /// </summary>
+    [HttpPost("pickup-scan")]
+    public async Task<ActionResult<OrderDto>> PickupScan(
+        ScanOrderPickupRequest request,
+        CancellationToken cancellationToken)
+    {
+        var result = await sender.Send(new ScanOrderPickupCommand(request.Token), cancellationToken);
+        await realtime.PublishAsync(result, cancellationToken);
+        return Ok(result);
+    }
+
+    /// <summary>ORD-06 fallback: hand over using the code the buyer reads out.</summary>
+    [EnableRateLimiting("PickupCode")]
+    [HttpPost("pickup-confirm")]
+    public async Task<ActionResult<OrderDto>> PickupConfirm(
+        ConfirmPickupByCodeRequest request,
+        CancellationToken cancellationToken)
+    {
+        var result = await sender.Send(
+            new ConfirmPickupByCodeCommand(request.Code), cancellationToken);
+        await realtime.PublishAsync(result, cancellationToken);
+        return Ok(result);
+    }
+
+    /// <summary>
+    /// ORD-06 last resort: hand over with no code at all. The reason is
+    /// mandatory and is written into the order's status history, which the
+    /// buyer sees - that record is the whole price of skipping the code.
+    /// </summary>
+    [EnableRateLimiting("PickupCode")]
+    [HttpPost("{orderId:long}/handover-without-code")]
+    public async Task<ActionResult<OrderDto>> HandoverWithoutCode(
+        long orderId,
+        HandoverWithoutCodeRequest request,
+        CancellationToken cancellationToken)
+    {
+        var result = await sender.Send(
+            new ConfirmHandoverWithoutCodeCommand(orderId, request.Reason), cancellationToken);
+        await realtime.PublishAsync(result, cancellationToken);
+        return Ok(result);
+    }
+
+    [HttpGet("sales-summary")]
+    public async Task<ActionResult<DetailedSalesSummaryDto>> SalesSummary(
+        [FromQuery] DateTime? fromDate,
+        [FromQuery] DateTime? toDate,
+        [FromQuery] string groupBy = "day",
+        CancellationToken cancellationToken = default)
+    {
+        var to = DateTime.SpecifyKind(toDate ?? DateTime.UtcNow, DateTimeKind.Utc);
+        var from = DateTime.SpecifyKind(fromDate ?? to.AddDays(-30), DateTimeKind.Utc);
+        if (from > to || groupBy.ToLowerInvariant() is not ("day" or "week" or "month"))
+        {
+            throw new ValidationAppException(new Dictionary<string, string[]>
+            {
+                ["dateRange"] = ["fromDate must not exceed toDate; groupBy must be day, week or month."]
+            });
+        }
+
+        var orders = (await sender.Send(
+                new ListSellerOrdersQuery(OrderStatuses.Completed), cancellationToken))
+            .Where(order => order.CompletedAt >= from && order.CompletedAt <= to)
+            .ToArray();
+        var groups = orders.GroupBy(order => GroupKey(
+                order.CompletedAt!.Value, groupBy.ToLowerInvariant()))
+            .OrderBy(group => group.Key)
+            .Select(group =>
+            {
+                var gross = group.Sum(order => order.TotalAmount);
+                var refunded = group.Where(order => order.RefundStatus == "SUCCESS")
+                    .Sum(order => order.RefundAmount ?? 0);
+                return new SalesBucketDto(
+                    group.Key, group.Count(), gross, refunded, gross - refunded);
+            }).ToArray();
+        var gross = orders.Sum(order => order.TotalAmount);
+        var refunded = orders.Where(order => order.RefundStatus == "SUCCESS")
+            .Sum(order => order.RefundAmount ?? 0);
+        return Ok(new DetailedSalesSummaryDto(
+            from, to, groupBy.ToLowerInvariant(), orders.Length,
+            gross, refunded, gross - refunded, groups));
+    }
+
+    private static string GroupKey(DateTime value, string groupBy)
+    {
+        var utc = DateTime.SpecifyKind(value, DateTimeKind.Utc);
+        if (groupBy == "month")
+        {
+            return utc.ToString("yyyy-MM");
+        }
+        if (groupBy == "week")
+        {
+            var monday = utc.Date.AddDays(-(((int)utc.DayOfWeek + 6) % 7));
+            return monday.ToString("yyyy-MM-dd");
+        }
+        return utc.ToString("yyyy-MM-dd");
+    }
+}
+
+public static class OrderApiPaging
+{
+    public static PagedResultDto<OrderDto> Filter(
+        IReadOnlyList<OrderDto> source,
+        string? status,
+        int page,
+        int pageSize,
+        DateTime? fromDate,
+        DateTime? toDate,
+        string sort)
+    {
+        if (page < 1 || pageSize is < 1 or > 100
+            || (fromDate.HasValue && toDate.HasValue && fromDate > toDate))
+        {
+            throw new ValidationAppException(new Dictionary<string, string[]>
+            {
+                ["pagination"] = ["page >= 1, pageSize between 1 and 100, and fromDate <= toDate are required."]
+            });
+        }
+
+        IEnumerable<OrderDto> query = source;
+        if (!string.IsNullOrWhiteSpace(status))
+        {
+            // A comma list ("REJECTED,CANCELLED") serves a tab that groups
+            // statuses. Filtering it here, before paging, is what keeps the page
+            // count about that tab rather than about every order.
+            var wanted = status
+                .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .Select(value => value.ToUpperInvariant())
+                .ToHashSet();
+            if (wanted.Count == 0 || wanted.Any(value => !OrderStatuses.IsValid(value)))
+            {
+                throw new ValidationAppException(new Dictionary<string, string[]>
+                {
+                    ["status"] = ["Unsupported order status."]
+                });
+            }
+            query = query.Where(order => wanted.Contains(order.OrderStatus));
+        }
+        if (fromDate.HasValue)
+        {
+            query = query.Where(order => order.CreatedAt >= fromDate.Value);
+        }
+        if (toDate.HasValue)
+        {
+            query = query.Where(order => order.CreatedAt <= toDate.Value);
+        }
+
+        query = sort.ToLowerInvariant() switch
+        {
+            "createdat_asc" => query.OrderBy(order => order.CreatedAt),
+            "createdat_desc" => query.OrderByDescending(order => order.CreatedAt),
+            "ordercode_asc" => query.OrderBy(order => order.OrderCode),
+            "ordercode_desc" => query.OrderByDescending(order => order.OrderCode),
+            _ => throw new ValidationAppException(new Dictionary<string, string[]>
+            {
+                ["sort"] = ["sort must be createdAt_asc, createdAt_desc, orderCode_asc or orderCode_desc."]
+            }),
+        };
+        var rows = query.ToArray();
+        return new PagedResultDto<OrderDto>(
+            rows.Skip((page - 1) * pageSize).Take(pageSize).ToArray(),
+            page,
+            pageSize,
+            rows.Length,
+            (int)Math.Ceiling(rows.Length / (double)pageSize));
+    }
+}
+
 public sealed record AddCartItemRequest(long MenuItemId, int Quantity, string? Note);
 public sealed record UpdateCartItemRequest(int Quantity, string? Note);
-public sealed record PlaceOrderRequest(string Provider, string IdempotencyKey);
+// Location: where the customer is, required while PickupRange:Enforced is on (ORD-01).
+public sealed record PlaceOrderRequest(string Provider, string IdempotencyKey, PickupLocationInput? Location = null);
+public sealed record CheckoutOrderRequest(long CartId, string Provider, PickupLocationInput? Location = null);
 public sealed record ExpectedOrderStatusRequest(string ExpectedStatus);
+public sealed record ScanOrderPickupRequest(string Token);
+public sealed record ConfirmPickupByCodeRequest(string Code);
+public sealed record HandoverWithoutCodeRequest(string Reason);
 public sealed record SellerOrderDecisionRequest(string Decision, string? Reason, string ExpectedStatus);
 public sealed record SellerOrderStatusRequest(string TargetStatus, string ExpectedStatus);
+public sealed record VendorRejectOrderRequest(string Reason);

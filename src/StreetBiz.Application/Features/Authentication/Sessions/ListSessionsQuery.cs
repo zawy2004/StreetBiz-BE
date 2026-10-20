@@ -1,6 +1,7 @@
 using MediatR;
 using StreetBiz.Application.Common.Exceptions;
 using StreetBiz.Application.Common.Interfaces;
+using StreetBiz.Application.Common.Security;
 using StreetBiz.Application.DTOs.Authentication;
 
 namespace StreetBiz.Application.Features.Authentication.Sessions;
@@ -15,7 +16,7 @@ public sealed class ListSessionsQueryHandler(
 {
     public async Task<IReadOnlyList<SessionDto>> Handle(ListSessionsQuery request, CancellationToken cancellationToken)
     {
-        var userId = currentUser.UserId ?? throw new AuthenticationException("No active session.");
+        var userId = currentUser.UserId ?? throw new AuthenticationException(AppMessages.SessionExpired);
         var current = currentUser.SessionId;
 
         var sessions = await sessionRepository.ListActiveByUserAsync(userId, cancellationToken);

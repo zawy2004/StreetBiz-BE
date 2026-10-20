@@ -13,13 +13,13 @@ public sealed class ChangePasswordCommandValidator : AbstractValidator<ChangePas
 {
     public ChangePasswordCommandValidator()
     {
-        RuleFor(x => x.CurrentPassword).NotEmpty().WithMessage("Your current password is required.");
+        RuleFor(x => x.CurrentPassword).NotEmpty().WithMessage(AppMessages.CurrentPasswordRequired);
         RuleFor(x => x.NewPassword)
             .Must(p => AuthValidationRules.PasswordRegex().IsMatch(p))
-            .WithMessage("The new password does not meet the security requirements.");
+            .WithMessage(AppMessages.NewPasswordPolicy);
         RuleFor(x => x.NewPassword)
             .NotEqual(x => x.CurrentPassword)
-            .WithMessage("The new password must be different from the current password.");
+            .WithMessage(AppMessages.NewPasswordMustDiffer);
     }
 }
 
@@ -27,11 +27,12 @@ public sealed class ChangePasswordCommandHandler(
     ICurrentUser currentUser,
     IUserAccountRepository userRepository,
     IPasswordHasher passwordHasher,
-    ISessionRepository sessionRepository) : IRequestHandler<ChangePasswordCommand, Unit>
+    ISessionRepository sessionRepository,
+    ISecurityEvents securityEvents) : IRequestHandler<ChangePasswordCommand, Unit>
 {
     public async Task<Unit> Handle(ChangePasswordCommand request, CancellationToken cancellationToken)
     {
-        var userId = currentUser.UserId ?? throw new AuthenticationException("No active session.");
+        var userId = currentUser.UserId ?? throw new AuthenticationException(AppMessages.SessionExpired);
         var user = await userRepository.GetByIdAsync(userId, cancellationToken)
             ?? throw new NotFoundException("Account not found.");
 
@@ -53,6 +54,13 @@ public sealed class ChangePasswordCommandHandler(
         {
             await sessionRepository.RevokeAllForUserExceptAsync(userId, sessionId, cancellationToken);
         }
+
+        await securityEvents.RecordAsync(
+            userId,
+            SecurityActions.PasswordChanged,
+            null,
+            ("Mật khẩu đã được đổi", "Mật khẩu tài khoản của bạn vừa được thay đổi và các thiết bị khác đã bị đăng xuất. Nếu không phải bạn, hãy liên hệ hỗ trợ ngay."),
+            cancellationToken);
 
         return Unit.Value;
     }

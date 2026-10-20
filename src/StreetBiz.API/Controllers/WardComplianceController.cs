@@ -1,0 +1,245 @@
+using MediatR;
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
+using StreetBiz.Application.Features.AiAssistance;
+using StreetBiz.Application.Features.WardCompliance;
+
+namespace StreetBiz.API.Controllers;
+
+/// <summary>
+/// Ward Review, Permit &amp; Compliance (WARD-04..08, 11..13). Role/ward
+/// enforcement happens inside each handler via IWardActorContext (re-reads the
+/// caller from the database), not via [Authorize(Roles=...)] here -- same
+/// pattern as WardReviewsController for WARD-16/17/18.
+/// </summary>
+[ApiController]
+[Authorize]
+[Route("api/ward")]
+public sealed class WardComplianceController(ISender sender) : ControllerBase
+{
+    #region Enrollments
+    [HttpGet("enrollments")]
+    public async Task<ActionResult<IReadOnlyList<WardEnrollmentListItemDto>>> ListEnrollments(
+        [FromQuery] string? status,
+        [FromQuery] int page = 1,
+        [FromQuery] string? vendorType = null,
+        CancellationToken ct = default) =>
+        Ok(await sender.Send(new ListWardEnrollmentsQuery(status, page, vendorType), ct));
+
+    [HttpGet("enrollments/{id:long}")]
+    public async Task<ActionResult<WardEnrollmentDetailDto>> GetEnrollment(
+        long id,
+        CancellationToken ct) =>
+        Ok(await sender.Send(new GetWardEnrollmentDetailQuery(id), ct));
+
+    [HttpPost("enrollments/{id:long}/decision")]
+    public async Task<ActionResult<WardEnrollmentDetailDto>> DecideEnrollment(
+        long id,
+        WardEnrollmentDecision decision,
+        CancellationToken ct) =>
+        Ok(await sender.Send(new DecideWardEnrollmentCommand(id, decision), ct));
+
+    /// <summary>REG-06: which fast-track conditions this registration meets.</summary>
+    [HttpGet("enrollments/{id:long}/fast-track-check")]
+    public async Task<ActionResult<FastTrackCheckDto>> CheckFastTrack(long id, CancellationToken ct) =>
+        Ok(await sender.Send(new CheckWardFastTrackQuery(id), ct));
+
+    /// <summary>WARD-04: take a SUBMITTED file into review (UNDER_REVIEW); the vendor can no longer edit it.</summary>
+    [HttpPost("enrollments/{id:long}/claim")]
+    public async Task<ActionResult<WardEnrollmentDetailDto>> ClaimEnrollment(long id, CancellationToken ct) =>
+        Ok(await sender.Send(new ClaimWardEnrollmentCommand(id), ct));
+
+    /// <summary>BR-41 KYC gate: officer confirms they compared the vendor against their
+    /// physical/chip CCCD. Required before a decision/decision with APPROVE succeeds.</summary>
+    [HttpPost("enrollments/{id:long}/confirm-identity")]
+    public async Task<ActionResult<WardEnrollmentDetailDto>> ConfirmIdentity(
+        long id,
+        ConfirmEnrollmentIdentity request,
+        CancellationToken ct) =>
+        Ok(await sender.Send(new ConfirmEnrollmentIdentityCommand(id, request), ct));
+
+    /// <summary>Mẫu số 01 Phụ lục II, TT 68/2025/TT-BTC, filled with this registration's own data,
+    /// as a downloadable .docx or .pdf (?format=docx|pdf, default docx).</summary>
+    [HttpGet("enrollments/{id:long}/document")]
+    public async Task<IActionResult> GetEnrollmentDocument(
+        long id, [FromQuery] string format = "docx", CancellationToken ct = default)
+    {
+        var (content, fileName) = await sender.Send(new GenerateEnrollmentDocumentQuery(id, format), ct);
+        var contentType = format == "pdf"
+            ? "application/pdf"
+            : "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+        return File(content, contentType, fileName);
+    }
+    #endregion
+
+    #region Rental Applications / Temporary Usage Permits
+    [HttpGet("rental-applications")]
+    public async Task<ActionResult<IReadOnlyList<WardRentalApplicationListItemDto>>> ListRentalApplications(
+        [FromQuery] string? status,
+        [FromQuery] int page = 1,
+        CancellationToken ct = default) =>
+        Ok(await sender.Send(new ListWardRentalApplicationsQuery(status, page), ct));
+
+    [HttpGet("rental-applications/{id:long}")]
+    public async Task<ActionResult<WardRentalApplicationDetailDto>> GetRentalApplication(
+        long id,
+        CancellationToken ct) =>
+        Ok(await sender.Send(new GetWardRentalApplicationDetailQuery(id), ct));
+
+    [HttpPost("rental-applications/{id:long}/decision")]
+    public async Task<ActionResult<WardRentalApplicationDetailDto>> DecideRentalApplication(
+        long id,
+        WardRentalApplicationDecision decision,
+        CancellationToken ct) =>
+        Ok(await sender.Send(new DecideWardRentalApplicationCommand(id, decision), ct));
+    #endregion
+
+    #region Renewal Applications (WARD-09)
+    [HttpGet("renewals")]
+    public async Task<ActionResult<IReadOnlyList<WardRenewalListItemDto>>> ListRenewals(
+        [FromQuery] string? status,
+        [FromQuery] int page = 1,
+        CancellationToken ct = default) =>
+        Ok(await sender.Send(new ListWardRenewalsQuery(status, page), ct));
+
+    [HttpGet("renewals/{id:long}")]
+    public async Task<ActionResult<WardRenewalDetailDto>> GetRenewal(
+        long id,
+        CancellationToken ct) =>
+        Ok(await sender.Send(new GetWardRenewalDetailQuery(id), ct));
+
+    [HttpPost("renewals/{id:long}/decision")]
+    public async Task<ActionResult<WardRenewalDetailDto>> DecideRenewal(
+        long id,
+        WardRenewalDecision decision,
+        CancellationToken ct) =>
+        Ok(await sender.Send(new DecideWardRenewalCommand(id, decision), ct));
+
+    [HttpPost("renewals/batch-decision")]
+    public async Task<ActionResult<WardRenewalBatchDecisionResult>> BatchDecideRenewals(
+        WardRenewalBatchDecisionRequest request,
+        CancellationToken ct) =>
+        Ok(await sender.Send(new BatchDecideWardRenewalsCommand(request), ct));
+    #endregion
+
+    #region On-site Inspection & Permit Verification
+    [HttpPost("permits/inspect")]
+    public async Task<ActionResult<InspectWardPermitResult>> InspectPermit(
+        InspectWardPermitRequest request,
+        CancellationToken ct) =>
+        Ok(await sender.Send(new InspectWardPermitQuery(request), ct));
+
+    [HttpPost("permits/{id:long}/action")]
+    public async Task<ActionResult<bool>> PermitAction(
+        long id,
+        WardPermitActionRequest request,
+        CancellationToken ct) =>
+        Ok(await sender.Send(new ExecuteWardPermitActionCommand(id, request), ct));
+    #endregion
+
+    #region Violations & Sanctions
+    [HttpGet("penalty-schedules")]
+    public async Task<ActionResult<IReadOnlyList<PenaltyScheduleItemDto>>> ListPenaltySchedules(
+        [FromQuery] DateOnly? asOf,
+        CancellationToken ct) =>
+        Ok(await sender.Send(new ListWardPenaltySchedulesQuery(asOf), ct));
+
+    [HttpGet("violations")]
+    public async Task<ActionResult<IReadOnlyList<WardViolationListItemDto>>> ListViolations(
+        [FromQuery] string? status,
+        [FromQuery] int page = 1,
+        CancellationToken ct = default) =>
+        Ok(await sender.Send(new ListWardViolationsQuery(status, page), ct));
+
+    [HttpGet("violations/{id:long}")]
+    public async Task<ActionResult<WardViolationDetailDto>> GetViolation(
+        long id,
+        CancellationToken ct) =>
+        Ok(await sender.Send(new GetWardViolationDetailQuery(id), ct));
+
+    [HttpPost("violations")]
+    public async Task<ActionResult<WardViolationDetailDto>> RecordViolation(
+        RecordWardViolationRequest request,
+        CancellationToken ct) =>
+        Ok(await sender.Send(new RecordWardViolationCommand(request), ct));
+
+    [HttpPost("violations/{id:long}/explanation")]
+    public async Task<ActionResult<WardViolationDetailDto>> RecordExplanation(
+        long id,
+        RecordExplanationRequest request,
+        CancellationToken ct) =>
+        Ok(await sender.Send(new RecordWardExplanationCommand(id, request), ct));
+
+    [HttpPost("violations/{id:long}/deliver")]
+    public async Task<ActionResult<WardViolationDetailDto>> DeliverViolation(
+        long id,
+        DeliverViolationRequest request,
+        CancellationToken ct) =>
+        Ok(await sender.Send(new DeliverWardViolationCommand(id, request), ct));
+
+    [HttpPost("violations/{id:long}/sanction")]
+    public async Task<ActionResult<WardViolationDetailDto>> SanctionViolation(
+        long id,
+        SanctionWardViolationRequest request,
+        CancellationToken ct) =>
+        Ok(await sender.Send(new SanctionWardViolationCommand(id, request), ct));
+
+    /// <summary>Mẫu biên bản số 01 (Điều 58 Luật XLVPHC, NĐ 118/2021/NĐ-CP), filled with this
+    /// violation's recorded data, as a downloadable .docx.</summary>
+    [HttpGet("violations/{id:long}/document")]
+    public async Task<IActionResult> GetViolationDocument(long id, CancellationToken ct)
+    {
+        var doc = await sender.Send(new GenerateViolationDocumentQuery(id), ct);
+        return File(
+            doc.Content,
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            doc.FileName);
+    }
+    #endregion
+
+    #region AI Assistance
+    /// <summary>Server-authoritative: loads this registration's own evidence, checks biometric
+    /// consent, then re-runs AI-OCR. Never accepts a client-supplied evidence list.</summary>
+    [HttpPost("ai/document-extract")]
+    public async Task<ActionResult<AiDocumentCheckResult>> AiDocumentExtract(
+        GetAiDocumentExtractQuery request,
+        CancellationToken ct) =>
+        Ok(await sender.Send(request, ct));
+
+    [HttpPost("ai/encroachment-check")]
+    [EnableRateLimiting("WardAi")]
+    public async Task<ActionResult<AiEncroachmentResult>> AiEncroachmentCheck(
+        GetAiEncroachmentCheckQuery request,
+        CancellationToken ct) =>
+        Ok(await sender.Send(request, ct));
+
+    /// <summary>BR-41: the officer accepts or rejects a previously-logged AI suggestion --
+    /// never the same action as approving/saving whatever the suggestion was about.</summary>
+    [HttpPost("ai/suggestions/{id:long}/feedback")]
+    public async Task<ActionResult<AiSuggestionFeedbackDto>> ReviewSuggestion(
+        long id,
+        AiSuggestionFeedbackRequest request,
+        CancellationToken ct) =>
+        Ok(await sender.Send(new ReviewAiSuggestionCommand(id, request), ct));
+    #endregion
+
+    #region Insights (rule-based, no LLM)
+    [HttpGet("insights/risk-queue")]
+    public async Task<ActionResult<IReadOnlyList<WardRiskQueueItemDto>>> RiskQueue(
+        CancellationToken ct) =>
+        Ok(await sender.Send(new GetWardRiskQueueQuery(), ct));
+
+    [HttpGet("insights/patrol-heatmap")]
+    public async Task<ActionResult<IReadOnlyList<WardPatrolHeatmapPointDto>>> PatrolHeatmap(
+        CancellationToken ct) =>
+        Ok(await sender.Send(new GetWardPatrolHeatmapQuery(), ct));
+
+    /// <summary>AIC-06: permits whose QR scans repeatedly land away from their licensed slot.</summary>
+    [HttpGet("insights/geofence-drift")]
+    public async Task<ActionResult<GeofenceDriftReportDto>> GeofenceDrift(CancellationToken ct) =>
+        Ok(await sender.Send(new GetGeofenceDriftQuery(), ct));
+    #endregion
+}
+
+

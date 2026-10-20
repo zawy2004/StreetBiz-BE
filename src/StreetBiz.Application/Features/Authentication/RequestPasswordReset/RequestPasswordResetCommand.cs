@@ -14,7 +14,7 @@ public sealed class RequestPasswordResetCommandValidator : AbstractValidator<Req
     public RequestPasswordResetCommandValidator()
         => RuleFor(x => x.PhoneNumber)
             .Must(p => AuthValidationRules.PhoneRegex().IsMatch(p))
-            .WithMessage("Please enter a valid phone number.");
+            .WithMessage(AppMessages.InvalidPhone);
 }
 
 public sealed class RequestPasswordResetCommandHandler(

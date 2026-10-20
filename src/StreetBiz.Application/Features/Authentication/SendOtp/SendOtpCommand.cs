@@ -15,13 +15,13 @@ public sealed class SendOtpCommandValidator : AbstractValidator<SendOtpCommand>
     public SendOtpCommandValidator()
     {
         RuleFor(x => x.PhoneNumber)
-            .NotEmpty().WithMessage("Please enter a valid phone number.")
+            .NotEmpty().WithMessage(AppMessages.InvalidPhone)
             .Must(p => AuthValidationRules.PhoneRegex().IsMatch(p))
-            .WithMessage("Please enter a valid phone number.");
+            .WithMessage(AppMessages.InvalidPhone);
 
         RuleFor(x => x.Purpose)
-            .Must(p => p is OtpPurposes.Signup or OtpPurposes.PasswordReset)
-            .WithMessage("Unsupported OTP purpose.");
+            .Must(p => p is OtpPurposes.Signup or OtpPurposes.PasswordReset or OtpPurposes.Login)
+            .WithMessage(AppMessages.UnsupportedOtpPurpose);
     }
 }
 
@@ -37,6 +37,25 @@ public sealed class SendOtpCommandHandler(
             // Same uniform behaviour as AUTH-05, so this endpoint cannot be used to
             // probe which phones are registered or to text arbitrary numbers.
             return await sender.Send(new RequestPasswordResetCommand(request.PhoneNumber), cancellationToken);
+        }
+
+        if (request.Purpose == OtpPurposes.Login)
+        {
+            // Sign-in codes follow the same rule: only registered phones receive one,
+            // and the caller cannot tell the difference (SEC-05).
+            if (await userRepository.PhoneExistsAsync(request.PhoneNumber, cancellationToken))
+            {
+                try
+                {
+                    await otpService.IssueAsync(request.PhoneNumber, OtpPurposes.Login, cancellationToken);
+                }
+                catch (TooManyRequestsException)
+                {
+                    // Only a registered phone can hit the cooldown, so reporting it would leak.
+                }
+            }
+
+            return Unit.Value;
         }
 
         // BR-04: tell the user up front instead of after they have typed the code.

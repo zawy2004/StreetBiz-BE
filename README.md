@@ -9,7 +9,13 @@ permit verification, public profiles, customer ratings and suspicious-vendor rep
 [Platform administration workflows](docs/platform-administration-workflows.md) documents
 food-category management, content moderation and order-complaint resolution. See
 [Commerce order workflows](docs/commerce-order-workflows.md) for cart, prepaid order,
-pickup, seller processing, refund-request and sales-summary contracts.
+pickup, seller processing, refund-request, address snapshots, authenticated
+SignalR updates and sales-summary contracts.
+
+SYS-03–06, FEE-01/03/04 and WARD-14/15 are also implemented. See
+[Fee, payment, invoicing and reporting](docs/fee-payment-invoicing.md) for fee
+schedule generation, the shared payment-callback dispatch with Commerce, the
+hourly reminder sweep, and the ward collection report and dashboard.
 
 StreetBiz backend foundation built with .NET 8, ASP.NET Core, Entity Framework
 Core 8, SQL Server, and Clean Architecture. The current codebase includes
@@ -58,6 +64,20 @@ dotnet user-secrets --project src/StreetBiz.API set "ConnectionStrings:StreetBiz
 Never commit a real password, connection string, .env file, or secrets.json.
 appsettings files intentionally contain no credentials.
 
+Payment credentials and URLs follow the same rule. Configure them with
+environment variables or user-secrets:
+
+~~~powershell
+dotnet user-secrets --project src/StreetBiz.API set "Payments:Momo:CheckoutUrlTemplate" "<provider-checkout-url-template>"
+dotnet user-secrets --project src/StreetBiz.API set "Payments:Momo:CallbackSecret" "<merchant-callback-secret>"
+dotnet user-secrets --project src/StreetBiz.API set "Payments:ZaloPay:CheckoutUrlTemplate" "<provider-checkout-url-template>"
+dotnet user-secrets --project src/StreetBiz.API set "Payments:ZaloPay:CallbackSecret" "<merchant-callback-secret>"
+~~~
+
+Equivalent environment keys use double underscores, for example
+`Payments__Momo__CallbackSecret`. Callback requests send the hexadecimal
+HMAC-SHA256 in `X-Payment-Signature`.
+
 ## Reverse-engineer the existing database
 
 Confirm that STREETBIZ_DB_CONNECTION is set, then run:
@@ -68,7 +88,7 @@ dotnet ef dbcontext scaffold "$env:STREETBIZ_DB_CONNECTION" Microsoft.EntityFram
 
 This command overwrites generated DbContext/model files. Inspect local changes
 first and extend generated types with partial classes instead of editing generated
-files directly. See docs/database-reverse-engineering.md.
+files directly. See docs/database.md.
 
 ## Restore, build, and test
 
@@ -89,6 +109,41 @@ dotnet run --project src/StreetBiz.API
 In Development, open /swagger at the URL printed by ASP.NET Core. Check SQL
 Server readiness with GET /health. HTTPS redirection is enabled.
 
+## Deploying to Azure
+
+See [docs/deploy-azure.md](docs/deploy-azure.md) for the GitHub settings, the App
+Settings the API needs in Production (it refuses to start without its signing keys)
+and the database steps.
+
+## Uploaded files (Azure Blob Storage)
+
+Uploads (menu images, slot photos, KYC evidence, voice) go through IFileStorage.
+By default they are written to disk under App_Data/uploads. To keep them in Azure
+Blob Storage instead, set Storage:Provider to AzureBlob and give it credentials:
+
+~~~powershell
+# Account key / SAS connection string (keep it in user-secrets or an env var, never in git)
+dotnet user-secrets set "Storage:Provider" "AzureBlob" --project src/StreetBiz.API
+dotnet user-secrets set "Storage:AzureBlob:ConnectionString" "<connection-string>" --project src/StreetBiz.API
+
+# Or managed identity in Azure: no secret, the identity needs "Storage Blob Data Contributor"
+$env:Storage__Provider = "AzureBlob"
+$env:Storage__AzureBlob__AccountUrl = "https://<account>.blob.core.windows.net"
+~~~
+
+The container (default streetbiz-uploads, Storage:AzureBlob:ContainerName) is private and
+is created on the first upload when it does not exist. Files are still served by the API
+after its permission checks, never by a public blob URL. Existing files are not copied:
+move App_Data/uploads into the container (same relative paths) if you switch with data.
+
+To try it locally without an Azure account, run the Azurite emulator and use the
+connection string UseDevelopmentStorage=true:
+
+~~~powershell
+docker run -d -p 10000:10000 mcr.microsoft.com/azure-storage/azurite azurite-blob --blobHost 0.0.0.0 --skipApiVersionCheck
+$env:STREETBIZ_AZURITE_TEST = "1"; dotnet test tests/StreetBiz.Infrastructure.Tests --filter AzureBlobFileStorage
+~~~
+
 ## Docker
 
 Copy .env.example to .env and replace both placeholder values. The Compose file
@@ -102,27 +157,23 @@ SQL Server outside Docker.
 docker compose up --build
 ~~~
 
-## Existing database and migrations
+## Database
 
-StreetBizDB existed before this codebase and did not contain
-__EFMigrationsHistory when inspected. InitialBaseline therefore has an
-intentionally empty Up() and Down(), while its Designer file and ModelSnapshot
-capture the current model.
+StreetBizDB is database-first: the whole database is built from two scripts in `db/`
+and the API never creates or changes it.
 
-Do not run InitialCreate, EnsureCreated(), Database.Migrate(), database update,
-or any migration SQL against the existing database without explicit review and
-approval. The generated inspection script is docs/InitialBaseline.sql; it has no
-schema operations for existing StreetBiz tables.
+- `db/StreetBiz_SQL_Server.sql`: schema, reference data and the EF history stamp
+- `db/StreetBiz_Demo_Seed.sql`: demo accounts and scenario (development only)
 
-For a future reviewed schema change:
+First-time setup on an empty database (stop the API first):
 
 ~~~powershell
-dotnet ef migrations add <MigrationName> --project src/StreetBiz.Infrastructure --startup-project src/StreetBiz.API --context StreetBizDbContext --output-dir Persistence/Migrations
-dotnet ef migrations script --idempotent --project src/StreetBiz.Infrastructure --startup-project src/StreetBiz.API --context StreetBizDbContext
+powershell -ExecutionPolicy Bypass -File scripts/setup-local-db.ps1 -Recreate
 ~~~
 
-Review generated SQL for destructive or unintended operations before requesting
-approval to apply it. See docs/migration-guide.md.
+Schema changes are edited into those two files, never added as separate scripts. See
+[docs/database.md](docs/database.md) for the full workflow, the demo accounts and the
+EF Core rules (no EnsureCreated, Migrate or migrations against this database).
 
 ## Solution layout
 
@@ -163,10 +214,12 @@ notifications. External push delivery and payment providers remain outside this 
 ## More documentation
 
 - docs/architecture.md
-- docs/project-structure.md
-- docs/database-reverse-engineering.md
-- docs/migration-guide.md
+- docs/database.md
+- docs/auth-vendor-onboarding.md
+- docs/sidewalk-slot-rental.md
 - docs/ward-slot-workflows.md
 - docs/community-vendor-workflows.md
 - docs/platform-administration-workflows.md
 - docs/commerce-order-workflows.md
+- docs/customer-discovery.md
+- docs/testing/ (manual test scripts and the Postman collection)

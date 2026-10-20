@@ -11,12 +11,17 @@ public sealed record SlotTransferRequestDto(
     DateTime InitiatedAt,
     DateTime? AcceptedAt,
     string? ReviewDecisionReason,
-    DateTime? ReviewedAt);
+    DateTime? ReviewedAt,
+    string SlotCode,
+    string ZoneName,
+    DateOnly ContractStartDate,
+    DateOnly ContractEndDate);
 
 /// <summary>Maps domain records to DTOs for the Slot Transfer API.</summary>
 public static class SlotTransferRequestMapper
 {
     public static SlotTransferRequestDto ToDto(this SlotTransferRequestRow r) => new(
         r.TransferId, r.ContractId, r.FromVendorId, r.ToVendorId, r.TransferStatus,
-        r.InitiatedAt, r.AcceptedAt, r.ReviewDecisionReason, r.ReviewedAt);
+        r.InitiatedAt, r.AcceptedAt, r.ReviewDecisionReason, r.ReviewedAt,
+        r.SlotCode, r.ZoneName, r.ContractStartDate, r.ContractEndDate);
 }

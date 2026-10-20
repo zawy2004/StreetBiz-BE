@@ -2,15 +2,21 @@ using StreetBiz.Application.Common.Exceptions;
 
 namespace StreetBiz.Application.Features.WardSlots;
 
-public sealed record WardActor(long UserId, int WardId, string Name);
+/// <param name="SanctionAuthorityTitle">From UserAccounts.sanction_authority_title: null unless this
+/// officer may sign a WARD-13 sanction decision.</param>
+public sealed record WardActor(long UserId, int WardId, string Name, string? SanctionAuthorityTitle = null);
 public sealed record GeoPoint(double Latitude, double Longitude);
 public sealed record GeocodeResult(string Label, GeoPoint Point);
 public sealed record GeofenceResult(bool Inside, int WardId, string BoundaryVersion);
+/// <summary>One evidence document attached to a case (REG-02). PRI-02: reviewer-only.</summary>
+public sealed record WardDocument(string EvidenceType, string FileUrl, DateTime UploadedAt);
+
 public sealed record WardCase(
     string Id, string Kind, string Title, string Status, string SlotCode,
     string Applicant, string Summary, GeoPoint? Location, string? EvidenceUrl,
     DateTime CreatedAt, string? Reason, string[] Blockers, string[] Actions,
-    int? QueuePosition = null, string? ContractTerm = null, decimal? Outstanding = null);
+    int? QueuePosition = null, string? ContractTerm = null, decimal? Outstanding = null,
+    WardDocument[]? Documents = null, bool FastTrack = false);
 public sealed record CasePage(IReadOnlyList<WardCase> Items, int Page, bool HasMore);
 public sealed record ReviewDecision(string Decision, string Reason, string ExpectedStatus);
 

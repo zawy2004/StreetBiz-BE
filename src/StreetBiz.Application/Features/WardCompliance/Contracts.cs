@@ -1,0 +1,587 @@
+using StreetBiz.Application.Features.AiAssistance;
+using StreetBiz.Application.Features.VendorKyc;
+using StreetBiz.Application.Features.WardSlots;
+
+namespace StreetBiz.Application.Features.WardCompliance;
+
+#region DTOs - Enrollment / Registration
+public sealed record WardEnrollmentListItemDto(
+    string Id,
+    string DisplayName,
+    string OwnerName,
+    string? IdNumber,
+    string VendorType,
+    string Status,
+    string Address,
+    DateTime CreatedAt,
+    bool FastTrack,
+    /// <summary>The real vendor_id a live violation record (RecordWardViolationRequest.VendorId)
+    /// must use -- not the registration id in Id above.</summary>
+    long VendorId);
+
+public sealed record WardEvidenceDto(
+    long EvidenceId,
+    string Type,
+    string Label,
+    string FileUrl);
+
+public sealed record WardEnrollmentDetailDto(
+    string Id,
+    string DisplayName,
+    string OwnerName,
+    string? IdNumber,
+    string VendorType,
+    string Status,
+    string Address,
+    double? Latitude,
+    double? Longitude,
+    DateTime CreatedAt,
+    string? ReviewReason,
+    string? ReviewedBy,
+    DateTime? ReviewedAt,
+    IReadOnlyList<WardEvidenceDto> Evidence,
+    AiDocumentCheckResult? AiCheck,
+    // ---- Mẫu số 01 Phụ lục II, Thông tư 68/2025/TT-BTC: hồ sơ đầy đủ để cán bộ thẩm định ----
+    WardOwnerProfileDto OwnerProfile,
+    WardBusinessProfileDto BusinessProfile,
+    DateTime? FoodSafetyCommitmentAt,
+    IReadOnlyList<WardHouseholdMemberDto> HouseholdMembers,
+    // ---- KYC gate: cán bộ phải tự xác nhận trước khi được Duyệt (BR-41) ----
+    bool IdentityVerified,
+    DateTime? IdentityVerifiedAt,
+    string? IdentityVerifiedByName,
+    string? IdentityVerificationNote,
+    /// <summary>Server-recorded eKYC scores (CCCD OCR, face match) for this registration.
+    /// Evidence for the officer's own decision -- never a substitute for it.</summary>
+    IReadOnlyList<KycCheckRecord> KycChecks);
+
+public sealed record WardOwnerProfileDto(
+    DateOnly? DateOfBirth,
+    string? Gender,
+    string? Ethnicity,
+    string? Nationality,
+    string? IdType,
+    DateOnly? IdIssuedDate,
+    string? IdIssuedPlace,
+    string? PermanentAddress,
+    string? ContactAddress);
+
+public sealed record WardBusinessProfileDto(
+    string? BusinessLine,
+    string? BusinessLineCode,
+    decimal? CapitalAmount,
+    int? LaborCount,
+    DateOnly? PlannedStartDate);
+
+public sealed record WardHouseholdMemberDto(
+    string FullName,
+    DateOnly? DateOfBirth,
+    string? IdNumber,
+    string? RelationshipToOwner,
+    decimal? CapitalContribution);
+
+public sealed record WardEnrollmentDecision(
+    string Decision,
+    string Reason,
+    string ExpectedStatus);
+
+/// <summary>
+/// A Ward Authority officer's manual confirmation that they compared the vendor in person (or
+/// the uploaded photo) against the physical/chip CCCD. Required before DecideEnrollmentAsync
+/// will accept an APPROVE decision -- AI-OCR alone never satisfies this (BR-41).
+/// </summary>
+public sealed record ConfirmEnrollmentIdentity(string Note);
+#endregion
+
+#region DTOs - Temporary Sidewalk Usage Permit / Application
+public sealed record WardRentalApplicationListItemDto(
+    string Id,
+    string ApplicationMethod,
+    int RequestedTermDays,
+    string Status,
+    string VendorName,
+    string SlotCode,
+    string SlotStreet,
+    decimal PricePerDay,
+    DateTime CreatedAt);
+
+public sealed record WardRentalApplicationDetailDto(
+    string Id,
+    string ApplicationMethod,
+    int RequestedTermDays,
+    string Status,
+    long RegistrationId,
+    string RegistrationStatus,
+    string VendorName,
+    string VendorPhone,
+    long SlotId,
+    string SlotCode,
+    string SlotStreet,
+    decimal SlotWidth,
+    decimal SlotLength,
+    decimal PricePerDay,
+    DateTime CreatedAt,
+    string? ReviewReason,
+    string? ReviewedBy,
+    DateTime? ReviewedAt,
+    bool CanApprove,
+    IReadOnlyList<string> Blockers,
+    /// <summary>What approving it will bill (rent after any quarterly discount, fees, deposit) --
+    /// the same quote the vendor applied against.</summary>
+    decimal TotalFee = 0m,
+    decimal RentFee = 0m,
+    decimal Deposit = 0m);
+
+public sealed record WardRentalApplicationDecision(
+    string Decision,
+    string Reason,
+    string ExpectedStatus);
+#endregion
+
+#region DTOs - On-site Inspection & Permit Verification
+public sealed record InspectWardPermitRequest(
+    string PermitCodeOrPayload,
+    double? Latitude,
+    double? Longitude,
+    string? InspectionPhotoUrl);
+
+public sealed record InspectWardPermitResult(
+    bool Found,
+    bool IsValid,
+    string EffectiveStatus,
+    long? PermitId,
+    long? ContractId,
+    long? VendorId,
+    string? VendorName,
+    long? SlotId,
+    string? SlotCode,
+    string? SlotStreet,
+    decimal? Width,
+    decimal? Length,
+    DateOnly? StartDate,
+    DateOnly? EndDate,
+    double? SlotLatitude,
+    double? SlotLongitude,
+    double? DistanceMeters,
+    bool IsLocationMatched,
+    string? LocationWarning,
+    AiEncroachmentResult? AiVisionResult);
+
+public sealed record WardPermitActionRequest(
+    string Action,
+    string Reason,
+    /// <summary>Phase A: true when the officer is acting on the advisory revoke-threshold
+    /// banner -- recorded in the AuditLog detail so there is a clear trail distinguishing a
+    /// policy-driven revoke from one based on the officer's own independent judgement.</summary>
+    bool BasedOnComplianceThreshold = false);
+#endregion
+
+#region DTOs - Violations & Sanctions
+public sealed record PenaltyScheduleItemDto(
+    int ScheduleId,
+    string ViolationType,
+    string ViolationTypeName,
+    decimal PenaltyAmount,
+    string? LegalBasis);
+
+/// <summary>
+/// The violator's identity block on Mẫu 01 (họ tên, ngày sinh, số định danh, nơi ở...) is never
+/// taken from the request either: it is copied server-side from the vendor's own registration at
+/// the moment of recording (see RecordViolationAsync), the same "frozen snapshot" reasoning as the
+/// sanction signer -- a later change to that registration must not rewrite past evidence.
+/// </summary>
+public sealed record RecordWardViolationRequest(
+    long? ContractId,
+    long? SlotId,
+    long? VendorId,
+    string ViolationType,
+    string Description,
+    string? EvidenceUrl,
+    /// <summary>Mẫu 01 mục "tại(3)": where the record is being written up. Null defaults to the
+    /// slot's own address at RecordViolationAsync time.</summary>
+    string? PreparedLocation = null,
+    /// <summary>Mẫu 01 mục 2: required only when the violator will not/cannot sign; both null is
+    /// the normal case.</summary>
+    string? WitnessName = null,
+    string? WitnessRole = null,
+    string? WitnessOccupation = null,
+    string? WitnessAddress = null,
+    /// <summary>Mẫu 01 mục 9.</summary>
+    string? ContainmentMeasures = null,
+    /// <summary>Mẫu 01 mục 10 (Điều 61 Luật XLVPHC). WitnessRole/Method null unless True.</summary>
+    bool ExplanationRequired = false,
+    string? ExplanationMethod = null);
+
+public sealed record RecordExplanationRequest(string Content);
+
+/// <summary>Mẫu 01's handover block, or the separate "Biên bản về việc không nhận quyết định..."
+/// when the violator refuses -- Refused and RefusalReason go together.</summary>
+public sealed record DeliverViolationRequest(
+    string? DeliveredToName,
+    bool Refused,
+    string? RefusalReason);
+
+/// <summary>
+/// The signer is never taken from the request: it is the authenticated officer, and only an
+/// officer whose account carries UserAccounts.sanction_authority_title (Chairman/Vice-Chairman of
+/// the Ward People's Committee, or a written delegate) may sign. The patrolling officer who filed
+/// the violation record has no such authority under the Law on Handling of Administrative Violations.
+/// </summary>
+public sealed record SanctionWardViolationRequest(
+    int PenaltyScheduleId,
+    string DecisionNumber,
+    string? Notes,
+    /// <summary>Required (and audited) when the violation is marked ExplanationRequired and its
+    /// explanation_deadline_at has not passed with no explanation received yet -- Điều 61 Luật
+    /// XLVPHC gives the violator that window before a decision may issue.</summary>
+    bool AcknowledgeEarlySanction = false,
+    /// <summary>The officer's own figure, inside the legal bracket of the chosen rate (Điều 23
+    /// khoản 4 Luật XLVPHC lets the amount move with mitigating/aggravating circumstances). Null
+    /// applies the configured rate unchanged; any other figure needs <see cref="AmountReason"/>.</summary>
+    long? AmountOverride = null,
+    string? AmountReason = null);
+
+public sealed record WardViolationListItemDto(
+    long ViolationId,
+    long? ContractId,
+    string? SlotCode,
+    string? VendorName,
+    string ViolationType,
+    string ViolationTypeName,
+    string Status,
+    decimal? PenaltyAmount,
+    DateTime RecordedAt,
+    string RecordedByName);
+
+public sealed record WardViolationDetailDto(
+    long ViolationId,
+    long? ContractId,
+    long? SlotId,
+    string? SlotCode,
+    long? VendorId,
+    string? VendorName,
+    string ViolationType,
+    string ViolationTypeName,
+    string? Description,
+    string? EvidenceUrl,
+    DateTime RecordedAt,
+    string RecordedByName,
+    string Status,
+    decimal? PenaltyAmount,
+    string? SanctionDecisionNumber,
+    string? SignerName,
+    string? SignerTitle,
+    DateTime? SanctionedAt,
+    int RecentViolationCount90Days,
+    AiLegalSuggestion? AiSuggestion,
+    // ---- Mẫu 01 (Biên bản vi phạm hành chính, NĐ 118/2021/NĐ-CP) ----
+    string? BienBanSo,
+    string? PreparedLocation,
+    string? WitnessName,
+    string? WitnessRole,
+    string? WitnessOccupation,
+    string? WitnessAddress,
+    string? ViolatorFullName,
+    DateOnly? ViolatorDateOfBirth,
+    string? ViolatorGender,
+    string? ViolatorNationality,
+    string? ViolatorIdNumber,
+    DateOnly? ViolatorIdIssuedDate,
+    string? ViolatorIdIssuedPlace,
+    string? ViolatorAddress,
+    string? ContainmentMeasures,
+    bool ExplanationRequired,
+    string? ExplanationMethod,
+    DateTime? ExplanationDeadlineAt,
+    DateTime? ExplanationReceivedAt,
+    string? ExplanationContent,
+    DateTime? DeliveredAt,
+    string? DeliveredToName,
+    bool DeliveryRefused,
+    string? DeliveryRefusalReason,
+    // ---- Phase A: advisory-only permit-revocation flag (WardCompliancePolicies) ----
+    WardComplianceFlagDto ComplianceFlag);
+
+/// <summary>Advisory only -- never blocks or auto-triggers anything (BR-41). Null thresholds
+/// mean the ward has not configured that part of the policy, so that half of the flag never
+/// lights up. SanctionedViolationCount only counts violations with an issued sanction decision,
+/// never a bare biên bản still open or awaiting giải trình (Điều 61).</summary>
+public sealed record WardComplianceFlagDto(
+    int? ViolationThreshold,
+    int SanctionedViolationCount,
+    bool ViolationThresholdReached,
+    int? UnpaidPenaltyGraceDays,
+    bool HasOverduePenalty,
+    int? OverduePenaltyDays);
+
+public sealed record WardViolationDocumentDto(byte[] Content, string FileName);
+#endregion
+
+#region DTOs - Insights (rule-based, no LLM)
+public sealed record RiskScoreBreakdownItem(string Reason, int Points);
+
+public sealed record WardRiskQueueItemDto(
+    string RegistrationId,
+    string DisplayName,
+    int Score,
+    IReadOnlyList<RiskScoreBreakdownItem> Breakdown);
+
+public sealed record WardPatrolHeatmapPointDto(
+    int? ZoneId,
+    string? ZoneName,
+    int DayOfWeek,
+    int HourOfDay,
+    int ViolationCount);
+#endregion
+
+#region AI Assistant Models
+public sealed record AiDocumentCheckResult(
+    int MatchPercentage,
+    bool IsMatch,
+    bool NeedsManualVerification,
+    string Summary,
+    IReadOnlyList<string> Discrepancies,
+    bool IsAiGenerated,
+    long? AiLogId = null);
+
+public sealed record AiEncroachmentResult(
+    bool DetectedEncroachment,
+    double EncroachmentDistanceCm,
+    string Analysis,
+    IReadOnlyList<string> VisualCues,
+    bool IsAiGenerated,
+    long? AiLogId = null);
+
+/// <summary>
+/// Fields mirror Mau MBB01 (Nghi dinh 118/2021/ND-CP) instead of one free-form paragraph, so
+/// the officer's biên bản is ready to transcribe onto the standard form. LegalBasis is always
+/// copied verbatim from the matched PenaltyFeeSchedules row -- the AI drafts HanhViViPham and
+/// BienPhapKhacPhuc only, never the legal citation itself.
+/// </summary>
+public sealed record AiLegalSuggestion(
+    string ViolationType,
+    int? PenaltyScheduleId,
+    string? LegalBasis,
+    decimal? SuggestedPenaltyAmount,
+    string HanhViViPham,
+    string BienPhapKhacPhuc,
+    bool IsAiGenerated,
+    long? AiLogId = null);
+
+public sealed record AiIdExtractionResult(
+    string? IdNumber,
+    string? FullName,
+    string? Address,
+    int ConfidencePercent,
+    bool IsAiGenerated,
+    string? Source = null,
+    string? TamperingAlert = null);
+#endregion
+
+#region DTOs - Renewal Requests (WARD-09)
+public sealed record WardRenewalListItemDto(
+    string Id,
+    long ContractId,
+    string SlotCode,
+    string SlotStreet,
+    string VendorName,
+    string Status,
+    int RequestedTermDays,
+    DateOnly CurrentEndDate,
+    DateOnly ProposedEndDate,
+    decimal PricePerDay,
+    decimal TotalFee,
+    bool IsFastTrackEligible,
+    int ViolationCount,
+    DateTime CreatedAt,
+    /// <summary>NĐ 241/2026 Điều 21 (sửa NĐ 165/2024): hạn xử lý hồ sơ 3 ngày làm việc. Tính
+    /// gần đúng bằng 3 ngày lịch kể từ khi nộp (hệ thống chưa có lịch ngày nghỉ/lễ để tính
+    /// đúng ngày làm việc) -- dùng để cảnh báo, không phải căn cứ pháp lý chính xác tuyệt đối.</summary>
+    DateTime SlaDueAt,
+    bool IsOverdue);
+
+public sealed record WardVendorComplianceScorecardDto(
+    int TotalInspections,
+    int ViolationCount,
+    int UnpaidPenaltyCount,
+    decimal TotalPenaltyAmount,
+    int ReportCount,
+    string CurrentPermitStatus,
+    bool IsCleanRecord);
+
+public sealed record WardRenewalDetailDto(
+    string Id,
+    long ContractId,
+    string Status,
+    int RequestedTermDays,
+    DateOnly CurrentEndDate,
+    DateOnly ProposedEndDate,
+    int RemainingDaysOnCurrentContract,
+    // Slot info
+    long SlotId,
+    string SlotCode,
+    string SlotStreet,
+    decimal SlotWidth,
+    decimal SlotLength,
+    decimal PricePerDay,
+    decimal TotalEstimatedFee,
+    // Vendor info
+    long VendorId,
+    string VendorName,
+    string VendorPhone,
+    string VendorType,
+    long RegistrationId,
+    string RegistrationStatus,
+    // Review info
+    string? ReviewReason,
+    string? ReviewedBy,
+    DateTime? ReviewedAt,
+    bool CanApprove,
+    bool IsFastTrackEligible,
+    IReadOnlyList<string> Blockers,
+    // Compliance Scorecard
+    WardVendorComplianceScorecardDto Scorecard,
+    DateTime CreatedAt,
+    DateTime SlaDueAt,
+    bool IsOverdue);
+
+public sealed record WardRenewalDecision(
+    string Decision,
+    string Reason,
+    string ExpectedStatus);
+
+public sealed record WardRenewalBatchDecisionItemRequest(
+    long RenewalId,
+    string ExpectedStatus);
+
+public sealed record WardRenewalBatchDecisionRequest(
+    IReadOnlyList<WardRenewalBatchDecisionItemRequest> Items,
+    string Decision,
+    string Reason);
+
+public sealed record WardRenewalBatchDecisionItemResult(
+    long RenewalId,
+    bool Success,
+    string? ErrorMessage = null,
+    DateOnly? NewEndDate = null);
+
+public sealed record WardRenewalBatchDecisionResult(
+    int TotalRequested,
+    int SuccessCount,
+    int FailureCount,
+    IReadOnlyList<WardRenewalBatchDecisionItemResult> Results);
+#endregion
+
+#region Service Interfaces
+public interface IWardComplianceService
+{
+    // Enrollment / Registration
+    Task<IReadOnlyList<WardEnrollmentListItemDto>> ListEnrollmentsAsync(
+        WardActor actor, string? status, int page, CancellationToken ct, string? vendorType = null);
+
+    /// <summary>REG-06: which fast-track conditions a filed registration meets (advisory; the officer still decides).</summary>
+    Task<FastTrackCheckDto> CheckFastTrackAsync(WardActor actor, long registrationId, CancellationToken ct);
+    Task<WardEnrollmentDetailDto> GetEnrollmentDetailAsync(WardActor actor, long registrationId, CancellationToken ct);
+    /// <summary>Mẫu số 01 Phụ lục II, TT 68/2025/TT-BTC, filled with this registration's data, as
+    /// a downloadable .docx or .pdf ("docx"|"pdf") -- same content as the vendor's own copy, plus
+    /// the officer's name once approved.</summary>
+    Task<(byte[] Content, string FileName)> GenerateEnrollmentDocumentAsync(WardActor actor, long registrationId, string format, CancellationToken ct);
+    Task<WardEnrollmentDetailDto> DecideEnrollmentAsync(WardActor actor, long registrationId, WardEnrollmentDecision decision, CancellationToken ct);
+
+    /// <summary>
+    /// Records the officer's manual identity-verification confirmation (BR-41 KYC gate).
+    /// DecideEnrollmentAsync refuses an APPROVE decision until this has been called.
+    /// </summary>
+    Task<WardEnrollmentDetailDto> ConfirmIdentityAsync(WardActor actor, long registrationId, ConfirmEnrollmentIdentity request, CancellationToken ct);
+    Task<WardEnrollmentDetailDto> ClaimEnrollmentAsync(WardActor actor, long registrationId, CancellationToken ct);
+
+    /// <summary>
+    /// Re-runs AI-OCR against the registration's own stored evidence (server-authoritative --
+    /// never trusts a client-supplied evidence list or declared name/address). Refuses with an
+    /// honest, non-AI result when biometric_consent_at is not set.
+    /// </summary>
+    Task<AiDocumentCheckResult> ReRunDocumentCheckAsync(WardActor actor, long registrationId, CancellationToken ct);
+
+    // Rental Applications
+    Task<IReadOnlyList<WardRentalApplicationListItemDto>> ListRentalApplicationsAsync(WardActor actor, string? status, int page, CancellationToken ct);
+    Task<WardRentalApplicationDetailDto> GetRentalApplicationDetailAsync(WardActor actor, long applicationId, CancellationToken ct);
+    Task<WardRentalApplicationDetailDto> DecideRentalApplicationAsync(WardActor actor, long applicationId, WardRentalApplicationDecision decision, CancellationToken ct);
+
+    // Renewal Requests (WARD-09)
+    Task<IReadOnlyList<WardRenewalListItemDto>> ListRenewalsAsync(WardActor actor, string? status, int page, CancellationToken ct);
+    Task<WardRenewalDetailDto> GetRenewalDetailAsync(WardActor actor, long renewalId, CancellationToken ct);
+    Task<WardRenewalDetailDto> DecideRenewalAsync(WardActor actor, long renewalId, WardRenewalDecision decision, CancellationToken ct);
+    Task<WardRenewalBatchDecisionResult> BatchDecideRenewalsAsync(WardActor actor, WardRenewalBatchDecisionRequest request, CancellationToken ct);
+
+    // On-site Inspection & Permit
+    Task<InspectWardPermitResult> InspectPermitAsync(WardActor actor, InspectWardPermitRequest request, CancellationToken ct);
+    Task<bool> ExecutePermitActionAsync(WardActor actor, long permitId, WardPermitActionRequest request, CancellationToken ct);
+
+    // Violations & Sanctions
+    Task<IReadOnlyList<PenaltyScheduleItemDto>> ListPenaltySchedulesAsync(WardActor actor, DateOnly? asOf, CancellationToken ct);
+    Task<IReadOnlyList<WardViolationListItemDto>> ListViolationsAsync(WardActor actor, string? status, int page, CancellationToken ct);
+    Task<WardViolationDetailDto> GetViolationDetailAsync(WardActor actor, long violationId, CancellationToken ct);
+    Task<WardViolationDetailDto> RecordViolationAsync(WardActor actor, RecordWardViolationRequest request, CancellationToken ct);
+    /// <summary>Mẫu 01 mục 10: records the violator's giải trình before a sanction decision.</summary>
+    Task<WardViolationDetailDto> RecordExplanationAsync(WardActor actor, long violationId, RecordExplanationRequest request, CancellationToken ct);
+    /// <summary>Mẫu 01's handover block / the refusal-to-receive record.</summary>
+    Task<WardViolationDetailDto> DeliverViolationAsync(WardActor actor, long violationId, DeliverViolationRequest request, CancellationToken ct);
+    Task<WardViolationDetailDto> SanctionViolationAsync(WardActor actor, long violationId, SanctionWardViolationRequest request, CancellationToken ct);
+    /// <summary>Fills Mẫu biên bản số 01 (Điều 58 Luật XLVPHC, NĐ 118/2021/NĐ-CP) with this
+    /// violation's recorded data and returns it as a downloadable .docx.</summary>
+    Task<WardViolationDocumentDto> GenerateViolationDocumentAsync(WardActor actor, long violationId, CancellationToken ct);
+
+    // Insights (rule-based)
+    Task<IReadOnlyList<WardRiskQueueItemDto>> GetRiskQueueAsync(WardActor actor, CancellationToken ct);
+    Task<IReadOnlyList<WardPatrolHeatmapPointDto>> GetPatrolHeatmapAsync(WardActor actor, CancellationToken ct);
+}
+
+public interface IAiComplianceService
+{
+    /// Extracts id_number/full_name/address from a citizen ID photo (multimodal). Never compares
+    /// against phone number -- the caller passes only the evidence file URLs to analyze.
+    Task<AiIdExtractionResult> ExtractIdDocumentAsync(IReadOnlyList<WardEvidenceDto> evidence, CancellationToken ct);
+
+    /// Compares AI-extracted identity data against the vendor's self-declared profile.
+    Task<AiDocumentCheckResult> CompareDeclaredProfileAsync(
+        string declaredName, string? extractedIdNumber, string declaredAddress,
+        AiIdExtractionResult extraction, CancellationToken ct);
+
+    /// Multimodal analysis of an on-site inspection photo against the permitted slot dimensions.
+    /// photoUrl must resolve to real image bytes fetchable by this service -- never passed as a
+    /// bare string inside a text-only prompt.
+    Task<AiEncroachmentResult> AnalyzeInspectionPhotoAsync(string photoUrl, double? slotWidth, double? slotLength, CancellationToken ct);
+
+    /// Classifies a violation description into a violation_type and drafts record wording FROM a
+    /// pre-existing PenaltyFeeSchedules row -- never invents a legal citation or amount itself.
+    Task<AiLegalSuggestion> ClassifyAndDraftAsync(
+        string? description, IReadOnlyList<PenaltyScheduleItemDto> availableSchedules, CancellationToken ct);
+
+    /// Answers vendor or officer regulatory inquiries about Road Law 2024, Decree 165/2024/ND-CP,
+    /// sidewalk usage permits, and compliance guidelines using fast Groq LLM reasoning.
+    Task<string> AnswerVendorAssistantAsync(string question, string? context, CancellationToken ct);
+
+    /// <summary>AIC-04: multimodal assessment of a proposed slot's feasibility from a satellite
+    /// crop and/or the vendor's own proposal photo, merged with the system's own rule checks.
+    /// Advisory only -- the model never decides; WardAiInsights.AssessProposalAsync (via
+    /// AiInsightRules.MergeProposal) is what turns this into a recommendation (BR-41).</summary>
+    Task<AiProposalAssessment> AssessProposalSiteAsync(AiProposalSiteInput input, CancellationToken ct);
+
+    /// <summary>AIC-06: writes one short Vietnamese explanation per drifting permit. The numbers
+    /// (distance, bearing, pattern) are already decided by AiInsightRules -- this only puts them
+    /// into words and suggests a patrol check, never a violation finding.</summary>
+    Task<IReadOnlyDictionary<long, string>?> ExplainGeofenceDriftAsync(
+        IReadOnlyList<GeofenceDriftFacts> items, CancellationToken ct);
+
+    /// <summary>AIC-07: proposes a price within [MinAllowedPricePerDay, MaxAllowedPricePerDay]
+    /// (already computed by AiInsightRules.PriceBaseline) and explains it. Null means no
+    /// provider was available; the caller falls back to the baseline price.</summary>
+    Task<AiPriceAdvice?> AdviseZonePriceAsync(ZonePriceFacts facts, CancellationToken ct);
+}
+#endregion
+
+/// <summary>One condition of the REG-06 fast-track check.</summary>
+public sealed record FastTrackCriterionDto(string Code, string Label, bool Passed);
+
+/// <summary>Whether every fast-track condition is met. Only orders the queue; never approves.</summary>
+public sealed record FastTrackCheckDto(bool Eligible, IReadOnlyList<FastTrackCriterionDto> Criteria);

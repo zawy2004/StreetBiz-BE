@@ -3,6 +3,7 @@ using MediatR;
 using StreetBiz.Application.Common.Exceptions;
 using StreetBiz.Application.Common.Geo;
 using StreetBiz.Application.Common.Interfaces;
+using StreetBiz.Application.Common.Models;
 using StreetBiz.Application.Common.Security;
 using StreetBiz.Application.DTOs.RentalApplications;
 using StreetBiz.Application.Features.SlotHolds;
@@ -55,6 +56,13 @@ public sealed class SubmitAdjacentApplicationCommandHandler(
         if (slot.SlotStatus != SlotStatuses.Available)
         {
             throw new ConflictException(SideMessages.SlotNotAvailable);
+        }
+
+        // WARD-02: a ward can close a zone to new applications by dating its deadline in the
+        // past, without touching existing applications, renewals or contracts on it.
+        if (slot.ApplicationDeadline is { } deadline && BusinessCalendar.Today(clock.UtcNow) > deadline)
+        {
+            throw new DomainRuleException(SideMessages.ZoneApplicationDeadlinePassed);
         }
 
         // BR-11: the slot must be within the configured radius of the registered address.

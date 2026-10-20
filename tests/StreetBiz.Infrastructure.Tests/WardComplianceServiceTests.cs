@@ -1,0 +1,1719 @@
+using DocumentFormat.OpenXml.Packaging;
+using Microsoft.Data.Sqlite;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.Extensions.Options;
+using StreetBiz.Application.Common.Exceptions;
+using StreetBiz.Application.Features.AiAssistance;
+using StreetBiz.Application.Common.Models;
+using StreetBiz.Application.Features.WardCompliance;
+using StreetBiz.Application.Features.WardSlots;
+using StreetBiz.Infrastructure.Common;
+using StreetBiz.Infrastructure.Persistence;
+using StreetBiz.Infrastructure.Persistence.Repositories;
+using StreetBiz.Infrastructure.Persistence.ScaffoldedModels;
+using StreetBiz.Infrastructure.Security;
+using StreetBiz.Infrastructure.Services;
+using StreetBiz.Infrastructure.Services.Documents;
+
+namespace StreetBiz.Infrastructure.Tests;
+
+/// <summary>
+/// A prior draft of WardComplianceService approved rental applications with no
+/// transaction at all, letting two officers double-book the same slot. These
+/// tests exist specifically to guard against that regression.
+/// </summary>
+public sealed class WardComplianceServiceTests
+{
+    [Fact]
+    public async Task Concurrent_approvals_for_the_same_slot_only_one_succeeds()
+    {
+        using var f = await Fixture.Create();
+
+        var t1 = f.NewService().DecideRentalApplicationAsync(
+            f.Actor, 1, new WardRentalApplicationDecision("APPROVE", "Đạt yêu cầu", "PENDING"), default);
+        var t2 = f.NewService().DecideRentalApplicationAsync(
+            f.Actor, 2, new WardRentalApplicationDecision("APPROVE", "Đạt yêu cầu", "PENDING"), default);
+
+        var results = await Task.WhenAll(t1.ContinueWith(TryUnwrap), t2.ContinueWith(TryUnwrap));
+
+        Assert.Single(results, r => r.Ok);
+        Assert.Single(results, r => !r.Ok);
+
+        using var verify = f.NewDb();
+        var activeContracts = await verify.RentalContracts
+            .CountAsync(c => c.slot_id == 100 && c.contract_status == "ACTIVE");
+        Assert.Equal(1, activeContracts);
+
+        static (bool Ok, Exception? Error) TryUnwrap(Task<WardRentalApplicationDetailDto> t) =>
+            t.IsFaulted ? (false, t.Exception!.InnerException) : (true, null);
+    }
+
+    [Fact]
+    public async Task An_event_zones_rental_application_is_blocked_once_the_term_outruns_the_event()
+    {
+        using var f = await Fixture.Create();
+        using (var setup = f.NewDb())
+        {
+            var zone = await setup.PricingZones.SingleAsync(z => z.zone_id == 1);
+            zone.rental_mode = "EVENT";
+            zone.event_start_date = DateOnly.FromDateTime(DateTime.UtcNow);
+            zone.event_end_date = DateOnly.FromDateTime(DateTime.UtcNow).AddDays(5); // application_id=1 requests 30 days
+            await setup.SaveChangesAsync();
+        }
+
+        var ex = await Assert.ThrowsAsync<DomainRuleException>(() =>
+            f.NewService().DecideRentalApplicationAsync(
+                f.Actor, 1, new WardRentalApplicationDecision("APPROVE", "Đạt yêu cầu", "PENDING"), default));
+        Assert.Contains("sự kiện", ex.Message);
+
+        var detail = await f.NewService().GetRentalApplicationDetailAsync(f.Actor, 2, default);
+        Assert.Contains(detail.Blockers, b => b.Contains("sự kiện"));
+    }
+
+    [Fact]
+    public async Task Sanction_amount_always_comes_from_the_wards_own_schedule_row()
+    {
+        using var f = await Fixture.Create();
+        var service = f.NewService();
+
+        await service.RecordViolationAsync(f.Actor, new RecordWardViolationRequest(
+            ContractId: null, SlotId: 100, VendorId: 10,
+            ViolationType: "UNAUTHORIZED_BUSINESS_USE", Description: "Bày bán ngoài ranh giới ô", EvidenceUrl: null), default);
+
+        using var read = f.NewDb();
+        var violationId = (await read.Violations.SingleAsync()).violation_id;
+
+        var result = await service.SanctionViolationAsync(f.Actor, violationId,
+            new SanctionWardViolationRequest(
+                PenaltyScheduleId: 1, DecisionNumber: "QD-2026-001", Notes: null), default);
+
+        // 2,500,000 is the seeded PenaltyFeeSchedules amount -- must match exactly,
+        // regardless of anything an AI legal-suggestion call might have proposed.
+        Assert.Equal(2500000m, result.PenaltyAmount);
+        Assert.Equal("QD-2026-001", result.SanctionDecisionNumber);
+        // Signer comes from the authenticated actor's own account, never from the request.
+        Assert.Equal("Cán bộ phường", result.SignerName);
+        Assert.Equal("Chủ tịch UBND Phường", result.SignerTitle);
+    }
+
+    [Fact]
+    public async Task The_officer_may_move_the_fine_inside_the_legal_bracket_with_a_reason_and_nowhere_else()
+    {
+        using var f = await Fixture.Create();
+        var service = f.NewService();
+        using (var seed = f.NewDb())
+        {
+            var schedule = await seed.PenaltyFeeSchedules.SingleAsync(s => s.penalty_schedule_id == 1);
+            schedule.legal_basis = "Nghị định 168/2024/NĐ-CP: hành vi (khung 2.000.000 - 3.000.000đ)";
+            await seed.SaveChangesAsync();
+        }
+
+        await service.RecordViolationAsync(f.Actor, new RecordWardViolationRequest(
+            ContractId: null, SlotId: 100, VendorId: 10,
+            ViolationType: "UNAUTHORIZED_BUSINESS_USE", Description: "Bày bán ngoài ranh giới ô", EvidenceUrl: null), default);
+        using var read = f.NewDb();
+        var violationId = (await read.Violations.SingleAsync()).violation_id;
+
+        var outside = await Assert.ThrowsAsync<WardException>(() => service.SanctionViolationAsync(f.Actor, violationId,
+            new SanctionWardViolationRequest(1, "QD-1", null, AmountOverride: 3_500_000, AmountReason: "Tái phạm"), default));
+        Assert.Equal("amount_outside_bracket", outside.Code);
+
+        var noReason = await Assert.ThrowsAsync<WardException>(() => service.SanctionViolationAsync(f.Actor, violationId,
+            new SanctionWardViolationRequest(1, "QD-1", null, AmountOverride: 2_200_000), default));
+        Assert.Equal("amount_reason_required", noReason.Code);
+
+        var result = await service.SanctionViolationAsync(f.Actor, violationId,
+            new SanctionWardViolationRequest(1, "QD-1", null, AmountOverride: 2_200_000, AmountReason: "Vi phạm lần đầu, tự khắc phục"),
+            default);
+        Assert.Equal(2_200_000m, result.PenaltyAmount);
+    }
+
+    [Fact]
+    public async Task A_fine_cannot_be_moved_when_the_legal_basis_states_no_bracket()
+    {
+        using var f = await Fixture.Create();
+        var service = f.NewService();
+        await service.RecordViolationAsync(f.Actor, new RecordWardViolationRequest(
+            ContractId: null, SlotId: 100, VendorId: 10,
+            ViolationType: "UNAUTHORIZED_BUSINESS_USE", Description: "Bày bán ngoài ranh giới ô", EvidenceUrl: null), default);
+        using var read = f.NewDb();
+        var violationId = (await read.Violations.SingleAsync()).violation_id;
+
+        var error = await Assert.ThrowsAsync<WardException>(() => service.SanctionViolationAsync(f.Actor, violationId,
+            new SanctionWardViolationRequest(1, "QD-2", null, AmountOverride: 2_000_000, AmountReason: "x"), default));
+
+        Assert.Equal("no_legal_bracket", error.Code);
+    }
+
+    [Fact]
+    public async Task Recording_a_violation_freezes_the_violators_identity_from_their_registration()
+    {
+        using var f = await Fixture.Create();
+        var service = f.NewService();
+
+        var detail = await service.RecordViolationAsync(f.Actor, new RecordWardViolationRequest(
+            ContractId: null, SlotId: 100, VendorId: 10,
+            ViolationType: "UNAUTHORIZED_BUSINESS_USE", Description: "Bày bán ngoài ranh giới ô", EvidenceUrl: null), default);
+
+        Assert.Equal("Chủ hộ A", detail.ViolatorFullName);
+        Assert.Matches(@"^0001/BB-VPHC-\d{4}$", detail.BienBanSo); // first violation in the fixture's DB
+        Assert.Equal("A-01 - Khu A", detail.PreparedLocation); // fixture's slot_code + zone_name, not typed by the officer
+
+        using var read = f.NewDb();
+        var stored = await read.Violations.SingleAsync();
+        // registration_id 1 (fixture) has no owner_date_of_birth/id_number seeded -- confirms
+        // these come from the registration row, not made up, and stay null when absent there.
+        Assert.Null(stored.violator_date_of_birth);
+        Assert.Null(stored.violator_id_number);
+    }
+
+    [Theory]
+    [InlineData("DIRECT", 2)]
+    [InlineData("WRITTEN", 5)]
+    public async Task Explanation_deadline_is_counted_in_working_days(string method, int workingDays)
+    {
+        using var f = await Fixture.Create();
+        var service = f.NewService();
+        var todayVn = BusinessCalendar.Today(DateTime.UtcNow);
+        var expectedDeadline = BusinessCalendar.StartOfDayUtc(BusinessCalendar.AddWorkingDays(todayVn, workingDays));
+
+        var detail = await service.RecordViolationAsync(f.Actor, new RecordWardViolationRequest(
+            null, 100, 10, "UNAUTHORIZED_BUSINESS_USE", "Vi phạm", null,
+            ExplanationRequired: true, ExplanationMethod: method), default);
+
+        Assert.True(detail.ExplanationRequired);
+        Assert.Equal(method, detail.ExplanationMethod);
+        Assert.Equal(expectedDeadline, detail.ExplanationDeadlineAt);
+    }
+
+    [Fact]
+    public async Task Sanctioning_is_refused_while_the_explanation_window_is_still_open()
+    {
+        using var f = await Fixture.Create();
+        var service = f.NewService();
+
+        await service.RecordViolationAsync(f.Actor, new RecordWardViolationRequest(
+            null, 100, 10, "UNAUTHORIZED_BUSINESS_USE", "Vi phạm", null,
+            ExplanationRequired: true, ExplanationMethod: "WRITTEN"), default);
+        using var read = f.NewDb();
+        var violationId = (await read.Violations.SingleAsync()).violation_id;
+
+        var ex = await Assert.ThrowsAsync<WardException>(() =>
+            service.SanctionViolationAsync(f.Actor, violationId,
+                new SanctionWardViolationRequest(1, "QD-2026-010", null), default));
+        Assert.Equal("explanation_window_open", ex.Code);
+
+        // Explicitly acknowledging early sanction overrides the block.
+        var result = await service.SanctionViolationAsync(f.Actor, violationId,
+            new SanctionWardViolationRequest(1, "QD-2026-010", null, AcknowledgeEarlySanction: true), default);
+        Assert.Equal("QD-2026-010", result.SanctionDecisionNumber);
+    }
+
+    [Fact]
+    public async Task Sanctioning_succeeds_once_the_violators_explanation_is_recorded()
+    {
+        using var f = await Fixture.Create();
+        var service = f.NewService();
+
+        await service.RecordViolationAsync(f.Actor, new RecordWardViolationRequest(
+            null, 100, 10, "UNAUTHORIZED_BUSINESS_USE", "Vi phạm", null,
+            ExplanationRequired: true, ExplanationMethod: "DIRECT"), default);
+        using var read = f.NewDb();
+        var violationId = (await read.Violations.SingleAsync()).violation_id;
+
+        var explained = await service.RecordExplanationAsync(f.Actor, violationId,
+            new RecordExplanationRequest("Tôi đã dọn dẹp ngay sau khi bị nhắc nhở."), default);
+        Assert.NotNull(explained.ExplanationReceivedAt);
+
+        var result = await service.SanctionViolationAsync(f.Actor, violationId,
+            new SanctionWardViolationRequest(1, "QD-2026-011", null), default);
+        Assert.Equal("QD-2026-011", result.SanctionDecisionNumber);
+    }
+
+    [Fact]
+    public async Task Compliance_flag_is_off_when_the_ward_has_not_configured_a_policy()
+    {
+        using var f = await Fixture.Create();
+        var service = f.NewService();
+
+        await service.RecordViolationAsync(f.Actor, new RecordWardViolationRequest(
+            null, 100, 10, "UNAUTHORIZED_BUSINESS_USE", "Vi phạm", null), default);
+        using var read = f.NewDb();
+        var violationId = (await read.Violations.SingleAsync()).violation_id;
+        await service.SanctionViolationAsync(f.Actor, violationId,
+            new SanctionWardViolationRequest(1, "QD-2026-100", null), default);
+
+        var detail = await service.GetViolationDetailAsync(f.Actor, violationId, default);
+
+        Assert.Null(detail.ComplianceFlag.ViolationThreshold);
+        Assert.False(detail.ComplianceFlag.ViolationThresholdReached);
+        Assert.False(detail.ComplianceFlag.HasOverduePenalty);
+    }
+
+    [Fact]
+    public async Task Compliance_flag_only_reaches_threshold_once_enough_violations_are_sanctioned_in_window()
+    {
+        using var f = await Fixture.Create();
+        using (var setup = f.NewDb())
+        {
+            setup.WardCompliancePolicies.Add(new WardCompliancePolicy
+            {
+                ward_unit_id = 1,
+                ward_unit_type = "WARD",
+                violation_threshold_count = 2,
+                violation_window_days = 90,
+                updated_by = f.Actor.UserId,
+                updated_at = DateTime.UtcNow,
+            });
+            await setup.SaveChangesAsync();
+        }
+        var service = f.NewService();
+
+        async Task<long> RecordAndSanction(string decisionNumber)
+        {
+            await service.RecordViolationAsync(f.Actor, new RecordWardViolationRequest(
+                null, 100, 10, "UNAUTHORIZED_BUSINESS_USE", "Vi phạm", null), default);
+            using var read = f.NewDb();
+            var violationId = await read.Violations.OrderByDescending(v => v.violation_id)
+                .Select(v => v.violation_id).FirstAsync();
+            await service.SanctionViolationAsync(f.Actor, violationId,
+                new SanctionWardViolationRequest(1, decisionNumber, null), default);
+            return violationId;
+        }
+
+        var first = await RecordAndSanction("QD-2026-101");
+        var firstDetail = await service.GetViolationDetailAsync(f.Actor, first, default);
+        Assert.Equal(1, firstDetail.ComplianceFlag.SanctionedViolationCount);
+        Assert.False(firstDetail.ComplianceFlag.ViolationThresholdReached);
+
+        var second = await RecordAndSanction("QD-2026-102");
+        var secondDetail = await service.GetViolationDetailAsync(f.Actor, second, default);
+        Assert.Equal(2, secondDetail.ComplianceFlag.SanctionedViolationCount);
+        Assert.Equal(2, secondDetail.ComplianceFlag.ViolationThreshold);
+        Assert.True(secondDetail.ComplianceFlag.ViolationThresholdReached);
+    }
+
+    [Fact]
+    public async Task Compliance_flag_reports_an_unpaid_penalty_only_once_it_is_past_the_ward_s_grace_period()
+    {
+        using var f = await Fixture.Create();
+        using (var setup = f.NewDb())
+        {
+            setup.WardCompliancePolicies.Add(new WardCompliancePolicy
+            {
+                ward_unit_id = 1,
+                ward_unit_type = "WARD",
+                unpaid_penalty_grace_days = 5,
+                updated_by = f.Actor.UserId,
+                updated_at = DateTime.UtcNow,
+            });
+            await setup.SaveChangesAsync();
+        }
+        var service = f.NewService();
+
+        await service.RecordViolationAsync(f.Actor, new RecordWardViolationRequest(
+            null, 100, 10, "UNAUTHORIZED_BUSINESS_USE", "Vi phạm", null), default);
+        using var read = f.NewDb();
+        var violationId = (await read.Violations.SingleAsync()).violation_id;
+        await service.SanctionViolationAsync(f.Actor, violationId,
+            new SanctionWardViolationRequest(1, "QD-2026-110", null), default);
+
+        var freshDetail = await service.GetViolationDetailAsync(f.Actor, violationId, default);
+        Assert.False(freshDetail.ComplianceFlag.HasOverduePenalty);
+
+        // Back-date the penalty past the 5-day grace period.
+        using (var age = f.NewDb())
+        {
+            var penalty = await age.Penalties.SingleAsync(p => p.violation_id == violationId);
+            penalty.created_at = DateTime.UtcNow.AddDays(-6);
+            await age.SaveChangesAsync();
+        }
+
+        var overdueDetail = await service.GetViolationDetailAsync(f.Actor, violationId, default);
+        Assert.True(overdueDetail.ComplianceFlag.HasOverduePenalty);
+        Assert.True(overdueDetail.ComplianceFlag.OverduePenaltyDays >= 5);
+    }
+
+    [Fact]
+    public async Task Approving_an_application_bills_exactly_what_the_vendor_was_quoted()
+    {
+        using var f = await Fixture.Create();
+        using (var seed = f.NewDb())
+        {
+            var zone = await seed.PricingZones.SingleAsync(z => z.zone_id == 1);
+            zone.price_display_unit = "MONTH";
+            zone.price_per_month = 1_000_000;
+            zone.price_per_day = 33_333;
+            zone.quarter_discount_percent = 10;
+            seed.ZoneFeeComponents.AddRange(
+                new ZoneFeeComponent { zone_id = 1, component_name = "Phí vệ sinh", calc_basis = "PER_DAY", unit_amount = 3_000, sort_order = 0 },
+                new ZoneFeeComponent { zone_id = 1, component_name = "Phí hồ sơ", calc_basis = "ONE_TIME", unit_amount = 150_000, sort_order = 1 },
+                new ZoneFeeComponent { zone_id = 1, component_name = "Tiền đặt cọc", calc_basis = "DEPOSIT", unit_amount = 500_000, sort_order = 2 });
+            var app = await seed.RentalApplications.SingleAsync(a => a.application_id == 1);
+            app.requested_term_days = 90;
+            await seed.SaveChangesAsync();
+        }
+
+        await f.NewService().DecideRentalApplicationAsync(
+            f.Actor, 1, new WardRentalApplicationDecision("APPROVE", "Đạt yêu cầu", "PENDING"), default);
+
+        using var verify = f.NewDb();
+        var contract = await verify.RentalContracts.SingleAsync();
+        // Inclusive end date: 90 days run start .. start+89.
+        Assert.Equal(contract.start_date.AddDays(89), contract.end_date);
+
+        var schedule = await verify.FeeSchedules.Include(fs => fs.FeeScheduleItems)
+            .SingleAsync(fs => fs.contract_id == contract.contract_id);
+        // 3 x 1 000 000 - 10% + 90 x 3 000 + 150 000 + 500 000 deposit -- not 90 x 33 333.
+        Assert.Equal(3_620_000, schedule.total_amount);
+        Assert.Equal(3, schedule.FeeScheduleItems.Count);
+        Assert.Equal(schedule.total_amount, schedule.FeeScheduleItems.Sum(i => i.amount));
+    }
+
+    [Fact]
+    public async Task Revoking_a_permit_from_the_compliance_banner_is_tagged_in_the_audit_log()
+    {
+        using var f = await Fixture.Create();
+        var service = f.NewService();
+        await service.DecideRentalApplicationAsync(
+            f.Actor, 1, new WardRentalApplicationDecision("APPROVE", "Đạt yêu cầu", "PENDING"), default);
+
+        long permitId;
+        using (var read = f.NewDb())
+        {
+            permitId = await read.DigitalPermits.Select(p => p.permit_id).SingleAsync();
+        }
+
+        await service.ExecutePermitActionAsync(f.Actor, permitId,
+            new WardPermitActionRequest("REVOKE", "Đủ 3 lần vi phạm", BasedOnComplianceThreshold: true), default);
+
+        using var verify = f.NewDb();
+        var auditDetails = await verify.AuditLogs
+            .Where(a => a.entity_type == "DigitalPermit" && a.entity_id == permitId)
+            .Select(a => a.details).SingleAsync();
+        Assert.Contains("đạt ngưỡng vi phạm", auditDetails);
+    }
+
+    [Fact]
+    public async Task Generating_the_bien_ban_document_produces_a_valid_docx_containing_the_recorded_data()
+    {
+        using var f = await Fixture.Create();
+        var service = f.NewService();
+
+        await service.RecordViolationAsync(f.Actor, new RecordWardViolationRequest(
+            null, 100, 10, "UNAUTHORIZED_BUSINESS_USE", "Bày bán ngoài ranh giới ô", null,
+            WitnessName: "Nguyễn Văn Chứng", WitnessRole: "WITNESS",
+            ExplanationRequired: true, ExplanationMethod: "WRITTEN"), default);
+        using var read = f.NewDb();
+        var violationId = (await read.Violations.SingleAsync()).violation_id;
+
+        var doc = await service.GenerateViolationDocumentAsync(f.Actor, violationId, default);
+
+        Assert.NotEmpty(doc.Content);
+        Assert.EndsWith(".docx", doc.FileName);
+
+        using var stream = new MemoryStream(doc.Content);
+        using var word = WordprocessingDocument.Open(stream, false);
+        var text = word.MainDocumentPart!.Document!.Body!.InnerText;
+        Assert.Contains("BIÊN BẢN VI PHẠM HÀNH CHÍNH", text);
+        Assert.Contains("Chủ hộ A", text); // violator snapshot, frozen from the registration
+        Assert.Contains("Nguyễn Văn Chứng", text);
+        Assert.Contains("Bày bán ngoài ranh giới ô", text);
+    }
+
+    [Theory]
+    [InlineData("docx")]
+    [InlineData("pdf")]
+    public async Task Generating_the_approved_registration_document_has_no_draft_watermark(string format)
+    {
+        using var f = await Fixture.Create();
+        var service = f.NewService();
+
+        // registration_id 1 is seeded APPROVED for ward 1 (Fixture.Create).
+        var (content, fileName) = await service.GenerateEnrollmentDocumentAsync(f.Actor, 1, format, default);
+
+        Assert.NotEmpty(content);
+        Assert.EndsWith($".{format}", fileName);
+        if (format == "docx")
+        {
+            using var stream = new MemoryStream(content);
+            using var word = WordprocessingDocument.Open(stream, false);
+            var text = word.MainDocumentPart!.Document!.Body!.InnerText;
+            Assert.Contains("GIẤY ĐỀ NGHỊ ĐĂNG KÝ HỘ KINH DOANH", text);
+            Assert.Contains("Hộ A", text); // display_name
+            Assert.Contains("Mẫu số 1", text); // petition header, not an agency letterhead
+            Assert.DoesNotContain("BẢN NHÁP", text);
+        }
+        else
+        {
+            // PdfDocumentRenderer defaults to WinAnsi (cp1252) encoding, which silently drops
+            // every Vietnamese diacritic ("Độc lập" renders as "c l p"). Rendering must use
+            // Identity-H (Unicode) encoding instead -- see OfficialPdfBuilder.Render.
+            var pdfText = System.Text.Encoding.Latin1.GetString(content);
+            Assert.Contains("Identity-H", pdfText);
+            Assert.DoesNotContain("WinAnsiEncoding", pdfText);
+        }
+    }
+
+    [Fact]
+    public async Task Generating_the_registration_document_for_an_unapproved_filing_is_watermarked_draft()
+    {
+        using var f = await Fixture.Create();
+        var service = f.NewService();
+
+        // registration_id 2 is seeded SUBMITTED (not yet reviewed) for ward 1.
+        var (content, _) = await service.GenerateEnrollmentDocumentAsync(f.Actor, 2, "docx", default);
+
+        using var stream = new MemoryStream(content);
+        using var word = WordprocessingDocument.Open(stream, false);
+        var text = word.MainDocumentPart!.Document!.Body!.InnerText;
+        Assert.Contains("BẢN NHÁP", text);
+    }
+
+    [Fact]
+    public async Task Recording_an_explanation_when_none_was_required_is_refused()
+    {
+        using var f = await Fixture.Create();
+        var service = f.NewService();
+
+        await service.RecordViolationAsync(f.Actor, new RecordWardViolationRequest(
+            null, 100, 10, "UNAUTHORIZED_BUSINESS_USE", "Vi phạm", null), default);
+        using var read = f.NewDb();
+        var violationId = (await read.Violations.SingleAsync()).violation_id;
+
+        var ex = await Assert.ThrowsAsync<WardException>(() =>
+            service.RecordExplanationAsync(f.Actor, violationId, new RecordExplanationRequest("..."), default));
+        Assert.Equal("explanation_not_required", ex.Code);
+    }
+
+    [Fact]
+    public async Task Delivering_and_refusing_a_violation_record_are_tracked_separately()
+    {
+        using var f = await Fixture.Create();
+        var service = f.NewService();
+
+        await service.RecordViolationAsync(f.Actor, new RecordWardViolationRequest(
+            null, 100, 10, "UNAUTHORIZED_BUSINESS_USE", "Vi phạm", null), default);
+        using var read = f.NewDb();
+        var violationId = (await read.Violations.SingleAsync()).violation_id;
+
+        var delivered = await service.DeliverViolationAsync(f.Actor, violationId,
+            new DeliverViolationRequest("Chủ hộ A", Refused: false, RefusalReason: null), default);
+        Assert.NotNull(delivered.DeliveredAt);
+        Assert.Equal("Chủ hộ A", delivered.DeliveredToName);
+        Assert.False(delivered.DeliveryRefused);
+
+        var refused = await service.DeliverViolationAsync(f.Actor, violationId,
+            new DeliverViolationRequest(null, Refused: true, RefusalReason: "Bỏ đi khỏi hiện trường"), default);
+        Assert.True(refused.DeliveryRefused);
+        Assert.Null(refused.DeliveredToName);
+        Assert.Equal("Bỏ đi khỏi hiện trường", refused.DeliveryRefusalReason);
+    }
+
+    [Fact]
+    public async Task An_officer_without_sanction_authority_cannot_sign()
+    {
+        using var f = await Fixture.Create();
+        var service = f.NewService();
+        var noAuthority = new WardActor(f.Actor.UserId, f.Actor.WardId, f.Actor.Name, SanctionAuthorityTitle: null);
+
+        await service.RecordViolationAsync(f.Actor, new RecordWardViolationRequest(
+            ContractId: null, SlotId: 100, VendorId: 10,
+            ViolationType: "UNAUTHORIZED_BUSINESS_USE", Description: "Bày bán ngoài ranh giới ô", EvidenceUrl: null), default);
+        using var read = f.NewDb();
+        var violationId = (await read.Violations.SingleAsync()).violation_id;
+
+        var ex = await Assert.ThrowsAsync<ForbiddenException>(() =>
+            service.SanctionViolationAsync(noAuthority, violationId,
+                new SanctionWardViolationRequest(PenaltyScheduleId: 1, DecisionNumber: "QD-2026-002", Notes: null), default));
+        Assert.Contains("thẩm quyền", ex.Message);
+    }
+
+    [Fact]
+    public async Task Sanctioning_with_another_wards_schedule_is_rejected()
+    {
+        using var f = await Fixture.Create();
+        var service = f.NewService();
+
+        await service.RecordViolationAsync(f.Actor, new RecordWardViolationRequest(
+            null, 100, 10, "UNAUTHORIZED_BUSINESS_USE", "Vi phạm", null), default);
+
+        using var read = f.NewDb();
+        var violationId = (await read.Violations.SingleAsync()).violation_id;
+
+        // penalty_schedule_id 2 belongs to ward 2, not ward 1 (f.Actor's ward).
+        await Assert.ThrowsAsync<NotFoundException>(() =>
+            service.SanctionViolationAsync(f.Actor, violationId,
+                new SanctionWardViolationRequest(PenaltyScheduleId: 2, DecisionNumber: "QD-X", Notes: null), default));
+    }
+
+    [Fact]
+    public async Task Other_ward_cannot_read_or_decide_on_this_wards_registration()
+    {
+        using var f = await Fixture.Create();
+        var foreignActor = new WardActor(2, 2, "Cán bộ phường khác");
+        var service = f.NewService();
+
+        await Assert.ThrowsAsync<NotFoundException>(() =>
+            service.GetEnrollmentDetailAsync(foreignActor, 1, default));
+        await Assert.ThrowsAsync<NotFoundException>(() =>
+            service.DecideEnrollmentAsync(foreignActor, 1,
+                new WardEnrollmentDecision("APPROVE", "X", "SUBMITTED"), default));
+        await Assert.ThrowsAsync<NotFoundException>(() =>
+            service.GenerateEnrollmentDocumentAsync(foreignActor, 1, "docx", default));
+    }
+
+    [Fact]
+    public async Task Approving_an_enrollment_without_manual_identity_verification_is_blocked()
+    {
+        // BR-41: AI-OCR (id_number/AiComplianceService) only reads and self-compares an
+        // uploaded photo -- it never queries the national population database -- so it can
+        // never by itself satisfy the KYC gate. Only ConfirmIdentityAsync can.
+        using var f = await Fixture.Create();
+        var service = f.NewService();
+
+        var ex = await Assert.ThrowsAsync<DomainRuleException>(() =>
+            service.DecideEnrollmentAsync(f.Actor, 2,
+                new WardEnrollmentDecision("APPROVE", "Đạt yêu cầu", "SUBMITTED"), default));
+
+        Assert.Contains("đối chiếu CCCD", ex.Message);
+    }
+
+    [Fact]
+    public async Task Confirming_identity_then_approving_succeeds_and_is_reflected_on_the_detail()
+    {
+        using var f = await Fixture.Create();
+        var service = f.NewService();
+
+        await GiveRequiredEvidence(f, registrationId: 2);
+        var confirmed = await service.ConfirmIdentityAsync(f.Actor, 2,
+            new ConfirmEnrollmentIdentity("Đối chiếu trực tiếp tại UBND phường ngày 20/09/2026"), default);
+        Assert.True(confirmed.IdentityVerified);
+
+        var result = await service.DecideEnrollmentAsync(f.Actor, 2,
+            new WardEnrollmentDecision("APPROVE", "Đạt yêu cầu", "SUBMITTED"), default);
+
+        Assert.Equal("APPROVED", result.Status);
+        Assert.True(result.IdentityVerified);
+    }
+
+    [Fact]
+    public async Task Document_check_refuses_honestly_without_separate_biometric_consent()
+    {
+        // Luat Bao ve du lieu ca nhan 2025 / Nghi dinh 356/2025/ND-CP requires biometric-data
+        // consent to be a separate, explicit action. Registration 1 in the fixture has none.
+        using var f = await Fixture.Create();
+        var service = f.NewService();
+
+        var result = await service.ReRunDocumentCheckAsync(f.Actor, 1, default);
+
+        Assert.False(result.IsAiGenerated);
+        Assert.True(result.NeedsManualVerification);
+        Assert.Contains(result.Discrepancies, d => d.Contains("sinh trắc học"));
+    }
+
+    [Fact]
+    public async Task Opening_an_enrollment_again_reuses_the_cached_ai_check()
+    {
+        // Every open used to call the provider twice (~3.5 s, paid credits).
+        using var f = await Fixture.Create();
+        await GiveConsentAndIdPhoto(f, registrationId: 2);
+        var ai = new CountingAiComplianceService();
+
+        var first = await f.NewService(ai).GetEnrollmentDetailAsync(f.Actor, 2, default);
+        var second = await f.NewService(ai).GetEnrollmentDetailAsync(f.Actor, 2, default);
+
+        Assert.Equal(1, ai.Extractions);
+        Assert.Equal(1, ai.Comparisons);
+        Assert.Equal(first.AiCheck!.Summary, second.AiCheck!.Summary);
+        Assert.True(second.AiCheck!.IsAiGenerated);
+    }
+
+    [Fact]
+    public async Task Explicit_rerun_and_changed_evidence_both_bypass_the_cached_ai_check()
+    {
+        using var f = await Fixture.Create();
+        await GiveConsentAndIdPhoto(f, registrationId: 2);
+        var ai = new CountingAiComplianceService();
+
+        await f.NewService(ai).GetEnrollmentDetailAsync(f.Actor, 2, default);
+        await f.NewService(ai).ReRunDocumentCheckAsync(f.Actor, 2, default);
+        Assert.Equal(2, ai.Comparisons);
+
+        using (var db = f.NewDb())
+        {
+            (await db.RegistrationEvidences.SingleAsync(e => e.registration_id == 2)).file_url = "/uploads/cccd-new.jpg";
+            await db.SaveChangesAsync();
+        }
+
+        await f.NewService(ai).GetEnrollmentDetailAsync(f.Actor, 2, default);
+        Assert.Equal(3, ai.Comparisons);
+    }
+
+    [Fact]
+    public async Task A_fallback_result_is_not_cached_so_the_next_open_retries_the_provider()
+    {
+        using var f = await Fixture.Create();
+        await GiveConsentAndIdPhoto(f, registrationId: 2);
+        var ai = new CountingAiComplianceService { ProviderDown = true };
+
+        await f.NewService(ai).GetEnrollmentDetailAsync(f.Actor, 2, default);
+        await f.NewService(ai).GetEnrollmentDetailAsync(f.Actor, 2, default);
+
+        Assert.Equal(2, ai.Comparisons);
+        using var db = f.NewDb();
+        Assert.Null((await db.BusinessRegistrations.SingleAsync(r => r.registration_id == 2)).ai_check_result);
+    }
+
+    [Fact]
+    public async Task Approving_without_the_required_documents_is_refused()
+    {
+        using var f = await Fixture.Create();
+        var service = f.NewService();
+        await service.ConfirmIdentityAsync(f.Actor, 2, new ConfirmEnrollmentIdentity("Đã đối chiếu CCCD"), default);
+
+        var ex = await Assert.ThrowsAsync<DomainRuleException>(() => service.DecideEnrollmentAsync(f.Actor, 2,
+            new WardEnrollmentDecision("APPROVE", "Đạt yêu cầu", "SUBMITTED"), default));
+
+        Assert.Contains("CCCD mặt trước", ex.Message);
+    }
+
+    [Theory]
+    [InlineData("WITHDRAWN")]
+    [InlineData("REJECTED")]
+    public async Task A_terminal_registration_cannot_be_approved_even_with_a_matching_expected_status(string status)
+    {
+        using var f = await Fixture.Create();
+        using (var db = f.NewDb())
+        {
+            (await db.BusinessRegistrations.SingleAsync(r => r.registration_id == 2)).registration_status = status;
+            await db.SaveChangesAsync();
+        }
+
+        await Assert.ThrowsAsync<DomainRuleException>(() => f.NewService().DecideEnrollmentAsync(f.Actor, 2,
+            new WardEnrollmentDecision("APPROVE", "Đạt yêu cầu", status), default));
+    }
+
+    [Fact]
+    public async Task A_decision_cannot_be_flipped_after_the_fact()
+    {
+        using var f = await Fixture.Create();
+        var service = f.NewService();
+
+        // Registration 1 is already APPROVED; rejecting it afterwards is not a legal move.
+        await Assert.ThrowsAsync<DomainRuleException>(() => service.DecideEnrollmentAsync(f.Actor, 1,
+            new WardEnrollmentDecision("REJECT", "Đổi ý", "APPROVED"), default));
+    }
+
+    [Fact]
+    public async Task Claiming_moves_a_submitted_file_into_review_and_is_idempotent()
+    {
+        using var f = await Fixture.Create();
+
+        var claimed = await f.NewService().ClaimEnrollmentAsync(f.Actor, 2, default);
+        var again = await f.NewService().ClaimEnrollmentAsync(f.Actor, 2, default);
+
+        Assert.Equal("UNDER_REVIEW", claimed.Status);
+        Assert.Equal("UNDER_REVIEW", again.Status);
+
+        // A decision must now be made against the new status.
+        await GiveRequiredEvidence(f, registrationId: 2);
+        await f.NewService().ConfirmIdentityAsync(f.Actor, 2, new ConfirmEnrollmentIdentity("Đã đối chiếu CCCD"), default);
+        var decided = await f.NewService().DecideEnrollmentAsync(f.Actor, 2,
+            new WardEnrollmentDecision("REJECT", "Thiếu thông tin", "UNDER_REVIEW"), default);
+        Assert.Equal("REJECTED", decided.Status);
+    }
+
+    [Fact]
+    public async Task A_vendor_edit_clears_the_officers_identity_confirmation()
+    {
+        using var f = await Fixture.Create();
+        await f.NewService().ConfirmIdentityAsync(f.Actor, 2, new ConfirmEnrollmentIdentity("Đã đối chiếu CCCD"), default);
+
+        using var db = f.NewDb();
+        var repository = new BusinessRegistrationRepository(db, new DateTimeProvider());
+        await repository.UpdateAndResubmitAsync(2, new StreetBiz.Application.Common.Models.NewBizRegistration(
+            "ITINERANT", "Hộ B", null, null, null, 1), default);
+
+        using var verify = f.NewDb();
+        var reg = await verify.BusinessRegistrations.SingleAsync(r => r.registration_id == 2);
+        Assert.Null(reg.identity_verified_at);
+        Assert.Equal("SUBMITTED", reg.registration_status);
+    }
+
+    [Fact]
+    public async Task A_vendor_cannot_edit_a_file_an_officer_is_reviewing()
+    {
+        using var f = await Fixture.Create();
+        await f.NewService().ClaimEnrollmentAsync(f.Actor, 2, default);
+
+        using var db = f.NewDb();
+        var repository = new BusinessRegistrationRepository(db, new DateTimeProvider());
+        await Assert.ThrowsAsync<DomainRuleException>(() => repository.UpdateAndResubmitAsync(2,
+            new StreetBiz.Application.Common.Models.NewBizRegistration("ITINERANT", "Hộ B", null, null, null, 1), default));
+    }
+
+    [Fact]
+    public async Task A_draft_registration_is_invisible_to_the_ward()
+    {
+        using var f = await Fixture.Create();
+        using (var db = f.NewDb())
+        {
+            (await db.BusinessRegistrations.SingleAsync(r => r.registration_id == 2)).registration_status = "DRAFT";
+            await db.SaveChangesAsync();
+        }
+
+        var list = await f.NewService().ListEnrollmentsAsync(f.Actor, null, 1, default);
+
+        Assert.DoesNotContain(list, item => item.DisplayName == "Hộ B");
+        await Assert.ThrowsAsync<NotFoundException>(() => f.NewService().GetEnrollmentDetailAsync(f.Actor, 2, default));
+    }
+
+    [Fact]
+    public async Task Fast_track_check_lists_each_condition_and_is_not_eligible_until_all_pass()
+    {
+        using var f = await Fixture.Create();
+
+        var before = await f.NewService().CheckFastTrackAsync(f.Actor, 2, default);
+
+        Assert.False(before.Eligible);
+        Assert.False(before.Criteria.Single(c => c.Code == "FIXED_STOREFRONT").Passed); // fixture vendor is itinerant
+        Assert.False(before.Criteria.Single(c => c.Code == "BUSINESS_LICENSE").Passed);
+
+        using (var db = f.NewDb())
+        {
+            var reg = await db.BusinessRegistrations.SingleAsync(r => r.registration_id == 2);
+            reg.vendor_type = "FIXED_STOREFRONT";
+            reg.declared_address = "12 Lê Duẩn";
+            reg.food_safety_commitment_at = DateTime.UtcNow;
+            await db.SaveChangesAsync();
+        }
+
+        await GiveRequiredEvidence(f, registrationId: 2);
+        using (var db = f.NewDb())
+        {
+            db.RegistrationEvidences.Add(new RegistrationEvidence
+            {
+                registration_id = 2, evidence_type = "BUSINESS_LICENSE", file_url = "/uploads/gpkd.jpg", uploaded_at = DateTime.UtcNow,
+            });
+            await db.SaveChangesAsync();
+        }
+
+        var after = await f.NewService().CheckFastTrackAsync(f.Actor, 2, default);
+
+        Assert.True(after.Eligible);
+        Assert.All(after.Criteria, c => Assert.True(c.Passed));
+    }
+
+    [Fact]
+    public async Task The_ward_queue_can_be_narrowed_to_one_vendor_type()
+    {
+        using var f = await Fixture.Create();
+        using (var db = f.NewDb())
+        {
+            (await db.BusinessRegistrations.SingleAsync(r => r.registration_id == 2)).vendor_type = "FIXED_STOREFRONT";
+            await db.SaveChangesAsync();
+        }
+
+        var fixedOnly = await f.NewService().ListEnrollmentsAsync(f.Actor, null, 1, default, "FIXED_STOREFRONT");
+        var itinerantOnly = await f.NewService().ListEnrollmentsAsync(f.Actor, null, 1, default, "ITINERANT");
+
+        Assert.Equal(["Hộ B"], fixedOnly.Select(i => i.DisplayName));
+        Assert.Equal(["Hộ A"], itinerantOnly.Select(i => i.DisplayName));
+    }
+
+    [Fact]
+    public async Task The_pending_queue_puts_fast_track_files_first_then_the_oldest()
+    {
+        using var f = await Fixture.Create();
+        using (var db = f.NewDb())
+        {
+            db.BusinessRegistrations.AddRange(
+                new BusinessRegistration { registration_id = 3, vendor_id = 10, ward_unit_id = 1, vendor_type = "FIXED_STOREFRONT", display_name = "Nhanh", registration_status = "SUBMITTED", fast_track_flag = true, created_at = new DateTime(2026, 10, 3) },
+                new BusinessRegistration { registration_id = 4, vendor_id = 11, ward_unit_id = 1, vendor_type = "ITINERANT", display_name = "Cũ", registration_status = "SUBMITTED", created_at = new DateTime(2026, 10, 1) });
+            (await db.BusinessRegistrations.SingleAsync(r => r.registration_id == 2)).created_at = new DateTime(2026, 10, 2);
+            await db.SaveChangesAsync();
+        }
+
+        var queue = await f.NewService().ListEnrollmentsAsync(f.Actor, "SUBMITTED", 1, default);
+
+        Assert.Equal(["Nhanh", "Cũ", "Hộ B"], queue.Select(i => i.DisplayName));
+    }
+
+    private static async Task GiveRequiredEvidence(Fixture f, long registrationId)
+    {
+        using var db = f.NewDb();
+        foreach (var type in new[] { "IDENTITY_DOCUMENT", "IDENTITY_DOCUMENT_BACK" })
+        {
+            db.RegistrationEvidences.Add(new RegistrationEvidence
+            {
+                registration_id = registrationId,
+                evidence_type = type,
+                file_url = $"/uploads/{registrationId}-{type}.jpg",
+                uploaded_at = DateTime.UtcNow,
+            });
+        }
+
+        await db.SaveChangesAsync();
+    }
+
+    private static async Task GiveConsentAndIdPhoto(Fixture f, long registrationId)
+    {
+        using var db = f.NewDb();
+        (await db.BusinessRegistrations.SingleAsync(r => r.registration_id == registrationId))
+            .biometric_consent_at = DateTime.UtcNow;
+        db.RegistrationEvidences.Add(new RegistrationEvidence
+        {
+            registration_id = registrationId,
+            evidence_type = "IDENTITY_DOCUMENT",
+            file_url = "/uploads/cccd.jpg",
+            uploaded_at = DateTime.UtcNow,
+        });
+        await db.SaveChangesAsync();
+    }
+
+    [Theory]
+    [InlineData("VALID", true)]
+    [InlineData("NOT_YET_VALID", false)]
+    [InlineData("SUSPENDED", false)]
+    [InlineData("EXPIRED", false)]
+    [InlineData("REVOKED", false)]
+    [InlineData("ACTIVE", false)] // the old (wrong) comparison target -- must NOT be treated as valid
+    [InlineData(null, false)]
+    public void Permit_validity_matches_the_real_effective_status_enum_not_ACTIVE(string? effectiveStatus, bool expectedValid)
+    {
+        // Regression for a bug where InspectPermitAsync compared effective_status against
+        // "ACTIVE" -- a value that column can never actually hold -- so every scanned permit,
+        // including genuinely valid ones, always reported as invalid.
+        Assert.Equal(expectedValid, WardComplianceService.IsPermitEffectivelyValid(effectiveStatus));
+    }
+
+    [Fact]
+    public async Task Approving_an_application_is_blocked_when_the_slots_existing_contract_is_only_suspended()
+    {
+        // Regression: a SUSPENDED contract is still legally in force (not
+        // cancelled/expired/revoked); a prior version only checked for ACTIVE, letting a
+        // second application be approved for a slot whose occupant was merely suspended.
+        using var f = await Fixture.Create();
+
+        using (var seed = f.NewDb())
+        {
+            seed.RentalContracts.Add(new RentalContract
+            {
+                contract_id = 900, application_id = 1, slot_id = 100, vendor_id = 10,
+                start_date = DateOnly.FromDateTime(DateTime.UtcNow),
+                end_date = DateOnly.FromDateTime(DateTime.UtcNow).AddDays(30),
+                contract_status = "SUSPENDED", created_at = DateTime.UtcNow
+            });
+            await seed.SaveChangesAsync();
+        }
+
+        var service = f.NewService();
+        await Assert.ThrowsAsync<ConflictException>(() =>
+            service.DecideRentalApplicationAsync(f.Actor, 1,
+                new WardRentalApplicationDecision("APPROVE", "Đạt yêu cầu", "PENDING"), default));
+    }
+
+    [Fact]
+    public async Task Revoking_a_permit_frees_the_slot_and_marks_the_contract_revoked()
+    {
+        // Regression: ExecutePermitActionAsync used to only write DigitalPermit.permit_status,
+        // leaving RentalContract stuck at ACTIVE and the slot permanently occupied even after
+        // the permit backing it was revoked.
+        using var f = await Fixture.Create();
+
+        long permitId;
+        using (var seed = f.NewDb())
+        {
+            seed.RentalContracts.Add(new RentalContract
+            {
+                contract_id = 901, application_id = 1, slot_id = 100, vendor_id = 10,
+                start_date = DateOnly.FromDateTime(DateTime.UtcNow),
+                end_date = DateOnly.FromDateTime(DateTime.UtcNow).AddDays(30),
+                contract_status = "ACTIVE", created_at = DateTime.UtcNow
+            });
+            seed.SidewalkSlots.First(s => s.slot_id == 100).slot_status = "ACTIVE";
+            await seed.SaveChangesAsync();
+
+            seed.DigitalPermits.Add(new DigitalPermit
+            {
+                permit_id = 950, contract_id = 901, qr_payload = "test-payload",
+                permit_status = "ACTIVE", issued_at = DateTime.UtcNow
+            });
+            await seed.SaveChangesAsync();
+            permitId = 950;
+        }
+
+        var service = f.NewService();
+        await service.ExecutePermitActionAsync(f.Actor, permitId,
+            new WardPermitActionRequest("REVOKE", "Vi phạm nghiêm trọng"), default);
+
+        using var verify = f.NewDb();
+        var contract = await verify.RentalContracts.SingleAsync(c => c.contract_id == 901);
+        var slot = await verify.SidewalkSlots.SingleAsync(s => s.slot_id == 100);
+        Assert.Equal("REVOKED", contract.contract_status);
+        Assert.Equal("AVAILABLE", slot.slot_status);
+    }
+
+    [Fact]
+    public async Task Suspending_a_permit_notifies_the_vendors_account_not_the_user_with_the_vendor_id()
+    {
+        // Regression: the notice was addressed to user_id = vendor_id. The fixture's vendors
+        // share their user ids, so this vendor's two ids differ on purpose.
+        using var f = await Fixture.Create();
+
+        using (var seed = f.NewDb())
+        {
+            seed.UserAccounts.Add(new UserAccount
+            {
+                user_id = 40, phone_number = "0900000040", password_hash = "x",
+                full_name = "Chủ hộ C", role_code = "VENDOR", account_status = "ACTIVE"
+            });
+            seed.Vendors.Add(new Vendor { vendor_id = 30, user_id = 40 });
+            seed.RentalContracts.Add(new RentalContract
+            {
+                contract_id = 902, application_id = 1, slot_id = 100, vendor_id = 30,
+                start_date = DateOnly.FromDateTime(DateTime.UtcNow),
+                end_date = DateOnly.FromDateTime(DateTime.UtcNow).AddDays(30),
+                contract_status = "ACTIVE", created_at = DateTime.UtcNow
+            });
+            await seed.SaveChangesAsync();
+
+            seed.DigitalPermits.Add(new DigitalPermit
+            {
+                permit_id = 951, contract_id = 902, qr_payload = "test-payload-2",
+                permit_status = "ACTIVE", issued_at = DateTime.UtcNow
+            });
+            await seed.SaveChangesAsync();
+        }
+
+        await f.NewService().ExecutePermitActionAsync(f.Actor, 951,
+            new WardPermitActionRequest("SUSPEND", "Lấn chiếm lối đi"), default);
+
+        using var verify = f.NewDb();
+        var recipient = await verify.Notifications
+            .Where(n => n.notification_type == "PERMIT_STATUS_SUSPENDED")
+            .Select(n => n.user_id).SingleAsync();
+        Assert.Equal(40, recipient);
+    }
+
+    [Fact]
+    public async Task Risk_queue_flags_registration_with_no_evidence_and_explains_why()
+    {
+        using var f = await Fixture.Create();
+        var service = f.NewService();
+
+        var queue = await service.GetRiskQueueAsync(f.Actor, default);
+
+        var flagged = Assert.Single(queue, x => x.RegistrationId == "2");
+        Assert.Contains(flagged.Breakdown, b => b.Reason.Contains("minh chứng"));
+        Assert.True(flagged.Score > 0);
+    }
+
+    [Fact]
+    public async Task Approving_renewal_extends_contract_end_date_and_appends_the_renewal_term_to_the_open_schedule()
+    {
+        using var f = await Fixture.Create();
+        var today = DateOnly.FromDateTime(DateTime.UtcNow);
+        var initialEndDate = today.AddDays(30);
+
+        using (var seed = f.NewDb())
+        {
+            seed.RentalContracts.Add(new RentalContract
+            {
+                contract_id = 501,
+                application_id = 1,
+                slot_id = 100,
+                vendor_id = 10,
+                start_date = today,
+                end_date = initialEndDate,
+                contract_status = "ACTIVE",
+                created_at = DateTime.UtcNow
+            });
+            seed.FeeSchedules.Add(new FeeSchedule
+            {
+                fee_schedule_id = 501,
+                contract_id = 501,
+                revision = 1,
+                total_amount = 1500000,
+                generated_at = DateTime.UtcNow
+            });
+            seed.DigitalPermits.Add(new DigitalPermit
+            {
+                permit_id = 501,
+                contract_id = 501,
+                qr_payload = "qr-renewal-501",
+                permit_status = "ACTIVE",
+                issued_at = DateTime.UtcNow
+            });
+            seed.RenewalRequests.Add(new RenewalRequest
+            {
+                renewal_id = 601,
+                contract_id = 501,
+                requested_term_days = 30,
+                renewal_status = "PENDING",
+                created_at = DateTime.UtcNow
+            });
+            await seed.SaveChangesAsync();
+        }
+
+        var service = f.NewService();
+        var detail = await service.GetRenewalDetailAsync(f.Actor, 601, default);
+        Assert.True(detail.CanApprove);
+        Assert.True(detail.IsFastTrackEligible);
+        Assert.Equal(initialEndDate, detail.CurrentEndDate);
+        Assert.Equal(initialEndDate.AddDays(30), detail.ProposedEndDate);
+
+        var result = await service.DecideRenewalAsync(
+            f.Actor, 601, new WardRenewalDecision("APPROVE", "Đủ điều kiện theo quy định", "PENDING"), default);
+
+        Assert.Equal("APPROVED", result.Status);
+
+        using var verify = f.NewDb();
+        var contract = await verify.RentalContracts.SingleAsync(c => c.contract_id == 501);
+        Assert.Equal(initialEndDate.AddDays(30), contract.end_date);
+
+        var renewal = await verify.RenewalRequests.SingleAsync(r => r.renewal_id == 601);
+        Assert.Equal("APPROVED", renewal.renewal_status);
+        Assert.Equal(initialEndDate.AddDays(30), renewal.new_end_date);
+        Assert.Equal(1, renewal.reviewed_by);
+
+        // The original term's schedule stays open (its instalments may already be paid); the
+        // renewal's 30 days (one month at 50 000 x 30) are added to it from the day after the old end.
+        var schedule = await verify.FeeSchedules.Include(fs => fs.FeeScheduleItems)
+            .SingleAsync(fs => fs.contract_id == 501);
+        Assert.Equal(501, schedule.fee_schedule_id);
+        Assert.Null(schedule.superseded_at);
+        Assert.Equal(3_000_000, schedule.total_amount);
+        var renewalItem = Assert.Single(schedule.FeeScheduleItems);
+        Assert.Equal(initialEndDate.AddDays(1), renewalItem.due_date);
+        Assert.Equal(1_500_000, renewalItem.amount);
+
+        var audit = await verify.AuditLogs.SingleAsync(a => a.action == "RENEWAL_APPROVED");
+        Assert.Equal(601, audit.entity_id);
+        Assert.Contains("501", audit.details);
+    }
+
+    [Fact]
+    public async Task Renewal_review_uses_registration_linked_to_the_contract_application()
+    {
+        using var f = await Fixture.Create();
+        var today = DateOnly.FromDateTime(DateTime.UtcNow);
+
+        using (var seed = f.NewDb())
+        {
+            seed.BusinessRegistrations.Add(new BusinessRegistration
+            {
+                registration_id = 3,
+                vendor_id = 10,
+                ward_unit_id = 1,
+                vendor_type = "ITINERANT",
+                display_name = "Hồ sơ chưa duyệt của hộ A",
+                registration_status = "SUBMITTED"
+            });
+            seed.RentalApplications.Add(new RentalApplication
+            {
+                application_id = 3,
+                registration_id = 3,
+                slot_id = 100,
+                application_method = "MANUAL_SELECTED",
+                application_status = "APPROVED",
+                requested_term_days = 30
+            });
+            seed.RentalContracts.Add(new RentalContract
+            {
+                contract_id = 505,
+                application_id = 3,
+                slot_id = 100,
+                vendor_id = 10,
+                start_date = today,
+                end_date = today.AddDays(30),
+                contract_status = "ACTIVE",
+                created_at = DateTime.UtcNow
+            });
+            seed.DigitalPermits.Add(new DigitalPermit
+            {
+                permit_id = 505,
+                contract_id = 505,
+                qr_payload = "qr-renewal-505",
+                permit_status = "ACTIVE",
+                issued_at = DateTime.UtcNow
+            });
+            seed.RenewalRequests.Add(new RenewalRequest
+            {
+                renewal_id = 605,
+                contract_id = 505,
+                requested_term_days = 30,
+                renewal_status = "PENDING",
+                created_at = DateTime.UtcNow
+            });
+            await seed.SaveChangesAsync();
+        }
+
+        var service = f.NewService();
+        var detail = await service.GetRenewalDetailAsync(f.Actor, 605, default);
+
+        Assert.Equal(3, detail.RegistrationId);
+        Assert.Equal("SUBMITTED", detail.RegistrationStatus);
+        Assert.False(detail.CanApprove);
+        Assert.Contains(detail.Blockers, b => b.Contains("BR-16", StringComparison.OrdinalIgnoreCase));
+
+        await Assert.ThrowsAsync<DomainRuleException>(() =>
+            service.DecideRenewalAsync(
+                f.Actor,
+                605,
+                new WardRenewalDecision("APPROVE", "Không được duyệt nhầm hồ sơ khác", "PENDING"),
+                default));
+    }
+
+    [Fact]
+    public async Task Approving_renewal_is_blocked_when_penalty_is_unpaid()
+    {
+        using var f = await Fixture.Create();
+        var today = DateOnly.FromDateTime(DateTime.UtcNow);
+
+        using (var seed = f.NewDb())
+        {
+            seed.RentalContracts.Add(new RentalContract
+            {
+                contract_id = 506,
+                application_id = 1,
+                slot_id = 100,
+                vendor_id = 10,
+                start_date = today,
+                end_date = today.AddDays(30),
+                contract_status = "ACTIVE",
+                created_at = DateTime.UtcNow
+            });
+            seed.DigitalPermits.Add(new DigitalPermit
+            {
+                permit_id = 506,
+                contract_id = 506,
+                qr_payload = "qr-renewal-506",
+                permit_status = "ACTIVE",
+                issued_at = DateTime.UtcNow
+            });
+            seed.RenewalRequests.Add(new RenewalRequest
+            {
+                renewal_id = 606,
+                contract_id = 506,
+                requested_term_days = 30,
+                renewal_status = "PENDING",
+                created_at = DateTime.UtcNow
+            });
+            seed.Violations.Add(new Violation
+            {
+                violation_id = 706,
+                contract_id = 506,
+                slot_id = 100,
+                vendor_id = 10,
+                violation_type = "UNAUTHORIZED_BUSINESS_USE",
+                description = "Lấn chiếm lối đi",
+                recorded_by = 1,
+                recorder_role = "WARD_AUTHORITY",
+                source = "WARD_INSPECTION",
+                recorded_at = DateTime.UtcNow
+            });
+            seed.Penalties.Add(new Penalty
+            {
+                penalty_id = 706,
+                violation_id = 706,
+                penalty_schedule_id = 1,
+                amount = 2500000,
+                penalty_status = "UNPAID",
+                decision_number = "QD-706",
+                signer_name = "Chủ tịch UBND Phường",
+                signer_title = "Chủ tịch",
+                created_at = DateTime.UtcNow
+            });
+            await seed.SaveChangesAsync();
+        }
+
+        var service = f.NewService();
+        var detail = await service.GetRenewalDetailAsync(f.Actor, 606, default);
+
+        Assert.False(detail.CanApprove);
+        Assert.Equal(1, detail.Scorecard.UnpaidPenaltyCount);
+
+        var ex = await Assert.ThrowsAsync<DomainRuleException>(() =>
+            service.DecideRenewalAsync(
+                f.Actor,
+                606,
+                new WardRenewalDecision("APPROVE", "Đủ điều kiện", "PENDING"),
+                default));
+        Assert.Contains("chưa hoàn thành nộp phạt", ex.Message);
+    }
+
+    /// <summary>Mirrors HasOutstandingDebtAsync, the same debt definition that already blocks
+    /// SIDE-07 (return slot) and BR-27 (slot transfer): renewal approval must not let a vendor
+    /// who owes overdue rent for the current term get that term extended for free.</summary>
+    [Fact]
+    public async Task Approving_renewal_is_blocked_when_a_regular_fee_item_is_overdue()
+    {
+        using var f = await Fixture.Create();
+        var today = DateOnly.FromDateTime(DateTime.UtcNow);
+
+        using (var seed = f.NewDb())
+        {
+            seed.RentalContracts.Add(new RentalContract
+            {
+                contract_id = 507,
+                application_id = 1,
+                slot_id = 100,
+                vendor_id = 10,
+                start_date = today,
+                end_date = today.AddDays(30),
+                contract_status = "ACTIVE",
+                created_at = DateTime.UtcNow
+            });
+            seed.DigitalPermits.Add(new DigitalPermit
+            {
+                permit_id = 507,
+                contract_id = 507,
+                qr_payload = "qr-renewal-507",
+                permit_status = "ACTIVE",
+                issued_at = DateTime.UtcNow
+            });
+            seed.RenewalRequests.Add(new RenewalRequest
+            {
+                renewal_id = 607,
+                contract_id = 507,
+                requested_term_days = 30,
+                renewal_status = "PENDING",
+                created_at = DateTime.UtcNow
+            });
+            seed.FeeSchedules.Add(new FeeSchedule
+            {
+                fee_schedule_id = 507,
+                contract_id = 507,
+                revision = 1,
+                total_amount = 1500000,
+                generated_at = DateTime.UtcNow
+            });
+            seed.FeeScheduleItems.Add(new FeeScheduleItem
+            {
+                fee_item_id = 707,
+                fee_schedule_id = 507,
+                due_date = today.AddDays(-5),
+                amount = 1500000,
+                item_status = "OVERDUE"
+            });
+            await seed.SaveChangesAsync();
+        }
+
+        var service = f.NewService();
+        var detail = await service.GetRenewalDetailAsync(f.Actor, 607, default);
+
+        Assert.False(detail.CanApprove);
+        Assert.False(detail.IsFastTrackEligible);
+        Assert.Contains(detail.Blockers, b => b.Contains("quá hạn", StringComparison.OrdinalIgnoreCase));
+
+        var ex = await Assert.ThrowsAsync<DomainRuleException>(() =>
+            service.DecideRenewalAsync(
+                f.Actor,
+                607,
+                new WardRenewalDecision("APPROVE", "Đủ điều kiện", "PENDING"),
+                default));
+        Assert.Contains("quá hạn", ex.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task Rejecting_renewal_leaves_contract_end_date_untouched_and_records_reason()
+    {
+        using var f = await Fixture.Create();
+        var today = DateOnly.FromDateTime(DateTime.UtcNow);
+        var initialEndDate = today.AddDays(30);
+
+        using (var seed = f.NewDb())
+        {
+            seed.RentalContracts.Add(new RentalContract
+            {
+                contract_id = 502,
+                application_id = 1,
+                slot_id = 100,
+                vendor_id = 10,
+                start_date = today,
+                end_date = initialEndDate,
+                contract_status = "ACTIVE",
+                created_at = DateTime.UtcNow
+            });
+            seed.RenewalRequests.Add(new RenewalRequest
+            {
+                renewal_id = 602,
+                contract_id = 502,
+                requested_term_days = 30,
+                renewal_status = "PENDING",
+                created_at = DateTime.UtcNow
+            });
+            await seed.SaveChangesAsync();
+        }
+
+        var service = f.NewService();
+        var result = await service.DecideRenewalAsync(
+            f.Actor, 602, new WardRenewalDecision("REJECT", "Tuyến phố chuẩn bị chỉnh trang hạ tầng", "PENDING"), default);
+
+        Assert.Equal("REJECTED", result.Status);
+
+        using var verify = f.NewDb();
+        var contract = await verify.RentalContracts.SingleAsync(c => c.contract_id == 502);
+        Assert.Equal(initialEndDate, contract.end_date); // Untouched
+
+        var renewal = await verify.RenewalRequests.SingleAsync(r => r.renewal_id == 602);
+        Assert.Equal("REJECTED", renewal.renewal_status);
+        Assert.Equal("Tuyến phố chuẩn bị chỉnh trang hạ tầng", renewal.review_decision_reason);
+    }
+
+    [Fact]
+    public async Task Other_ward_cannot_review_or_decide_on_renewal()
+    {
+        using var f = await Fixture.Create();
+        var today = DateOnly.FromDateTime(DateTime.UtcNow);
+
+        using (var seed = f.NewDb())
+        {
+            seed.RentalContracts.Add(new RentalContract
+            {
+                contract_id = 503,
+                application_id = 1,
+                slot_id = 100, // Ward 1
+                vendor_id = 10,
+                start_date = today,
+                end_date = today.AddDays(30),
+                contract_status = "ACTIVE",
+                created_at = DateTime.UtcNow
+            });
+            seed.RenewalRequests.Add(new RenewalRequest
+            {
+                renewal_id = 603,
+                contract_id = 503,
+                requested_term_days = 30,
+                renewal_status = "PENDING",
+                created_at = DateTime.UtcNow
+            });
+            await seed.SaveChangesAsync();
+        }
+
+        var otherWardActor = new WardActor(2, 2, "Cán bộ Phường 2");
+        var service = f.NewService();
+
+        await Assert.ThrowsAsync<NotFoundException>(() =>
+            service.GetRenewalDetailAsync(otherWardActor, 603, default));
+
+        await Assert.ThrowsAsync<NotFoundException>(() =>
+            service.DecideRenewalAsync(otherWardActor, 603, new WardRenewalDecision("APPROVE", "Lý do", "PENDING"), default));
+    }
+
+    [Fact]
+    public async Task Concurrent_renewal_decisions_handled_honestly_via_expected_status()
+    {
+        // Two officers open the same renewal, both see PENDING, both decide "APPROVE" against
+        // that same expected status. Only one may win -- the loser must get an honest 409
+        // Conflict (ConflictException) rather than a silently overwritten decision.
+        using var f = await Fixture.Create();
+        var today = DateOnly.FromDateTime(DateTime.UtcNow);
+
+        using (var seed = f.NewDb())
+        {
+            seed.RentalContracts.Add(new RentalContract
+            {
+                contract_id = 504,
+                application_id = 1,
+                slot_id = 100,
+                vendor_id = 10,
+                start_date = today,
+                end_date = today.AddDays(30),
+                contract_status = "ACTIVE",
+                created_at = DateTime.UtcNow
+            });
+            seed.DigitalPermits.Add(new DigitalPermit
+            {
+                permit_id = 504,
+                contract_id = 504,
+                qr_payload = "qr-renewal-504",
+                permit_status = "ACTIVE",
+                issued_at = DateTime.UtcNow
+            });
+            seed.RenewalRequests.Add(new RenewalRequest
+            {
+                renewal_id = 604,
+                contract_id = 504,
+                requested_term_days = 30,
+                renewal_status = "PENDING",
+                created_at = DateTime.UtcNow
+            });
+            await seed.SaveChangesAsync();
+        }
+
+        var t1 = f.NewService().DecideRenewalAsync(
+            f.Actor, 604, new WardRenewalDecision("APPROVE", "Đạt yêu cầu", "PENDING"), default);
+        var t2 = f.NewService().DecideRenewalAsync(
+            f.Actor, 604, new WardRenewalDecision("APPROVE", "Đạt yêu cầu", "PENDING"), default);
+
+        var results = await Task.WhenAll(t1.ContinueWith(TryUnwrap), t2.ContinueWith(TryUnwrap));
+
+        Assert.Single(results, r => r.Ok);
+        Assert.Single(results, r => !r.Ok && r.Error is ConflictException);
+
+        using var verify = f.NewDb();
+        var renewal = await verify.RenewalRequests.SingleAsync(r => r.renewal_id == 604);
+        Assert.Equal("APPROVED", renewal.renewal_status);
+
+        static (bool Ok, Exception? Error) TryUnwrap(Task<WardRenewalDetailDto> t) =>
+            t.IsFaulted ? (false, t.Exception!.InnerException) : (true, null);
+    }
+
+    [Fact]
+    public async Task Batch_approve_processes_each_renewal_independently_and_reports_per_item_failures()
+    {
+        // Idea 4 (WARD-09): a batch call is "click Approve N times" with one shared reason, not
+        // a shortcut around per-item checks -- one stale item must not abort the rest, and each
+        // outcome is reported back individually rather than the whole call failing 409/404.
+        using var f = await Fixture.Create();
+        var today = DateOnly.FromDateTime(DateTime.UtcNow);
+
+        using (var seed = f.NewDb())
+        {
+            seed.RentalContracts.Add(new RentalContract
+            {
+                contract_id = 505,
+                application_id = 1,
+                slot_id = 100,
+                vendor_id = 10,
+                start_date = today,
+                end_date = today.AddDays(30),
+                contract_status = "ACTIVE",
+                created_at = DateTime.UtcNow
+            });
+            seed.DigitalPermits.Add(new DigitalPermit
+            {
+                permit_id = 605,
+                contract_id = 505,
+                qr_payload = "qr-renewal-605",
+                permit_status = "ACTIVE",
+                issued_at = DateTime.UtcNow
+            });
+            seed.RenewalRequests.Add(new RenewalRequest
+            {
+                renewal_id = 605,
+                contract_id = 505,
+                requested_term_days = 15,
+                renewal_status = "PENDING",
+                created_at = DateTime.UtcNow
+            });
+            seed.RentalContracts.Add(new RentalContract
+            {
+                contract_id = 506,
+                application_id = 2,
+                slot_id = 100,
+                vendor_id = 10,
+                start_date = today,
+                end_date = today.AddDays(30),
+                contract_status = "ACTIVE",
+                created_at = DateTime.UtcNow
+            });
+            seed.DigitalPermits.Add(new DigitalPermit
+            {
+                permit_id = 606,
+                contract_id = 506,
+                qr_payload = "qr-renewal-606",
+                permit_status = "ACTIVE",
+                issued_at = DateTime.UtcNow
+            });
+            // Actually PENDING, but the batch request below claims it as UNDER_REVIEW -- the
+            // stand-in for "another officer already touched this one".
+            seed.RenewalRequests.Add(new RenewalRequest
+            {
+                renewal_id = 606,
+                contract_id = 506,
+                requested_term_days = 15,
+                renewal_status = "PENDING",
+                created_at = DateTime.UtcNow
+            });
+            await seed.SaveChangesAsync();
+        }
+
+        var service = f.NewService();
+        var batchResult = await service.BatchDecideRenewalsAsync(
+            f.Actor,
+            new WardRenewalBatchDecisionRequest(
+                Items:
+                [
+                    new WardRenewalBatchDecisionItemRequest(605, "PENDING"),
+                    new WardRenewalBatchDecisionItemRequest(606, "UNDER_REVIEW"),
+                ],
+                Decision: "APPROVE",
+                Reason: "Đủ điều kiện gia hạn theo quy định, điểm bán chấp hành tốt quy chế hè phố"),
+            default);
+
+        Assert.Equal(2, batchResult.TotalRequested);
+        Assert.Equal(1, batchResult.SuccessCount);
+        Assert.Equal(1, batchResult.FailureCount);
+
+        var succeeded = Assert.Single(batchResult.Results, r => r.RenewalId == 605);
+        Assert.True(succeeded.Success);
+        Assert.Equal(today.AddDays(30).AddDays(15), succeeded.NewEndDate);
+
+        var failed = Assert.Single(batchResult.Results, r => r.RenewalId == 606);
+        Assert.False(failed.Success);
+        Assert.NotNull(failed.ErrorMessage);
+        Assert.Null(failed.NewEndDate);
+
+        using var verify = f.NewDb();
+        Assert.Equal("APPROVED", (await verify.RenewalRequests.SingleAsync(r => r.renewal_id == 605)).renewal_status);
+        // The failed item must be untouched, not half-applied.
+        Assert.Equal("PENDING", (await verify.RenewalRequests.SingleAsync(r => r.renewal_id == 606)).renewal_status);
+    }
+
+    private sealed class Fixture : IDisposable
+    {
+        public SqliteConnection Connection { get; } = new("Data Source=:memory:");
+        public WardActor Actor { get; } = new(1, 1, "Cán bộ phường", "Chủ tịch UBND Phường");
+
+        public static async Task<Fixture> Create()
+        {
+            var f = new Fixture();
+            await f.Connection.OpenAsync();
+            using var db = f.NewDb();
+            await db.Database.EnsureCreatedAsync();
+
+            db.Roles.AddRange(
+                new Role { role_code = "WARD_AUTHORITY", role_name = "Ward" },
+                new Role { role_code = "VENDOR", role_name = "Vendor" });
+            db.AdministrativeUnits.AddRange(
+                new AdministrativeUnit { unit_id = 1, unit_type = "WARD", unit_name = "Phường 1" },
+                new AdministrativeUnit { unit_id = 2, unit_type = "WARD", unit_name = "Phường 2" });
+            db.UserAccounts.AddRange(
+                new UserAccount { user_id = 1, phone_number = "0900000001", password_hash = "x", full_name = "Cán bộ", role_code = "WARD_AUTHORITY", ward_unit_id = 1, account_status = "ACTIVE" },
+                new UserAccount { user_id = 2, phone_number = "0900000002", password_hash = "x", full_name = "Cán bộ 2", role_code = "WARD_AUTHORITY", ward_unit_id = 2, account_status = "ACTIVE" },
+                new UserAccount { user_id = 10, phone_number = "0900000010", password_hash = "x", full_name = "Chủ hộ A", role_code = "VENDOR", account_status = "ACTIVE" },
+                new UserAccount { user_id = 11, phone_number = "0900000011", password_hash = "x", full_name = "Chủ hộ B", role_code = "VENDOR", account_status = "ACTIVE" });
+            db.Vendors.AddRange(
+                new Vendor { vendor_id = 10, user_id = 10 },
+                new Vendor { vendor_id = 11, user_id = 11 });
+            db.BusinessRegistrations.AddRange(
+                new BusinessRegistration { registration_id = 1, vendor_id = 10, ward_unit_id = 1, vendor_type = "ITINERANT", display_name = "Hộ A", registration_status = "APPROVED" },
+                new BusinessRegistration { registration_id = 2, vendor_id = 11, ward_unit_id = 1, vendor_type = "ITINERANT", display_name = "Hộ B", registration_status = "SUBMITTED" });
+            db.PricingZones.Add(new PricingZone { zone_id = 1, ward_unit_id = 1, zone_name = "Khu A", price_per_day = 50000, created_by = 1 });
+            db.SidewalkSlots.Add(new SidewalkSlot { slot_id = 100, zone_id = 1, slot_code = "A-01", source = "WARD_DEFINED", slot_status = "PENDING_APPLICATION", latitude = 10, longitude = 106 });
+            db.RentalApplications.AddRange(
+                new RentalApplication { application_id = 1, registration_id = 1, slot_id = 100, application_method = "MANUAL_SELECTED", application_status = "PENDING", requested_term_days = 30 },
+                new RentalApplication { application_id = 2, registration_id = 1, slot_id = 100, application_method = "MANUAL_SELECTED", application_status = "PENDING", requested_term_days = 30 });
+            db.ViolationTypes.Add(new ViolationType { violation_type_code = "UNAUTHORIZED_BUSINESS_USE", description = "Sử dụng trái phép vỉa hè", is_active = true });
+            db.PenaltyFeeSchedules.AddRange(
+                new PenaltyFeeSchedule { penalty_schedule_id = 1, ward_unit_id = 1, violation_type = "UNAUTHORIZED_BUSINESS_USE", penalty_amount = 2500000, legal_basis = "Nghị định 168/2024/NĐ-CP", created_by = 1 },
+                new PenaltyFeeSchedule { penalty_schedule_id = 2, ward_unit_id = 2, violation_type = "UNAUTHORIZED_BUSINESS_USE", penalty_amount = 9999999, legal_basis = "Khung khác phường 2", created_by = 2 });
+
+            await db.SaveChangesAsync();
+            return f;
+        }
+
+        public TestContext NewDb() =>
+            new(new DbContextOptionsBuilder<StreetBizDbContext>().UseSqlite(Connection).Options);
+
+        public WardComplianceService NewService(IAiComplianceService? ai = null)
+        {
+            // One context per service, shared with its KYC repository, so both see the same
+            // change tracker -- mirrors the scoped lifetimes in DependencyInjection.
+            var db = NewDb();
+            return new WardComplianceService(
+                db,
+                new PermitTokenService(Options.Create(new PermitSettings { SigningKey = "test-only-signing-key-0123456789" })),
+                ai ?? new NoOpAiComplianceService(),
+                new KycResultRepository(db, new DateTimeProvider()),
+                new AiAssistanceLogs(db, TimeProvider.System),
+                TimeProvider.System,
+                new RegistrationDocumentGenerator());
+        }
+
+        public void Dispose() => Connection.Dispose();
+    }
+
+    /// Deterministic no-op double: every test in this file exercises DB/business-rule
+    /// behavior, not the AI provider (see AiComplianceServiceTests for that).
+    private sealed class NoOpAiComplianceService : IAiComplianceService
+    {
+        public Task<AiIdExtractionResult> ExtractIdDocumentAsync(IReadOnlyList<WardEvidenceDto> evidence, CancellationToken ct) =>
+            Task.FromResult(new AiIdExtractionResult(null, null, null, 0, false));
+
+        public Task<AiDocumentCheckResult> CompareDeclaredProfileAsync(string declaredName, string? extractedIdNumber, string declaredAddress, AiIdExtractionResult extraction, CancellationToken ct) =>
+            Task.FromResult(new AiDocumentCheckResult(0, false, true, "[test]", Array.Empty<string>(), false));
+
+        public Task<AiEncroachmentResult> AnalyzeInspectionPhotoAsync(string photoUrl, double? slotWidth, double? slotLength, CancellationToken ct) =>
+            Task.FromResult(new AiEncroachmentResult(false, 0, "[test]", Array.Empty<string>(), false));
+
+        public Task<AiLegalSuggestion> ClassifyAndDraftAsync(string? description, IReadOnlyList<PenaltyScheduleItemDto> availableSchedules, CancellationToken ct) =>
+            Task.FromResult(new AiLegalSuggestion("UNKNOWN", null, null, null, "[test]", "[test]", false));
+
+        public Task<string> AnswerVendorAssistantAsync(string question, string? context, CancellationToken ct) =>
+            Task.FromResult("[test] Trợ lý StreetBiz sẵn sàng hỗ trợ.");
+
+        public Task<AiProposalAssessment> AssessProposalSiteAsync(AiProposalSiteInput input, CancellationToken ct) =>
+            Task.FromResult(AiInsightRules.FallbackProposalAssessment(input));
+
+        public Task<IReadOnlyDictionary<long, string>?> ExplainGeofenceDriftAsync(IReadOnlyList<GeofenceDriftFacts> items, CancellationToken ct) =>
+            Task.FromResult<IReadOnlyDictionary<long, string>?>(null);
+
+        public Task<AiPriceAdvice?> AdviseZonePriceAsync(ZonePriceFacts facts, CancellationToken ct) =>
+            Task.FromResult<AiPriceAdvice?>(null);
+    }
+
+    /// Counts provider calls; `ProviderDown` makes it answer like the real service does
+    /// when the AI provider is unreachable (IsAiGenerated = false).
+    private sealed class CountingAiComplianceService : IAiComplianceService
+    {
+        private readonly NoOpAiComplianceService inner = new();
+        public int Extractions { get; private set; }
+        public int Comparisons { get; private set; }
+        public bool ProviderDown { get; init; }
+
+        public Task<AiIdExtractionResult> ExtractIdDocumentAsync(IReadOnlyList<WardEvidenceDto> evidence, CancellationToken ct)
+        {
+            Extractions++;
+            return Task.FromResult(new AiIdExtractionResult("001200000001", "Hộ B", null, 95, !ProviderDown));
+        }
+
+        public Task<AiDocumentCheckResult> CompareDeclaredProfileAsync(string declaredName, string? extractedIdNumber, string declaredAddress, AiIdExtractionResult extraction, CancellationToken ct)
+        {
+            Comparisons++;
+            return Task.FromResult(new AiDocumentCheckResult(
+                92, true, false, $"check #{Comparisons}", Array.Empty<string>(), IsAiGenerated: !ProviderDown));
+        }
+
+        public Task<AiEncroachmentResult> AnalyzeInspectionPhotoAsync(string photoUrl, double? slotWidth, double? slotLength, CancellationToken ct) =>
+            inner.AnalyzeInspectionPhotoAsync(photoUrl, slotWidth, slotLength, ct);
+
+        public Task<AiLegalSuggestion> ClassifyAndDraftAsync(string? description, IReadOnlyList<PenaltyScheduleItemDto> availableSchedules, CancellationToken ct) =>
+            inner.ClassifyAndDraftAsync(description, availableSchedules, ct);
+
+        public Task<string> AnswerVendorAssistantAsync(string question, string? context, CancellationToken ct) =>
+            inner.AnswerVendorAssistantAsync(question, context, ct);
+
+        public Task<AiProposalAssessment> AssessProposalSiteAsync(AiProposalSiteInput input, CancellationToken ct) =>
+            inner.AssessProposalSiteAsync(input, ct);
+
+        public Task<IReadOnlyDictionary<long, string>?> ExplainGeofenceDriftAsync(IReadOnlyList<GeofenceDriftFacts> items, CancellationToken ct) =>
+            inner.ExplainGeofenceDriftAsync(items, ct);
+
+        public Task<AiPriceAdvice?> AdviseZonePriceAsync(ZonePriceFacts facts, CancellationToken ct) =>
+            inner.AdviseZonePriceAsync(facts, ct);
+    }
+
+    private sealed class TestContext(DbContextOptions<StreetBizDbContext> options) : StreetBizDbContext(options)
+    {
+        protected override void OnModelCreating(ModelBuilder modelBuilder)
+        {
+            base.OnModelCreating(modelBuilder);
+            foreach (var entity in modelBuilder.Model.GetEntityTypes())
+                foreach (var property in entity.GetProperties())
+                {
+                    if (property.GetComputedColumnSql() is not null)
+                    {
+                        property.SetComputedColumnSql(null);
+                        property.ValueGenerated = ValueGenerated.Never;
+                    }
+                    property.SetDefaultValueSql(null);
+                }
+        }
+    }
+}

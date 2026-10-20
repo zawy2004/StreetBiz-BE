@@ -5,6 +5,7 @@ using StreetBiz.Application.Common.Interfaces;
 using StreetBiz.Application.Common.Models;
 using StreetBiz.Application.Common.Security;
 using StreetBiz.Application.DTOs.Commerce;
+using StreetBiz.Application.Features.Commerce.OrderTracking;
 
 namespace StreetBiz.Application.Features.Commerce;
 
@@ -168,6 +169,7 @@ public sealed class RemoveCartItemCommandHandler(
         {
             CartMutationOutcome.Updated => result.Cart?.ToDto(),
             CartMutationOutcome.NotFound => throw new NotFoundException(CommerceMessages.CartItemNotFound),
+            CartMutationOutcome.CheckoutPending => throw new ConflictException(CommerceMessages.CheckoutAlreadyPending),
             _ => throw new ConflictException(CommerceMessages.CartConflict),
         };
     }
@@ -187,8 +189,14 @@ public sealed class ClearCartCommandHandler(
     }
 }
 
-public sealed record PlacePrepaidOrderCommand(string Provider, string IdempotencyKey)
-    : IRequest<OrderDto>;
+public sealed record PlacePrepaidOrderCommand(
+    string Provider,
+    string IdempotencyKey,
+    PickupLocationInput? Location = null)
+    : IRequest<OrderDto>, IPickupRangeGated
+{
+    long? IPickupRangeGated.PickupCartId => null;
+}
 
 public sealed class PlacePrepaidOrderCommandValidator : AbstractValidator<PlacePrepaidOrderCommand>
 {
@@ -200,6 +208,7 @@ public sealed class PlacePrepaidOrderCommandValidator : AbstractValidator<PlaceP
             .Must(value => PaymentProviders.IsValid(value.ToUpperInvariant()))
             .WithMessage("Provider must be MOMO or ZALOPAY.");
         RuleFor(x => x.IdempotencyKey).NotEmpty().MaximumLength(100);
+        RuleFor(x => x.Location!).SetValidator(new PickupLocationInputValidator()).When(x => x.Location is not null);
     }
 }
 
@@ -310,36 +319,6 @@ public sealed class CancelCustomerOrderCommandHandler(
     }
 }
 
-public sealed record ConfirmCustomerPickupCommand(long OrderId, string ExpectedStatus)
-    : IRequest<OrderDto>;
-
-public sealed class ConfirmCustomerPickupCommandValidator
-    : AbstractValidator<ConfirmCustomerPickupCommand>
-{
-    public ConfirmCustomerPickupCommandValidator()
-    {
-        RuleFor(x => x.OrderId).GreaterThan(0);
-        RuleFor(x => x.ExpectedStatus).Equal(OrderStatuses.ReadyForPickup);
-    }
-}
-
-public sealed class ConfirmCustomerPickupCommandHandler(
-    ICustomerContext customerContext,
-    ICommerceRepository repository) : IRequestHandler<ConfirmCustomerPickupCommand, OrderDto>
-{
-    public async Task<OrderDto> Handle(
-        ConfirmCustomerPickupCommand request,
-        CancellationToken cancellationToken)
-    {
-        var customerId = await customerContext.RequireCustomerUserIdAsync(cancellationToken);
-        return (await repository.ConfirmCustomerPickupAsync(
-            customerId,
-            request.OrderId,
-            request.ExpectedStatus,
-            cancellationToken)).RequireOrder();
-    }
-}
-
 public sealed record ListSellerOrdersQuery(string? Status) : IRequest<IReadOnlyList<OrderDto>>;
 
 public sealed class ListSellerOrdersQueryValidator : AbstractValidator<ListSellerOrdersQuery>
@@ -421,7 +400,7 @@ public sealed class DecideSellerOrderCommandHandler(
         CancellationToken cancellationToken)
     {
         var vendorId = await vendorContext.RequireVendorIdAsync(cancellationToken);
-        var actorUserId = currentUser.UserId ?? throw new AuthenticationException("No active session.");
+        var actorUserId = currentUser.UserId ?? throw new AuthenticationException(AppMessages.SessionExpired);
         return (await repository.DecideSellerOrderAsync(
             vendorId,
             actorUserId,
@@ -463,45 +442,12 @@ public sealed class UpdateSellerOrderStatusCommandHandler(
         CancellationToken cancellationToken)
     {
         var vendorId = await vendorContext.RequireVendorIdAsync(cancellationToken);
-        var actorUserId = currentUser.UserId ?? throw new AuthenticationException("No active session.");
+        var actorUserId = currentUser.UserId ?? throw new AuthenticationException(AppMessages.SessionExpired);
         return (await repository.UpdateSellerOrderStatusAsync(
             vendorId,
             actorUserId,
             request.OrderId,
             request.TargetStatus,
-            request.ExpectedStatus,
-            cancellationToken)).RequireOrder();
-    }
-}
-
-public sealed record ConfirmSellerHandoverCommand(long OrderId, string ExpectedStatus)
-    : IRequest<OrderDto>;
-
-public sealed class ConfirmSellerHandoverCommandValidator
-    : AbstractValidator<ConfirmSellerHandoverCommand>
-{
-    public ConfirmSellerHandoverCommandValidator()
-    {
-        RuleFor(x => x.OrderId).GreaterThan(0);
-        RuleFor(x => x.ExpectedStatus).Equal(OrderStatuses.ReadyForPickup);
-    }
-}
-
-public sealed class ConfirmSellerHandoverCommandHandler(
-    IVendorContext vendorContext,
-    ICurrentUser currentUser,
-    ICommerceRepository repository) : IRequestHandler<ConfirmSellerHandoverCommand, OrderDto>
-{
-    public async Task<OrderDto> Handle(
-        ConfirmSellerHandoverCommand request,
-        CancellationToken cancellationToken)
-    {
-        var vendorId = await vendorContext.RequireVendorIdAsync(cancellationToken);
-        var actorUserId = currentUser.UserId ?? throw new AuthenticationException("No active session.");
-        return (await repository.ConfirmSellerHandoverAsync(
-            vendorId,
-            actorUserId,
-            request.OrderId,
             request.ExpectedStatus,
             cancellationToken)).RequireOrder();
     }
@@ -536,10 +482,14 @@ public sealed class GetSalesSummaryQueryHandler(
 
 internal static class CommerceMapping
 {
+    // SQL datetime2 stores UTC values without DateTime.Kind. Preserve their instant
+    // in JSON instead of making browsers interpret UTC clock time as local time.
+    private static DateTime Utc(DateTime value) => DateTime.SpecifyKind(value, DateTimeKind.Utc);
+    private static DateTime? Utc(DateTime? value) => value.HasValue ? Utc(value.Value) : null;
     public static MarketplaceMenuItemDto ToDto(this MarketplaceMenuItemRow row) => new(
         row.MenuItemId, row.StorefrontId, row.StorefrontName, row.ItemName,
         row.Description, row.ImageUrl, row.UnitPrice, row.AvailabilityStatus,
-        row.CategoryId, row.CategoryName);
+        row.CategoryId, row.CategoryName, row.FoodSafetyCertified);
 
     public static CartDto ToDto(this CommerceCartRow row) => new(
         row.CartId,
@@ -549,23 +499,28 @@ internal static class CommerceMapping
         row.Items.Select(item => new CartItemDto(
             item.CartItemId, item.MenuItemId, item.ItemName, item.ImageUrl,
             item.UnitPrice, item.AvailabilityStatus, item.Quantity, item.Note)).ToArray(),
-        row.Subtotal);
+        row.Subtotal)
+        { StorefrontAddress = row.StorefrontAddress, PendingOrderId = row.PendingOrderId };
 
     public static OrderDto ToDto(this CommerceOrderRow row) => new(
         row.OrderId, row.OrderCode, row.CustomerUserId, row.CustomerName,
         row.StorefrontId, row.StorefrontName, row.OrderStatus, row.SubtotalAmount,
         row.TotalAmount, row.RejectionReason, row.PaymentProvider, row.PaymentStatus,
         row.RefundAmount, row.RefundReason, row.RefundStatus,
-        row.RefundRequestedAt, row.RefundCompletedAt,
-        row.PlacedAt, row.CompletedAt, row.CreatedAt,
+        Utc(row.RefundRequestedAt), Utc(row.RefundCompletedAt),
+        Utc(row.PlacedAt), Utc(row.CompletedAt), Utc(row.CreatedAt),
         row.Items.Select(item => new OrderItemDto(
             item.OrderItemId, item.MenuItemId, item.ItemName, item.UnitPrice,
             item.Quantity, item.Note)).ToArray(),
         row.History.Select(item => new OrderHistoryDto(
-            item.HistoryId, item.FromStatus, item.ToStatus, item.Note, item.ChangedAt)).ToArray());
+            item.HistoryId, item.FromStatus, item.ToStatus, item.Note, Utc(item.ChangedAt))).ToArray())
+        {
+            StorefrontImageUrl = row.StorefrontImageUrl,
+            StorefrontAddress = row.StorefrontAddress,
+        };
 
     public static SalesSummaryDto ToDto(this CommerceSalesSummaryRow row) => new(
-        row.Period, row.FromUtc, row.ToUtc, row.CompletedOrderCount, row.GrossSales,
+        row.Period, Utc(row.FromUtc), Utc(row.ToUtc), row.CompletedOrderCount, row.GrossSales,
         row.RefundedAmount, row.NetSales,
         row.Orders.Select(order => order.ToDto()).ToArray());
 
@@ -578,6 +533,10 @@ internal static class CommerceMapping
                 CommerceMessages.MenuItemUnavailable),
             CartMutationOutcome.StorefrontUnavailable => throw new DomainRuleException(
                 CommerceMessages.StorefrontUnavailable),
+            CartMutationOutcome.CheckoutPending => throw new ConflictException(
+                CommerceMessages.CheckoutAlreadyPending),
+            CartMutationOutcome.QuantityLimit => throw new DomainRuleException(
+                CommerceMessages.CartQuantityLimit),
             _ => throw new ConflictException(CommerceMessages.CartConflict),
         };
 
@@ -593,6 +552,8 @@ internal static class CommerceMapping
                 CommerceMessages.StorefrontUnavailable),
             OrderMutationOutcome.PaymentNotFound => throw new DomainRuleException(
                 CommerceMessages.PaymentNotFound),
+            OrderMutationOutcome.PendingCheckout => throw new ConflictException(
+                CommerceMessages.CheckoutAlreadyPending),
             _ => throw new ConflictException(CommerceMessages.OrderConflict),
         };
 }

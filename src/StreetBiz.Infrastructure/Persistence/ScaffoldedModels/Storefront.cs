@@ -23,6 +23,8 @@ public partial class Storefront
 
     public DateTime? updated_at { get; set; }
 
+    public virtual ICollection<ChatConversation> ChatConversations { get; set; } = new List<ChatConversation>();
+
     public virtual ICollection<MenuItem> MenuItems { get; set; } = new List<MenuItem>();
 
     public virtual ICollection<Order> Orders { get; set; } = new List<Order>();

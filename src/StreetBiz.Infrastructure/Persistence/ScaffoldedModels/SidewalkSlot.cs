@@ -7,6 +7,9 @@ public partial class SidewalkSlot
 {
     public long slot_id { get; set; }
 
+    /// <summary>The ward's manual price for this one slot (monthly for STANDARD, daily for EVENT); null = the zone's.</summary>
+    public decimal? price_override { get; set; }
+
     public string slot_code { get; set; } = null!;
 
     public int zone_id { get; set; }
@@ -37,8 +40,6 @@ public partial class SidewalkSlot
 
     public DateTime created_at { get; set; }
 
-    public string? image_url { get; set; }
-
     public bool has_power { get; set; }
 
     public bool has_water { get; set; }
@@ -54,6 +55,8 @@ public partial class SidewalkSlot
     public virtual ICollection<RentalContract> RentalContracts { get; set; } = new List<RentalContract>();
 
     public virtual SlotHold? SlotHold { get; set; }
+
+    public virtual ICollection<SlotImage> SlotImages { get; set; } = new List<SlotImage>();
 
     public virtual UserAccount? UserAccount { get; set; }
 

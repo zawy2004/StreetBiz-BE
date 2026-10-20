@@ -16,6 +16,20 @@ public interface IBusinessRegistrationRepository
 
     Task SetStatusAsync(long registrationId, string status, CancellationToken cancellationToken);
 
+    /// <summary>
+    /// Moves the registration to <paramref name="to"/> if the transition table allows it, in one
+    /// conditional UPDATE. Returns false when another request changed the status first.
+    /// Throws a domain-rule error for an illegal move.
+    /// </summary>
+    Task<bool> TryTransitionAsync(long registrationId, string to, CancellationToken cancellationToken);
+
+    /// <summary>Audits a filing and notifies the ward officers (called once a draft becomes SUBMITTED).</summary>
+    Task RecordSubmittedAsync(long registrationId, CancellationToken cancellationToken);
+
+    Task<bool> IsEvidenceFileUsedAsync(string fileUrl, CancellationToken cancellationToken);
+
+    Task<bool> RemoveEvidenceAsync(long registrationId, long evidenceId, CancellationToken cancellationToken);
+
     Task<long> AddEvidenceAsync(long registrationId, NewRegistrationEvidence evidence, CancellationToken cancellationToken);
 
     Task<IReadOnlyList<BizRegistrationEvidence>> ListEvidenceAsync(long registrationId, CancellationToken cancellationToken);
@@ -25,4 +39,18 @@ public interface IBusinessRegistrationRepository
 
     /// <summary>BR-26 (SIDE-12/13): true when the vendor holds at least one APPROVED registration.</summary>
     Task<bool> HasApprovedRegistrationAsync(long vendorId, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Separate, explicit consent to run AI-OCR on the registration's uploaded ID photo
+    /// (biometric data). Luat Bao ve du lieu ca nhan 2025 / Nghi dinh 356/2025/ND-CP requires
+    /// this to be its own affirmative action, not folded into a general terms checkbox.
+    /// </summary>
+    Task RecordBiometricConsentAsync(long registrationId, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// PRI-02/PRI-07: true when an evidence file uploaded by <paramref name="ownerUserId"/> is
+    /// attached to a registration in <paramref name="wardUnitId"/>, i.e. the ward officer
+    /// reviewing that ward is entitled to open it.
+    /// </summary>
+    Task<bool> EvidenceBelongsToWardAsync(long ownerUserId, string fileUrl, int wardUnitId, CancellationToken cancellationToken);
 }

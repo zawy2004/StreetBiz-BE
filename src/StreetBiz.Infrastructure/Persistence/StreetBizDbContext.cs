@@ -22,6 +22,18 @@ public partial class StreetBizDbContext : DbContext
 
     public virtual DbSet<BusinessRegistration> BusinessRegistrations { get; set; }
 
+    // Schema: see db/StreetBiz_SQL_Server.sql.
+    public virtual DbSet<BusinessRegistrationHouseholdMember> BusinessRegistrationHouseholdMembers { get; set; }
+
+    // Schema: see db/StreetBiz_SQL_Server.sql.
+    public virtual DbSet<KycVerificationResult> KycVerificationResults { get; set; }
+
+    // Schema: see db/StreetBiz_SQL_Server.sql.
+    public virtual DbSet<ChatConversation> ChatConversations { get; set; }
+
+    // Schema: see db/StreetBiz_SQL_Server.sql.
+    public virtual DbSet<ChatMessage> ChatMessages { get; set; }
+
     public virtual DbSet<Complaint> Complaints { get; set; }
 
     public virtual DbSet<DigitalPermit> DigitalPermits { get; set; }
@@ -30,7 +42,15 @@ public partial class StreetBizDbContext : DbContext
 
     public virtual DbSet<FeeScheduleItem> FeeScheduleItems { get; set; }
 
+    public virtual DbSet<DepositRefund> DepositRefunds { get; set; }
+
     public virtual DbSet<FoodCategory> FoodCategories { get; set; }
+
+    public virtual DbSet<FoodSafetyApplication> FoodSafetyApplications { get; set; }
+
+    public virtual DbSet<FoodSafetyApplicationItem> FoodSafetyApplicationItems { get; set; }
+
+    public virtual DbSet<FoodSafetyEvidence> FoodSafetyEvidences { get; set; }
 
     public virtual DbSet<Invoice> Invoices { get; set; }
 
@@ -84,6 +104,8 @@ public partial class StreetBizDbContext : DbContext
 
     public virtual DbSet<SlotHold> SlotHolds { get; set; }
 
+    public virtual DbSet<SlotImage> SlotImages { get; set; }
+
     public virtual DbSet<SlotTransferRequest> SlotTransferRequests { get; set; }
 
     public virtual DbSet<Storefront> Storefronts { get; set; }
@@ -99,6 +121,8 @@ public partial class StreetBizDbContext : DbContext
     public virtual DbSet<UserSession> UserSessions { get; set; }
 
     public virtual DbSet<Vendor> Vendors { get; set; }
+
+    public virtual DbSet<WardCompliancePolicy> WardCompliancePolicies { get; set; }
 
     public virtual DbSet<VendorComment> VendorComments { get; set; }
 
@@ -125,6 +149,8 @@ public partial class StreetBizDbContext : DbContext
             entity.Property(e => e.entity_type).HasMaxLength(50);
             entity.Property(e => e.feature_code).HasMaxLength(20);
 
+            entity.HasIndex(e => new { e.entity_type, e.entity_id, e.created_at }, "IX_AIAssistanceLogs_Entity");
+
             entity.HasOne(d => d.reviewed_byNavigation).WithMany(p => p.AIAssistanceLogs)
                 .HasForeignKey(d => d.reviewed_by)
                 .HasConstraintName("FK_AIAssistanceLogs_Reviewer");
@@ -150,8 +176,8 @@ public partial class StreetBizDbContext : DbContext
                 .HasMaxLength(30)
                 .HasComputedColumnSql("(CONVERT([nvarchar](30),N'WARD_AUTHORITY'))", true);
 
-            entity.HasOne(d => d.registration).WithOne(p => p.AddressChangeRequest)
-                .HasForeignKey<AddressChangeRequest>(d => d.registration_id)
+            entity.HasOne(d => d.registration).WithMany()
+                .HasForeignKey(d => d.registration_id)
                 .OnDelete(DeleteBehavior.ClientSetNull)
                 .HasConstraintName("FK_AddressChangeRequests_Registration");
 
@@ -206,6 +232,8 @@ public partial class StreetBizDbContext : DbContext
         {
             entity.HasKey(e => e.registration_id).HasName("PK__Business__22A298F6FD116948");
 
+            entity.HasIndex(e => new { e.ward_unit_id, e.registration_status }, "IX_BusinessRegistrations_Ward_Status");
+
             entity.HasIndex(e => e.registration_status, "IX_BusinessRegistrations_Status");
 
             entity.HasIndex(e => e.vendor_id, "IX_BusinessRegistrations_Vendor");
@@ -215,6 +243,7 @@ public partial class StreetBizDbContext : DbContext
             entity.Property(e => e.created_at).HasDefaultValueSql("(sysutcdatetime())");
             entity.Property(e => e.declared_address).HasMaxLength(500);
             entity.Property(e => e.display_name).HasMaxLength(180);
+            entity.Property(e => e.id_number).HasMaxLength(12);
             entity.Property(e => e.registration_status)
                 .HasMaxLength(30)
                 .HasDefaultValue("SUBMITTED");
@@ -243,9 +272,56 @@ public partial class StreetBizDbContext : DbContext
                 .HasConstraintName("FK_BusinessRegistrations_Ward");
         });
 
+        modelBuilder.Entity<ChatConversation>(entity =>
+        {
+            entity.HasKey(e => e.conversation_id);
+
+            entity.HasIndex(e => new { e.storefront_id, e.customer_user_id },
+                "UQ_ChatConversations_OnePerPair").IsUnique();
+            entity.HasIndex(e => new { e.customer_user_id, e.last_message_at },
+                "IX_ChatConversations_Customer");
+            entity.HasIndex(e => new { e.storefront_id, e.last_message_at },
+                "IX_ChatConversations_Storefront");
+
+            entity.Property(e => e.created_at).HasDefaultValueSql("(sysutcdatetime())");
+
+            entity.HasOne(d => d.customer_user).WithMany(p => p.ChatConversations)
+                .HasForeignKey(d => d.customer_user_id)
+                .OnDelete(DeleteBehavior.ClientSetNull)
+                .HasConstraintName("FK_ChatConversations_Customer");
+
+            entity.HasOne(d => d.storefront).WithMany(p => p.ChatConversations)
+                .HasForeignKey(d => d.storefront_id)
+                .OnDelete(DeleteBehavior.ClientSetNull)
+                .HasConstraintName("FK_ChatConversations_Storefront");
+        });
+
+        modelBuilder.Entity<ChatMessage>(entity =>
+        {
+            entity.HasKey(e => e.message_id);
+
+            entity.HasIndex(e => new { e.conversation_id, e.message_id }, "IX_ChatMessages_Thread");
+            entity.HasIndex(e => new { e.conversation_id, e.read_at }, "IX_ChatMessages_Unread");
+
+            entity.Property(e => e.body).HasMaxLength(2000);
+            entity.Property(e => e.sent_at).HasDefaultValueSql("(sysutcdatetime())");
+
+            entity.HasOne(d => d.conversation).WithMany(p => p.ChatMessages)
+                .HasForeignKey(d => d.conversation_id)
+                .OnDelete(DeleteBehavior.ClientSetNull)
+                .HasConstraintName("FK_ChatMessages_Conversation");
+
+            entity.HasOne(d => d.sender_user).WithMany(p => p.ChatMessages)
+                .HasForeignKey(d => d.sender_user_id)
+                .OnDelete(DeleteBehavior.ClientSetNull)
+                .HasConstraintName("FK_ChatMessages_Sender");
+        });
+
         modelBuilder.Entity<Complaint>(entity =>
         {
             entity.HasKey(e => e.complaint_id).HasName("PK__Complain__A771F61CF7685B46");
+
+            entity.HasIndex(e => e.order_id, "IX_Complaints_Order");
 
             entity.Property(e => e.complaint_type).HasMaxLength(20);
             entity.Property(e => e.created_at).HasDefaultValueSql("(sysutcdatetime())");
@@ -293,8 +369,8 @@ public partial class StreetBizDbContext : DbContext
             entity.Property(e => e.revocation_reason).HasMaxLength(500);
             entity.Property(e => e.suspension_reason).HasMaxLength(500);
 
-            entity.HasOne(d => d.contract).WithOne(p => p.DigitalPermit)
-                .HasForeignKey<DigitalPermit>(d => d.contract_id)
+            entity.HasOne(d => d.contract).WithMany()
+                .HasForeignKey(d => d.contract_id)
                 .OnDelete(DeleteBehavior.ClientSetNull)
                 .HasConstraintName("FK_DigitalPermits_Contract");
         });
@@ -313,8 +389,8 @@ public partial class StreetBizDbContext : DbContext
             entity.Property(e => e.revision).HasDefaultValue(1);
             entity.Property(e => e.total_amount).HasColumnType("decimal(18, 0)");
 
-            entity.HasOne(d => d.contract).WithOne(p => p.FeeSchedule)
-                .HasForeignKey<FeeSchedule>(d => d.contract_id)
+            entity.HasOne(d => d.contract).WithMany()
+                .HasForeignKey(d => d.contract_id)
                 .OnDelete(DeleteBehavior.ClientSetNull)
                 .HasConstraintName("FK_FeeSchedules_Contract");
         });
@@ -323,9 +399,14 @@ public partial class StreetBizDbContext : DbContext
         {
             entity.HasKey(e => e.fee_item_id).HasName("PK__FeeSched__CED35C72C7077097");
 
+            entity.HasIndex(e => new { e.fee_schedule_id, e.item_status }, "IX_FeeScheduleItems_Schedule");
+
             entity.HasIndex(e => new { e.due_date, e.item_status }, "IX_FeeScheduleItems_DueDate");
 
             entity.Property(e => e.amount).HasColumnType("decimal(18, 0)");
+            entity.Property(e => e.deposit_amount).HasColumnType("decimal(18, 0)").HasDefaultValue(0m);
+            entity.Property(e => e.original_amount).HasColumnType("decimal(18, 0)");
+            entity.Property(e => e.adjustment_reason).HasMaxLength(500);
             entity.Property(e => e.item_status)
                 .HasMaxLength(20)
                 .HasDefaultValue("PENDING");
@@ -334,6 +415,25 @@ public partial class StreetBizDbContext : DbContext
                 .HasForeignKey(d => d.fee_schedule_id)
                 .OnDelete(DeleteBehavior.ClientSetNull)
                 .HasConstraintName("FK_FeeScheduleItems_Schedule");
+        });
+
+        modelBuilder.Entity<DepositRefund>(entity =>
+        {
+            entity.HasKey(e => e.refund_id);
+
+            entity.HasIndex(e => e.contract_id, "UQ_DepositRefunds_Contract").IsUnique();
+
+            entity.Property(e => e.deposit_paid).HasColumnType("decimal(18, 0)");
+            entity.Property(e => e.amount).HasColumnType("decimal(18, 0)");
+            entity.Property(e => e.deduction_reason).HasMaxLength(500);
+            entity.Property(e => e.method).HasMaxLength(20);
+            entity.Property(e => e.reference).HasMaxLength(100);
+            entity.Property(e => e.refunded_at).HasDefaultValueSql("(sysutcdatetime())");
+
+            entity.HasOne(d => d.contract).WithMany()
+                .HasForeignKey(d => d.contract_id)
+                .OnDelete(DeleteBehavior.ClientSetNull)
+                .HasConstraintName("FK_DepositRefunds_Contract");
         });
 
         modelBuilder.Entity<FoodCategory>(entity =>
@@ -353,9 +453,84 @@ public partial class StreetBizDbContext : DbContext
                 .HasConstraintName("FK_FoodCategories_CreatedBy");
         });
 
+        modelBuilder.Entity<FoodSafetyApplication>(entity =>
+        {
+            entity.HasKey(e => e.application_id).HasName("PK_FoodSafetyApplications");
+
+            entity.HasIndex(e => e.storefront_id, "IX_FoodSafetyApplications_Storefront");
+
+            entity.HasIndex(e => e.application_status, "IX_FoodSafetyApplications_Status");
+
+            entity.Property(e => e.application_status)
+                .HasMaxLength(30)
+                .HasDefaultValue("SUBMITTED");
+            entity.Property(e => e.certificate_number).HasMaxLength(60);
+            entity.Property(e => e.created_at).HasDefaultValueSql("(sysutcdatetime())");
+            entity.Property(e => e.department_name).HasMaxLength(200);
+            entity.Property(e => e.result_reason).HasMaxLength(500);
+            entity.Property(e => e.review_reason).HasMaxLength(500);
+            entity.Property(e => e.submitted_at).HasDefaultValueSql("(sysutcdatetime())");
+            entity.Property(e => e.vendor_note).HasMaxLength(500);
+
+            entity.HasOne(d => d.storefront).WithMany()
+                .HasForeignKey(d => d.storefront_id)
+                .OnDelete(DeleteBehavior.ClientSetNull)
+                .HasConstraintName("FK_FoodSafetyApplications_Storefront");
+
+            entity.HasOne(d => d.vendor).WithMany()
+                .HasForeignKey(d => d.vendor_id)
+                .OnDelete(DeleteBehavior.ClientSetNull)
+                .HasConstraintName("FK_FoodSafetyApplications_Vendor");
+
+            entity.HasOne<UserAccount>().WithMany()
+                .HasForeignKey(d => d.reviewed_by)
+                .HasConstraintName("FK_FoodSafetyApplications_ReviewedBy");
+
+            entity.HasOne<UserAccount>().WithMany()
+                .HasForeignKey(d => d.result_recorded_by)
+                .HasConstraintName("FK_FoodSafetyApplications_ResultRecordedBy");
+        });
+
+        modelBuilder.Entity<FoodSafetyApplicationItem>(entity =>
+        {
+            entity.HasKey(e => new { e.application_id, e.menu_item_id }).HasName("PK_FoodSafetyApplicationItems");
+
+            entity.HasIndex(e => e.menu_item_id, "IX_FoodSafetyApplicationItems_MenuItem");
+
+            entity.HasOne(d => d.application).WithMany(p => p.FoodSafetyApplicationItems)
+                .HasForeignKey(d => d.application_id)
+                .OnDelete(DeleteBehavior.Cascade)
+                .HasConstraintName("FK_FoodSafetyApplicationItems_Application");
+
+            entity.HasOne(d => d.menu_item).WithMany(p => p.FoodSafetyApplicationItems)
+                .HasForeignKey(d => d.menu_item_id)
+                .OnDelete(DeleteBehavior.ClientSetNull)
+                .HasConstraintName("FK_FoodSafetyApplicationItems_MenuItem");
+        });
+
+        modelBuilder.Entity<FoodSafetyEvidence>(entity =>
+        {
+            entity.HasKey(e => e.evidence_id).HasName("PK_FoodSafetyEvidence");
+
+            entity.ToTable("FoodSafetyEvidence");
+
+            entity.HasIndex(e => e.application_id, "IX_FoodSafetyEvidence_Application");
+
+            entity.Property(e => e.evidence_type).HasMaxLength(30);
+            entity.Property(e => e.file_url).HasMaxLength(500);
+            entity.Property(e => e.uploaded_at).HasDefaultValueSql("(sysutcdatetime())");
+
+            entity.HasOne(d => d.application).WithMany(p => p.FoodSafetyEvidences)
+                .HasForeignKey(d => d.application_id)
+                .OnDelete(DeleteBehavior.Cascade)
+                .HasConstraintName("FK_FoodSafetyEvidence_Application");
+        });
+
         modelBuilder.Entity<Invoice>(entity =>
         {
             entity.HasKey(e => e.invoice_id).HasName("PK__Invoices__F58DFD4900F5A3E0");
+
+            entity.HasIndex(e => e.vendor_id, "IX_Invoices_Vendor");
 
             entity.HasIndex(e => e.invoice_number, "UQ__Invoices__8081A63A9588B1C5").IsUnique();
 
@@ -380,6 +555,8 @@ public partial class StreetBizDbContext : DbContext
         modelBuilder.Entity<MenuItem>(entity =>
         {
             entity.HasKey(e => e.menu_item_id).HasName("PK__MenuItem__973431D52331EADA");
+
+            entity.HasIndex(e => e.category_id, "IX_MenuItems_Category");
 
             entity.HasIndex(e => e.storefront_id, "IX_MenuItems_Storefront");
 
@@ -437,6 +614,7 @@ public partial class StreetBizDbContext : DbContext
                 .HasMaxLength(20)
                 .HasDefaultValue("PENDING_PAYMENT");
             entity.Property(e => e.rejection_reason).HasMaxLength(500);
+            entity.Property(e => e.storefront_address_snapshot).HasMaxLength(500);
             entity.Property(e => e.subtotal_amount).HasColumnType("decimal(18, 0)");
             entity.Property(e => e.total_amount).HasColumnType("decimal(18, 0)");
 
@@ -454,6 +632,8 @@ public partial class StreetBizDbContext : DbContext
         modelBuilder.Entity<OrderItem>(entity =>
         {
             entity.HasKey(e => e.order_item_id).HasName("PK__OrderIte__3764B6BC0C88DD06");
+
+            entity.HasIndex(e => e.order_id, "IX_OrderItems_Order");
 
             entity.Property(e => e.item_name_snapshot).HasMaxLength(180);
             entity.Property(e => e.note).HasMaxLength(300);
@@ -526,6 +706,8 @@ public partial class StreetBizDbContext : DbContext
         {
             entity.HasKey(e => e.transaction_id).HasName("PK__PaymentT__85C600AF31BF28B7");
 
+            entity.HasIndex(e => e.order_id, "IX_PaymentTransactions_Order");
+
             entity.HasIndex(e => e.idempotency_key, "UQ__PaymentT__A7BA59F41B3C497A").IsUnique();
 
             entity.Property(e => e.amount).HasColumnType("decimal(18, 0)");
@@ -561,6 +743,9 @@ public partial class StreetBizDbContext : DbContext
 
             entity.Property(e => e.amount).HasColumnType("decimal(18, 0)");
             entity.Property(e => e.created_at).HasDefaultValueSql("(sysutcdatetime())");
+            entity.Property(e => e.decision_number).HasMaxLength(50);
+            entity.Property(e => e.signer_name).HasMaxLength(150);
+            entity.Property(e => e.signer_title).HasMaxLength(100);
             entity.Property(e => e.penalty_status)
                 .HasMaxLength(20)
                 .HasDefaultValue("UNPAID");
@@ -598,6 +783,7 @@ public partial class StreetBizDbContext : DbContext
                 .HasMaxLength(30)
                 .HasComputedColumnSql("(CONVERT([nvarchar](30),N'WARD_AUTHORITY'))", true);
             entity.Property(e => e.effective_from).HasDefaultValueSql("(CONVERT([date],sysutcdatetime()))");
+            entity.Property(e => e.legal_basis).HasMaxLength(500);
             entity.Property(e => e.penalty_amount).HasColumnType("decimal(18, 0)");
             entity.Property(e => e.violation_type).HasMaxLength(50);
             entity.Property(e => e.ward_unit_type)
@@ -658,6 +844,10 @@ public partial class StreetBizDbContext : DbContext
                 .HasMaxLength(30)
                 .HasComputedColumnSql("(CONVERT([nvarchar](30),N'WARD_AUTHORITY'))", true);
             entity.Property(e => e.price_per_day).HasColumnType("decimal(18, 0)");
+            entity.Property(e => e.price_per_month).HasColumnType("decimal(18, 0)");
+            entity.Property(e => e.quarter_discount_percent).HasColumnType("decimal(5, 2)");
+            entity.Property(e => e.price_display_unit).HasMaxLength(10).HasDefaultValue("DAY");
+            entity.Property(e => e.rental_mode).HasMaxLength(10).HasDefaultValue("STANDARD");
             entity.Property(e => e.regulation_ref).HasMaxLength(120);
             entity.Property(e => e.segment_from).HasMaxLength(150);
             entity.Property(e => e.segment_to).HasMaxLength(150);
@@ -681,6 +871,9 @@ public partial class StreetBizDbContext : DbContext
         modelBuilder.Entity<RefundTransaction>(entity =>
         {
             entity.HasKey(e => e.refund_id).HasName("PK__RefundTr__897E9EA3EC0A741E");
+
+            entity.HasIndex(e => new { e.payment_transaction_id, e.refund_status }, "IX_RefundTransactions_Payment")
+                .IncludeProperties(e => e.amount);
 
             entity.ToTable(tb => tb.HasTrigger("TR_RefundTransactions_NotMoreThanPaid"));
 
@@ -748,8 +941,8 @@ public partial class StreetBizDbContext : DbContext
                 .HasMaxLength(30)
                 .HasComputedColumnSql("(CONVERT([nvarchar](30),N'WARD_AUTHORITY'))", true);
 
-            entity.HasOne(d => d.contract).WithOne(p => p.RenewalRequest)
-                .HasForeignKey<RenewalRequest>(d => d.contract_id)
+            entity.HasOne(d => d.contract).WithMany()
+                .HasForeignKey(d => d.contract_id)
                 .OnDelete(DeleteBehavior.ClientSetNull)
                 .HasConstraintName("FK_RenewalRequests_Contract");
 
@@ -796,6 +989,9 @@ public partial class StreetBizDbContext : DbContext
         modelBuilder.Entity<RentalContract>(entity =>
         {
             entity.HasKey(e => e.contract_id).HasName("PK__RentalCo__F8D664239881D220");
+
+            entity.HasIndex(e => new { e.slot_id, e.contract_status }, "IX_RentalContracts_Slot")
+                .IncludeProperties(e => new { e.start_date, e.end_date });
 
             entity.ToTable(tb =>
                 {
@@ -938,6 +1134,8 @@ public partial class StreetBizDbContext : DbContext
         {
             entity.HasKey(e => e.cart_item_id).HasName("PK__Shopping__5D9A6C6E9D93CF7C");
 
+            entity.HasIndex(e => e.cart_id, "IX_ShoppingCartItems_Cart");
+
             entity.Property(e => e.note).HasMaxLength(300);
 
             entity.HasOne(d => d.cart).WithMany(p => p.ShoppingCartItems)
@@ -962,11 +1160,11 @@ public partial class StreetBizDbContext : DbContext
             entity.HasIndex(e => e.slot_code, "UQ__Sidewalk__5D19A1A4F1795837").IsUnique();
 
             entity.Property(e => e.business_category).HasMaxLength(30);
+            entity.Property(e => e.price_override).HasColumnType("decimal(18, 0)");
             entity.Property(e => e.created_at).HasDefaultValueSql("(sysutcdatetime())");
             entity.Property(e => e.has_power).HasDefaultValue(false);
             entity.Property(e => e.has_trash_bin).HasDefaultValue(false);
             entity.Property(e => e.has_water).HasDefaultValue(false);
-            entity.Property(e => e.image_url).HasMaxLength(500);
             entity.Property(e => e.latitude).HasColumnType("decimal(9, 6)");
             entity.Property(e => e.length_meters).HasColumnType("decimal(5, 2)");
             entity.Property(e => e.longitude).HasColumnType("decimal(9, 6)");
@@ -1020,9 +1218,28 @@ public partial class StreetBizDbContext : DbContext
                 .HasConstraintName("FK_SlotHolds_Slot");
         });
 
+        modelBuilder.Entity<SlotImage>(entity =>
+        {
+            entity.HasKey(e => e.image_id);
+
+            entity.HasIndex(e => new { e.slot_id, e.sort_order }, "IX_SlotImages_Slot");
+
+            entity.Property(e => e.created_at).HasDefaultValueSql("(sysutcdatetime())");
+            entity.Property(e => e.image_url).HasMaxLength(500);
+
+            entity.HasOne(d => d.slot).WithMany(p => p.SlotImages)
+                .HasForeignKey(d => d.slot_id)
+                .OnDelete(DeleteBehavior.Cascade)
+                .HasConstraintName("FK_SlotImages_Slot");
+        });
+
         modelBuilder.Entity<SlotTransferRequest>(entity =>
         {
             entity.HasKey(e => e.transfer_id).HasName("PK__SlotTran__78E6FD3330AAC388");
+
+            entity.HasIndex(e => e.contract_id, "IX_SlotTransferRequests_Contract");
+
+            entity.HasIndex(e => e.to_vendor_id, "IX_SlotTransferRequests_ToVendor");
 
             entity.Property(e => e.initiated_at).HasDefaultValueSql("(sysutcdatetime())");
             entity.Property(e => e.review_decision_reason).HasMaxLength(500);
@@ -1087,6 +1304,8 @@ public partial class StreetBizDbContext : DbContext
         {
             entity.HasKey(e => e.hour_id).HasName("PK__Storefro__21EED6C8BE6EE50D");
 
+            entity.HasIndex(e => e.storefront_id, "IX_StorefrontBusinessHours_Storefront");
+
             entity.HasOne(d => d.storefront).WithMany(p => p.StorefrontBusinessHours)
                 .HasForeignKey(d => d.storefront_id)
                 .OnDelete(DeleteBehavior.ClientSetNull)
@@ -1124,6 +1343,7 @@ public partial class StreetBizDbContext : DbContext
                 .HasMaxLength(20)
                 .HasDefaultValue("ACTIVE");
             entity.Property(e => e.created_at).HasDefaultValueSql("(sysutcdatetime())");
+            entity.Property(e => e.failed_login_count).HasDefaultValue(0);
             entity.Property(e => e.full_name).HasMaxLength(150);
             entity.Property(e => e.password_hash).HasMaxLength(255);
             entity.Property(e => e.phone_number).HasMaxLength(15);
@@ -1200,6 +1420,25 @@ public partial class StreetBizDbContext : DbContext
                 .HasConstraintName("FK_Vendors_User");
         });
 
+        modelBuilder.Entity<WardCompliancePolicy>(entity =>
+        {
+            entity.HasKey(e => e.ward_unit_id);
+
+            entity.Property(e => e.updated_at).HasDefaultValueSql("(sysutcdatetime())");
+            entity.Property(e => e.ward_unit_type)
+                .HasMaxLength(20)
+                .HasComputedColumnSql("(CONVERT([nvarchar](20),N'WARD'))", true);
+
+            entity.HasOne(d => d.AdministrativeUnit).WithOne()
+                .HasPrincipalKey<AdministrativeUnit>(p => new { p.unit_id, p.unit_type })
+                .HasForeignKey<WardCompliancePolicy>(d => new { d.ward_unit_id, d.ward_unit_type })
+                .HasConstraintName("FK_WardCompliancePolicies_Ward");
+
+            entity.HasOne(d => d.UserAccount).WithMany()
+                .HasForeignKey(d => d.updated_by)
+                .HasConstraintName("FK_WardCompliancePolicies_UpdatedBy");
+        });
+
         modelBuilder.Entity<VendorComment>(entity =>
         {
             entity.HasKey(e => e.comment_id).HasName("PK__VendorCo__E7957687EF3B4D7C");
@@ -1223,6 +1462,8 @@ public partial class StreetBizDbContext : DbContext
         modelBuilder.Entity<VendorReport>(entity =>
         {
             entity.HasKey(e => e.report_id).HasName("PK__VendorRe__779B7C584924C5EC");
+
+            entity.HasIndex(e => e.vendor_id, "IX_VendorReports_Vendor");
 
             entity.Property(e => e.ai_extracted_location).HasMaxLength(200);
             entity.Property(e => e.created_at).HasDefaultValueSql("(sysutcdatetime())");
@@ -1271,6 +1512,23 @@ public partial class StreetBizDbContext : DbContext
             entity.Property(e => e.description).HasMaxLength(1000);
             entity.Property(e => e.evidence_url).HasMaxLength(500);
             entity.Property(e => e.recorded_at).HasDefaultValueSql("(sysutcdatetime())");
+            entity.Property(e => e.bien_ban_so).HasMaxLength(50);
+            entity.Property(e => e.prepared_location).HasMaxLength(255);
+            entity.Property(e => e.witness_name).HasMaxLength(150);
+            entity.Property(e => e.witness_role).HasMaxLength(20);
+            entity.Property(e => e.witness_occupation).HasMaxLength(150);
+            entity.Property(e => e.witness_address).HasMaxLength(255);
+            entity.Property(e => e.violator_full_name).HasMaxLength(150);
+            entity.Property(e => e.violator_gender).HasMaxLength(10);
+            entity.Property(e => e.violator_nationality).HasMaxLength(50);
+            entity.Property(e => e.violator_id_number).HasMaxLength(20);
+            entity.Property(e => e.violator_id_issued_place).HasMaxLength(150);
+            entity.Property(e => e.violator_address).HasMaxLength(255);
+            entity.Property(e => e.containment_measures).HasMaxLength(500);
+            entity.Property(e => e.explanation_method).HasMaxLength(20);
+            entity.Property(e => e.explanation_content).HasMaxLength(1000);
+            entity.Property(e => e.delivered_to_name).HasMaxLength(150);
+            entity.Property(e => e.delivery_refusal_reason).HasMaxLength(500);
             entity.Property(e => e.recorder_role)
                 .HasMaxLength(30)
                 .HasComputedColumnSql("(CONVERT([nvarchar](30),N'WARD_AUTHORITY'))", true);

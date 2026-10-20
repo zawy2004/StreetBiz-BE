@@ -15,7 +15,7 @@ public sealed class CustomerContext(
     public async Task<long> RequireCustomerUserIdAsync(CancellationToken cancellationToken)
     {
         var userId = currentUser.UserId
-            ?? throw new AuthenticationException("No active session.");
+            ?? throw new AuthenticationException(AppMessages.SessionExpired);
         var user = await users.GetByIdAsync(userId, cancellationToken);
 
         if (currentUser.RoleCode != RoleCodes.Customer

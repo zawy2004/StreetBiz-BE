@@ -1,6 +1,7 @@
 using MediatR;
 using StreetBiz.Application.Common.Exceptions;
 using StreetBiz.Application.Common.Interfaces;
+using StreetBiz.Application.Common.Security;
 
 namespace StreetBiz.Application.Features.Authentication.Logout;
 
@@ -14,7 +15,7 @@ public sealed class LogoutCommandHandler(
     public async Task<Unit> Handle(LogoutCommand request, CancellationToken cancellationToken)
     {
         var sessionId = currentUser.SessionId
-            ?? throw new AuthenticationException("No active session.");
+            ?? throw new AuthenticationException(AppMessages.SessionExpired);
 
         await sessionRepository.RevokeAsync(sessionId, cancellationToken);
         return Unit.Value;

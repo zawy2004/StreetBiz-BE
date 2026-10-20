@@ -81,3 +81,43 @@ invariants and behavior are understood:
 5. Add tests before removing or excluding the scaffolded type.
 
 Do not move generated files mechanically into Domain.
+
+## Project structure
+
+### Source projects
+
+- src/StreetBiz.Domain
+  - Entities, Enums, ValueObjects, DomainEvents, Exceptions, Common
+  - No outer-layer dependency
+- src/StreetBiz.Application
+  - Abstractions, Interfaces, DTOs, Features, Behaviors, Mappings, Validators
+  - References Domain
+- src/StreetBiz.Infrastructure
+  - Persistence, Identity, Payments, Notifications, FileStorage, Services
+  - References Application and Domain
+- src/StreetBiz.API
+  - Controllers, Middlewares, Filters, Extensions, Configuration
+  - References Application and Infrastructure
+
+### Test projects
+
+- tests/StreetBiz.Domain.Tests references Domain
+- tests/StreetBiz.Application.Tests references Application
+- tests/StreetBiz.Infrastructure.Tests references Infrastructure (SQLite, schema built from the EF model)
+- tests/StreetBiz.API.Tests references API
+
+All projects target net8.0. Common compiler settings are in Directory.Build.props.
+
+### Persistence files
+
+~~~text
+src/StreetBiz.Infrastructure/Persistence/
+|-- StreetBizDbContext.cs
+|-- ScaffoldedModels/      one model per table and 2 keyless view models
+|-- Configurations/
+|-- Repositories/
++-- Migrations/            InitialBaseline (empty Up/Down) and AddOrderStorefrontAddressSnapshot
+~~~
+
+The database itself is built from db/StreetBiz_SQL_Server.sql, not from these migrations;
+see [database.md](database.md).

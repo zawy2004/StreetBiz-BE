@@ -5,12 +5,29 @@ using StreetBiz.Application.Common.Security;
 
 namespace StreetBiz.API.Extensions;
 
-/// <summary>Maps application exceptions to RFC-7807 ProblemDetails responses.</summary>
+/// <summary>
+/// Maps application exceptions to RFC-7807 ProblemDetails responses.
+/// This is the only place exceptions are logged: appsettings.json silences ASP.NET's own
+/// ExceptionHandlerMiddleware log, which would otherwise print a full stack trace for
+/// every expected 4xx (wrong role, not found, validation).
+/// </summary>
 public sealed class GlobalExceptionHandler(ILogger<GlobalExceptionHandler> logger) : IExceptionHandler
 {
     public async ValueTask<bool> TryHandleAsync(
         HttpContext httpContext, Exception exception, CancellationToken cancellationToken)
     {
+        if (exception is AppException expected)
+        {
+            // Expected outcomes, not faults: one line, no stack trace.
+            logger.LogInformation(
+                "{Method} {Path} -> {StatusCode} {ErrorCode}: {Message}",
+                httpContext.Request.Method,
+                httpContext.Request.Path,
+                expected.StatusCode,
+                expected.ErrorCode,
+                expected.Message);
+        }
+
         switch (exception)
         {
             case ValidationAppException validation:

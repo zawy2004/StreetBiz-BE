@@ -13,6 +13,8 @@ public partial class Order
 
     public long storefront_id { get; set; }
 
+    public string? storefront_address_snapshot { get; set; }
+
     public string order_status { get; set; } = null!;
 
     public decimal subtotal_amount { get; set; }

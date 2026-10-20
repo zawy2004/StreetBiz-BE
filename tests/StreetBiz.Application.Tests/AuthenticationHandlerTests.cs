@@ -78,7 +78,7 @@ public sealed class AuthenticationHandlerTests
         hasher.Setup(h => h.Verify("wrong", "hash")).Returns(false);
         var sessions = new Mock<ISessionRepository>();
 
-        var handler = new ChangePasswordCommandHandler(currentUser.Object, users.Object, hasher.Object, sessions.Object);
+        var handler = new ChangePasswordCommandHandler(currentUser.Object, users.Object, hasher.Object, sessions.Object, new Mock<ISecurityEvents>().Object);
         var act = () => handler.Handle(new ChangePasswordCommand("wrong", "N3w!Passw0rd"), CancellationToken.None);
 
         var error = await act.Should().ThrowAsync<ValidationAppException>();
@@ -105,7 +105,7 @@ public sealed class AuthenticationHandlerTests
 
         result.IsValid.Should().BeFalse();
         result.Errors.Should().ContainSingle(e => e.PropertyName == nameof(RegisterCommand.FullName))
-            .Which.ErrorMessage.Should().Be("Full name must be 150 characters or fewer.");
+            .Which.ErrorMessage.Should().Be(AppMessages.FullNameTooLong);
     }
 
     [Fact]

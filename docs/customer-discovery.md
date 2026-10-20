@@ -36,9 +36,9 @@ filter, and open one storefront in full. All endpoints are public (a guest can b
 
 ## Local data
 
-Storefronts are created by STORE-01, which is not implemented yet. `docs/dev-seed-discovery.sql` adds two
-storefronts (with hours and menus) for the first two registrations that pass the Phase 2 gate; it is idempotent
-and only adds missing rows.
+Storefronts are created by STORE-01, which is not implemented yet. The demo seed
+(`db/StreetBiz_Demo_Seed.sql`, section 7) creates two storefronts, with hours and menus, for registrations that
+pass the Phase 2 gate.
 
 ## Not covered
 

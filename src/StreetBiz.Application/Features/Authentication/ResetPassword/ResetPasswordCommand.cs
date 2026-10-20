@@ -15,13 +15,13 @@ public sealed class ResetPasswordCommandValidator : AbstractValidator<ResetPassw
     {
         RuleFor(x => x.PhoneNumber)
             .Must(p => AuthValidationRules.PhoneRegex().IsMatch(p))
-            .WithMessage("Please enter a valid phone number.");
+            .WithMessage(AppMessages.InvalidPhone);
         RuleFor(x => x.Otp)
             .Must(o => AuthValidationRules.OtpRegex().IsMatch(o))
-            .WithMessage("The verification code must be 6 digits.");
+            .WithMessage(AppMessages.OtpFormat);
         RuleFor(x => x.NewPassword)
             .Must(p => AuthValidationRules.PasswordRegex().IsMatch(p))
-            .WithMessage("The new password does not meet the security requirements.");
+            .WithMessage(AppMessages.NewPasswordPolicy);
     }
 }
 
@@ -29,7 +29,8 @@ public sealed class ResetPasswordCommandHandler(
     IOtpService otpService,
     IUserAccountRepository userRepository,
     IPasswordHasher passwordHasher,
-    ISessionRepository sessionRepository) : IRequestHandler<ResetPasswordCommand, Unit>
+    ISessionRepository sessionRepository,
+    ISecurityEvents securityEvents) : IRequestHandler<ResetPasswordCommand, Unit>
 {
     public async Task<Unit> Handle(ResetPasswordCommand request, CancellationToken cancellationToken)
     {
@@ -42,6 +43,12 @@ public sealed class ResetPasswordCommandHandler(
             user.Id, passwordHasher.Hash(request.NewPassword), cancellationToken);
 
         await sessionRepository.RevokeAllForUserAsync(user.Id, cancellationToken);
+        await securityEvents.RecordAsync(
+            user.Id,
+            SecurityActions.PasswordReset,
+            null,
+            ("Mật khẩu đã được đặt lại", "Mật khẩu tài khoản của bạn vừa được đặt lại bằng mã OTP và mọi thiết bị đã bị đăng xuất. Nếu không phải bạn, hãy liên hệ hỗ trợ ngay."),
+            cancellationToken);
         return Unit.Value;
     }
 }

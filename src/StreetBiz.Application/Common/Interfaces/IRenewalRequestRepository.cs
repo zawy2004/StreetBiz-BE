@@ -12,4 +12,13 @@ public interface IRenewalRequestRepository
     Task<RenewalRequestRow?> GetByIdAsync(long renewalId, CancellationToken cancellationToken);
 
     Task<IReadOnlyList<RenewalRequestRow>> ListByContractAsync(long contractId, CancellationToken cancellationToken);
+
+    /// <summary>SIDE-06: vendor withdraws their own open renewal request. Returns false if it
+    /// was no longer PENDING/UNDER_REVIEW (already decided by the ward, or already withdrawn).</summary>
+    Task<bool> WithdrawAsync(long renewalId, CancellationToken cancellationToken);
+
+    /// <summary>Cascades from SIDE-07 (voluntary contract cancellation): withdraws any renewal
+    /// request still open on that contract, so it doesn't sit forever in the ward's queue for a
+    /// contract that no longer exists to extend.</summary>
+    Task CloseOpenForContractAsync(long contractId, CancellationToken cancellationToken);
 }
