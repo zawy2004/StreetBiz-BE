@@ -60,15 +60,12 @@ public sealed class WardComplianceService(
     /// WardSlots.Write, whose pattern this mirrors for the same reason).
     private async Task Write(Func<Task> action, CancellationToken ct)
     {
-        var strategy = db.Database.CreateExecutionStrategy();
-        await strategy.ExecuteAsync(async () =>
+        await db.ExecuteInTransactionAsync(async transaction =>
         {
-            db.ChangeTracker.Clear();
-            await using var transaction = await db.Database.BeginTransactionAsync(IsolationLevel.Serializable, ct);
             await action();
             await db.SaveChangesAsync(ct);
             await transaction.CommitAsync(ct);
-        });
+        }, IsolationLevel.Serializable, ct);
     }
 
     #region Enrollment / Registration Review

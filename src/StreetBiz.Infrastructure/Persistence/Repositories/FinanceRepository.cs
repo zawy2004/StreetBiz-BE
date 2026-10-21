@@ -79,16 +79,12 @@ public sealed class FinanceRepository(
         }
         else
         {
-            var strategy = db.Database.CreateExecutionStrategy();
-            scheduleId = await strategy.ExecuteAsync(async () =>
+            scheduleId = await db.ExecuteInTransactionAsync(async transaction =>
             {
-                db.ChangeTracker.Clear();
-                await using var transaction = await db.Database.BeginTransactionAsync(
-                    IsolationLevel.Serializable, cancellationToken);
                 var id = await WriteScheduleAsync(contractId, actorUserId, total, instalments, cancellationToken);
                 await transaction.CommitAsync(cancellationToken);
                 return id;
-            });
+            }, IsolationLevel.Serializable, cancellationToken);
         }
 
         return await ReadScheduleAsync(scheduleId, cancellationToken)
@@ -200,13 +196,8 @@ public sealed class FinanceRepository(
 
     public async Task<int> CancelInstalmentsAfterEarlyEndAsync(CancellationToken cancellationToken)
     {
-        var strategy = db.Database.CreateExecutionStrategy();
-        return await strategy.ExecuteAsync(async () =>
+        return await db.ExecuteInTransactionAsync(async transaction =>
         {
-            db.ChangeTracker.Clear();
-            await using var transaction = await db.Database.BeginTransactionAsync(
-                IsolationLevel.Serializable, cancellationToken);
-
             var open = await db.FeeScheduleItems
                 .Where(item => (item.item_status == FeeItemStatuses.Pending || item.item_status == FeeItemStatuses.Overdue)
                     && item.fee_schedule.superseded_at == null
@@ -279,7 +270,7 @@ public sealed class FinanceRepository(
             await db.SaveChangesAsync(cancellationToken);
             await transaction.CommitAsync(cancellationToken);
             return closed;
-        });
+        }, IsolationLevel.Serializable, cancellationToken);
     }
 
     private async Task<FeeScheduleRow?> ReadScheduleAsync(long scheduleId, CancellationToken cancellationToken)
@@ -362,13 +353,8 @@ public sealed class FinanceRepository(
     public async Task<FinanceCheckoutTransactionRow> CreateFeeCheckoutAsync(
         long vendorId, long feeItemId, string provider, string idempotencyKey, CancellationToken cancellationToken)
     {
-        var strategy = db.Database.CreateExecutionStrategy();
-        return await strategy.ExecuteAsync(async () =>
+        return await db.ExecuteInTransactionAsync(async transaction =>
         {
-            db.ChangeTracker.Clear();
-            await using var transaction = await db.Database.BeginTransactionAsync(
-                IsolationLevel.Serializable, cancellationToken);
-
             var item = await db.FeeScheduleItems
                 .SingleOrDefaultAsync(
                     row => row.fee_item_id == feeItemId
@@ -430,7 +416,7 @@ public sealed class FinanceRepository(
             await db.SaveChangesAsync(cancellationToken);
             await transaction.CommitAsync(cancellationToken);
             return new FinanceCheckoutTransactionRow(payment.transaction_id, idempotencyKey, provider, item.amount);
-        });
+        }, IsolationLevel.Serializable, cancellationToken);
     }
 
     // ------------------------------------------------------------------
@@ -454,13 +440,8 @@ public sealed class FinanceRepository(
     public async Task<FinanceCheckoutTransactionRow> CreatePenaltyCheckoutAsync(
         long vendorId, long penaltyId, string provider, string idempotencyKey, CancellationToken cancellationToken)
     {
-        var strategy = db.Database.CreateExecutionStrategy();
-        return await strategy.ExecuteAsync(async () =>
+        return await db.ExecuteInTransactionAsync(async transaction =>
         {
-            db.ChangeTracker.Clear();
-            await using var transaction = await db.Database.BeginTransactionAsync(
-                IsolationLevel.Serializable, cancellationToken);
-
             var penalty = await db.Penalties
                 .SingleOrDefaultAsync(
                     row => row.penalty_id == penaltyId && row.violation.vendor_id == vendorId,
@@ -500,7 +481,7 @@ public sealed class FinanceRepository(
             await db.SaveChangesAsync(cancellationToken);
             await transaction.CommitAsync(cancellationToken);
             return new FinanceCheckoutTransactionRow(payment.transaction_id, idempotencyKey, provider, penalty.amount);
-        });
+        }, IsolationLevel.Serializable, cancellationToken);
     }
 
     /// <summary>
@@ -751,13 +732,8 @@ public sealed class FinanceRepository(
     public async Task<FinanceCallbackMutationResult> ApplyPaymentCallbackAsync(
         PaymentCallbackData callback, CancellationToken cancellationToken)
     {
-        var strategy = db.Database.CreateExecutionStrategy();
-        return await strategy.ExecuteAsync(async () =>
+        return await db.ExecuteInTransactionAsync(async transaction =>
         {
-            db.ChangeTracker.Clear();
-            await using var transaction = await db.Database.BeginTransactionAsync(
-                IsolationLevel.Serializable, cancellationToken);
-
             PaymentTransaction? payment = null;
             if (!string.IsNullOrWhiteSpace(callback.ProviderReference))
             {
@@ -862,7 +838,7 @@ public sealed class FinanceRepository(
             }
 
             return await Finish(PaymentCallbackOutcome.Applied, CallbackResults.Applied);
-        });
+        }, IsolationLevel.Serializable, cancellationToken);
     }
 
     public async Task<FinancePaymentStateRow?> GetVendorPaymentAsync(
@@ -879,13 +855,8 @@ public sealed class FinanceRepository(
     public async Task<FinanceCallbackMutationResult> ConfirmSandboxSuccessAsync(
         long vendorId, long transactionId, CancellationToken cancellationToken)
     {
-        var strategy = db.Database.CreateExecutionStrategy();
-        return await strategy.ExecuteAsync(async () =>
+        return await db.ExecuteInTransactionAsync(async transaction =>
         {
-            db.ChangeTracker.Clear();
-            await using var transaction = await db.Database.BeginTransactionAsync(
-                IsolationLevel.Serializable, cancellationToken);
-
             var payment = await db.PaymentTransactions
                 .Include(row => row.fee_item).ThenInclude(item => item!.fee_schedule).ThenInclude(schedule => schedule.contract)
                 .Include(row => row.penalty).ThenInclude(p => p!.violation)
@@ -942,7 +913,7 @@ public sealed class FinanceRepository(
             await transaction.CommitAsync(cancellationToken);
             return new FinanceCallbackMutationResult(
                 PaymentCallbackOutcome.Applied, callbackEvent.callback_event_id, payment.transaction_id);
-        });
+        }, IsolationLevel.Serializable, cancellationToken);
     }
 
     /// <summary>The callback is about an attempt older than the one provider_reference now points to.</summary>
@@ -1204,12 +1175,8 @@ public sealed class FinanceRepository(
     public async Task<FeeReminderSweepResult> RunFeeReminderSweepAsync(
         DateOnly today, CancellationToken cancellationToken)
     {
-        var strategy = db.Database.CreateExecutionStrategy();
-        return await strategy.ExecuteAsync(async () =>
+        return await db.ExecuteInTransactionAsync(async transaction =>
         {
-            db.ChangeTracker.Clear();
-            await using var transaction = await db.Database.BeginTransactionAsync(
-                IsolationLevel.Serializable, cancellationToken);
             var now = Now;
 
             // Superseded revisions keep their items as PENDING (the CHECK constraint has no
@@ -1339,7 +1306,7 @@ public sealed class FinanceRepository(
             await db.SaveChangesAsync(cancellationToken);
             await transaction.CommitAsync(cancellationToken);
             return new FeeReminderSweepResult(overdue.Count, reminderCount, penaltyReminderCount);
-        });
+        }, IsolationLevel.Serializable, cancellationToken);
     }
 
     // ------------------------------------------------------------------
@@ -1516,12 +1483,8 @@ public sealed class FinanceRepository(
             throw new ArgumentException("Exactly one of feeItemId and penaltyId must be given.");
         }
 
-        var strategy = db.Database.CreateExecutionStrategy();
-        return await strategy.ExecuteAsync(async () =>
+        return await db.ExecuteInTransactionAsync(async transaction =>
         {
-            db.ChangeTracker.Clear();
-            await using var transaction = await db.Database.BeginTransactionAsync(
-                IsolationLevel.Serializable, cancellationToken);
             var now = Now;
 
             PaymentTransaction payment;
@@ -1615,7 +1578,7 @@ public sealed class FinanceRepository(
             await db.SaveChangesAsync(cancellationToken);
             await transaction.CommitAsync(cancellationToken);
             return payment.transaction_id;
-        });
+        }, IsolationLevel.Serializable, cancellationToken);
     }
 
     /// <summary>Every penalty raised against a violation identified to this vendor.</summary>

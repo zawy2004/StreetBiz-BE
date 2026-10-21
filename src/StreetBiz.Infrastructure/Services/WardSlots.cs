@@ -305,15 +305,12 @@ public sealed class WardSlots(
     private async Task Write(Func<Task> action, CancellationToken ct)
     {
         // Serializable decisions prevent double review, stale debt checks and simultaneous transfers.
-        var strategy = db.Database.CreateExecutionStrategy();
-        await strategy.ExecuteAsync(async () =>
+        await db.ExecuteInTransactionAsync(async transaction =>
         {
-            db.ChangeTracker.Clear();
-            await using var transaction = await db.Database.BeginTransactionAsync(IsolationLevel.Serializable, ct);
             await action();
             await db.SaveChangesAsync(ct);
             await transaction.CommitAsync(ct);
-        });
+        }, IsolationLevel.Serializable, ct);
     }
 
     private void Audit(WardActor actor, string kind, long id, string action, object details) =>

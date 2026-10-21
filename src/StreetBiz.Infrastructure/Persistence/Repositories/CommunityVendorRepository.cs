@@ -181,12 +181,8 @@ public sealed class CommunityVendorRepository(
         CustomerVendorComment comment,
         CancellationToken cancellationToken)
     {
-        var strategy = dbContext.Database.CreateExecutionStrategy();
-        await strategy.ExecuteAsync(async () =>
+        await dbContext.ExecuteInTransactionAsync(async transaction =>
         {
-            await using var transaction = await dbContext.Database.BeginTransactionAsync(
-                IsolationLevel.Serializable,
-                cancellationToken);
             var entity = await dbContext.VendorComments.SingleOrDefaultAsync(
                 item => item.vendor_id == vendorId && item.customer_user_id == customerUserId,
                 cancellationToken);
@@ -206,7 +202,7 @@ public sealed class CommunityVendorRepository(
             entity.comment_text = comment.CommentText;
             await dbContext.SaveChangesAsync(cancellationToken);
             await transaction.CommitAsync(cancellationToken);
-        });
+        }, IsolationLevel.Serializable, cancellationToken, clearTracker: false);
 
         return await dbContext.VendorComments.AsNoTracking()
             .Where(item => item.vendor_id == vendorId && item.customer_user_id == customerUserId)

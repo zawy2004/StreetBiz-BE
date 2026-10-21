@@ -338,11 +338,9 @@ public sealed class FoodSafetyService(
     private static DateTime? Utc(DateTime? value) =>
         value.HasValue ? DateTime.SpecifyKind(value.Value, DateTimeKind.Utc) : null;
 
-    private Task Write(Func<Task> action, CancellationToken ct) => db.Database.CreateExecutionStrategy().ExecuteAsync(async () =>
+    private Task Write(Func<Task> action, CancellationToken ct) => db.ExecuteInTransactionAsync(async transaction =>
     {
-        db.ChangeTracker.Clear();
-        await using var transaction = await db.Database.BeginTransactionAsync(IsolationLevel.Serializable, ct);
         await action();
         await transaction.CommitAsync(ct);
-    });
+    }, IsolationLevel.Serializable, ct);
 }
