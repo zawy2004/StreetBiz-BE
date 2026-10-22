@@ -35,6 +35,7 @@ public static class DependencyInjection
         services.AddScoped<ICustomerContext, CustomerContext>();
         services.AddScoped<IChatParticipantResolver, ChatParticipantResolver>();
         services.AddScoped<IPlatformAdminContext, PlatformAdminContext>();
+        services.AddScoped<IContentReporterContext, ContentReporterContext>();
         services.AddScoped<IWardActorResolver, WardActorResolver>();
         services.AddScoped<IWardActorContext, WardActorContext>();
 
