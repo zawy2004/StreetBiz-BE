@@ -1,13 +1,14 @@
 # StreetBiz Backend
 
-WARD-16–18, SYS-01–02, BUY-01–05, ADM-01, ADM-03–05, CART-01,
+WARD-16–18, SYS-01–02, BUY-01–05, ADM-01–07, CART-01,
 ORD-01–04 and SORD-01–04 are now implemented. See
 [Ward slot workflows](docs/ward-slot-workflows.md) for API contracts, authentication,
 geofence configuration and test instructions, and
 [Community vendor workflows](docs/community-vendor-workflows.md) for the public map,
 permit verification, public profiles, customer ratings and suspicious-vendor reports.
 [Platform administration workflows](docs/platform-administration-workflows.md) documents
-food-category management, content moderation and order-complaint resolution. See
+food-category management, account suspension, content moderation, order-complaint
+resolution, the platform dashboard and report export. See
 [Commerce order workflows](docs/commerce-order-workflows.md) for cart, prepaid order,
 pickup, seller processing, refund-request, address snapshots, authenticated
 SignalR updates and sales-summary contracts.
@@ -16,6 +17,12 @@ SYS-03–06, FEE-01/03/04 and WARD-14/15 are also implemented. See
 [Fee, payment, invoicing and reporting](docs/fee-payment-invoicing.md) for fee
 schedule generation, the shared payment-callback dispatch with Commerce, the
 hourly reminder sweep, and the ward collection report and dashboard.
+
+STORE-03 (business hours), REV-02/03 (review window, reporting content), DISC-05
+(rating and price filters), PAY-02 (ZaloPay), SIDE-10 (release of the old slot after an
+address change) and the AI suggestions AIP-01..04 and AIB-01 are documented in
+[Marketplace completion workflows](docs/marketplace-completion-workflows.md) and
+[AI assistance for sellers, customers and wards](docs/ai-marketplace-assistance.md).
 
 StreetBiz backend foundation built with .NET 8, ASP.NET Core, Entity Framework
 Core 8, SQL Server, and Clean Architecture. The current codebase includes
@@ -74,7 +81,9 @@ dotnet user-secrets --project src/StreetBiz.API set "Payments:ZaloPay:CheckoutUr
 dotnet user-secrets --project src/StreetBiz.API set "Payments:ZaloPay:CallbackSecret" "<merchant-callback-secret>"
 ~~~
 
-Equivalent environment keys use double underscores, for example
+ZaloPay Gateway v2 additionally needs `Payments:ZaloPay:Enabled` (true),
+`ApiBaseUrl`, `AppId`, `Key1`, `Key2`, `ReturnUrl` and `CallbackUrl`; it stays off
+until all of them are set. Equivalent environment keys use double underscores, for example
 `Payments__Momo__CallbackSecret`. Callback requests send the hexadecimal
 HMAC-SHA256 in `X-Payment-Signature`.
 

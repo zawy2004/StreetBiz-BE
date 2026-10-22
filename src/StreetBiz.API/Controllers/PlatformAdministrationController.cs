@@ -130,7 +130,93 @@ public sealed class PlatformAdministrationController(ISender sender) : Controlle
             request.Notes,
             request.ExpectedStatus,
             request.ApprovedRefundAmount), cancellationToken));
+
+    /// <summary>ADM-06: platform figures for a period (default the last 30 days) against the one before.</summary>
+    [HttpGet("dashboard")]
+    public async Task<ActionResult<PlatformDashboardDto>> Dashboard(
+        [FromQuery] DateOnly? from,
+        [FromQuery] DateOnly? to,
+        CancellationToken cancellationToken) =>
+        Ok(await sender.Send(new GetPlatformDashboardQuery(from, to), cancellationToken));
+
+    /// <summary>ADM-07: build an operational report for a period and return the file.</summary>
+    [HttpPost("reports/export")]
+    public async Task<IActionResult> ExportReport(
+        ExportReportRequest request,
+        CancellationToken cancellationToken)
+    {
+        var file = await sender.Send(
+            new ExportPlatformReportCommand(request.ReportType, request.From, request.To, request.Format),
+            cancellationToken);
+        Response.Headers["X-Export-Id"] = file.ExportId.ToString();
+        return File(file.Content, file.ContentType, file.FileName);
+    }
+
+    /// <summary>ADM-07: the caller's own export history, newest first.</summary>
+    [HttpGet("reports/exports")]
+    public async Task<ActionResult<PlatformPageDto<PlatformExportDto>>> Exports(
+        [FromQuery] int page = 1,
+        [FromQuery] int pageSize = 20,
+        CancellationToken cancellationToken = default) =>
+        Ok(await sender.Send(new ListPlatformExportsQuery(page, pageSize), cancellationToken));
+
+    /// <summary>ADM-07: download a finished export again.</summary>
+    [HttpGet("reports/exports/{exportId:long}/download")]
+    public async Task<IActionResult> DownloadExport(
+        long exportId,
+        CancellationToken cancellationToken)
+    {
+        var file = await sender.Send(new DownloadPlatformExportQuery(exportId), cancellationToken);
+        return File(file.Content, file.ContentType, file.FileName);
+    }
+
+    /// <summary>ADM-02: list Customer and Vendor accounts (officers and admins are never listed).</summary>
+    [HttpGet("accounts")]
+    public async Task<ActionResult<PlatformPageDto<PlatformAccountDto>>> Accounts(
+        [FromQuery] string? role,
+        [FromQuery] string? status,
+        [FromQuery] string? q,
+        [FromQuery] int page = 1,
+        [FromQuery] int pageSize = 20,
+        CancellationToken cancellationToken = default) =>
+        Ok(await sender.Send(
+            new ListPlatformAccountsQuery(role, status, q, page, pageSize), cancellationToken));
+
+    /// <summary>ADM-02: one account with its suspend/reactivate history.</summary>
+    [HttpGet("accounts/{userId:long}")]
+    public async Task<ActionResult<PlatformAccountDetailDto>> AccountDetail(
+        long userId,
+        CancellationToken cancellationToken) =>
+        Ok(await sender.Send(new GetPlatformAccountQuery(userId), cancellationToken));
+
+    /// <summary>ADM-02: suspend an account; its sessions are revoked and sign-in is refused.</summary>
+    [HttpPost("accounts/{userId:long}/suspend")]
+    public async Task<ActionResult<PlatformAccountDetailDto>> SuspendAccount(
+        long userId,
+        SuspendAccountRequest request,
+        CancellationToken cancellationToken) =>
+        Ok(await sender.Send(new SuspendPlatformAccountCommand(
+            userId,
+            request.Reason,
+            request.ExpectedStatus), cancellationToken));
+
+    /// <summary>ADM-02: lift a suspension. Nothing is put back on sale automatically.</summary>
+    [HttpPost("accounts/{userId:long}/reactivate")]
+    public async Task<ActionResult<PlatformAccountDetailDto>> ReactivateAccount(
+        long userId,
+        ReactivateAccountRequest request,
+        CancellationToken cancellationToken) =>
+        Ok(await sender.Send(new ReactivatePlatformAccountCommand(
+            userId,
+            request.Note,
+            request.ExpectedStatus), cancellationToken));
 }
+
+public sealed record ExportReportRequest(string ReportType, DateOnly From, DateOnly To, string Format);
+
+public sealed record SuspendAccountRequest(string Reason, string ExpectedStatus);
+
+public sealed record ReactivateAccountRequest(string? Note, string ExpectedStatus);
 
 public sealed record FoodCategoryRequest(string Name);
 

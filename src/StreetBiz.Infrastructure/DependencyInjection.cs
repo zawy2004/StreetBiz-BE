@@ -103,6 +103,7 @@ public static class DependencyInjection
             });
         services.AddFileStorage(configuration);
         services.AddHttpClient(MomoGateway.HttpClientName, client => client.Timeout = TimeSpan.FromSeconds(30));
+        services.AddHttpClient(ZaloPayGateway.HttpClientName, client => client.Timeout = TimeSpan.FromSeconds(30));
         services.AddSingleton<IPaymentGateway, ConfiguredPaymentGateway>();
         services.AddSingleton<IRefundGateway, ConfiguredRefundGateway>();
 
@@ -127,13 +128,27 @@ public static class DependencyInjection
         services.AddScoped<IChatRepository, ChatRepository>();
         services.AddScoped<INotificationRepository, NotificationRepository>();
         services.AddScoped<IPlatformAdministrationRepository, PlatformAdministrationRepository>();
+        services.AddScoped<IPlatformReportRepository, PlatformReportRepository>();
+        services.AddScoped<IContentReportRepository, ContentReportRepository>();
+        services.AddSingleton<IPlatformReportRenderer, Documents.PlatformReportRenderer>();
         services.AddScoped<IFinanceRepository, FinanceRepository>();
         services.AddScoped<IWardReportRepository, WardReportRepository>();
         services.AddScoped<StreetBiz.Application.Features.RegistrationIntegrity.IRegistrationIntegrityReader, RegistrationIntegrityReader>();
         services.AddSingleton<IFinanceDocumentRenderer, Documents.FinanceDocumentRenderer>();
         services.Configure<FeeReminderOptions>(configuration.GetSection(FeeReminderOptions.SectionName));
         services.AddHostedService<FeeReminderHostedService>();
-        services.AddScoped<ICommerceRepository, CommerceRepository>();
+        services.AddScoped<CommerceRepository>();
+        services.AddScoped<ICommerceRepository>(provider => provider.GetRequiredService<CommerceRepository>());
+
+        // AIP-01..04 and AIB-01: the model only suggests (BR-41); every feature falls back when it is off or down.
+        services.AddSingleton<StreetBiz.Application.Features.AiMarketplace.IAiFeatureGate, Services.AiFeatureGate>();
+        services.AddScoped<StreetBiz.Application.Features.AiMarketplace.IAiSuggestionClient, Services.GeminiSuggestionClient>();
+        services.AddScoped<StreetBiz.Application.Features.AiMarketplace.IAiMarketplaceRepository, AiMarketplaceRepository>();
+        services.AddScoped<StreetBiz.Application.Features.AiMarketplace.IVendorReportAssistant, StreetBiz.Application.Features.AiMarketplace.VendorReportAssistant>();
+        services.AddSingleton<Services.VendorReportPreprocessor>();
+        services.AddSingleton<StreetBiz.Application.Features.AiMarketplace.IVendorReportPreprocessor>(
+            provider => provider.GetRequiredService<Services.VendorReportPreprocessor>());
+        services.AddHostedService(provider => provider.GetRequiredService<Services.VendorReportPreprocessor>());
         services.AddScoped<IOrderTrackingRepository, OrderTrackingRepository>();
         services.AddScoped<IVendorFinanceRepository, VendorFinanceRepository>();
         services.AddScoped<IWardCollectionRepository, WardCollectionRepository>();

@@ -15,6 +15,12 @@ public sealed class SellerStorefrontsController(ICommerceManagement service) : C
     public async Task<IActionResult> Create(StorefrontInput input, CancellationToken ct) => Ok(await service.SaveStore(null, input, ct));
     [HttpPut("{storefrontId:long}")]
     public async Task<IActionResult> Update(long storefrontId, StorefrontInput input, CancellationToken ct) => Ok(await service.SaveStore(storefrontId, input, ct));
+    /// <summary>STORE-03: the weekly opening hours, with the hours the ward rents the pitch for.</summary>
+    [HttpGet("{storefrontId:long}/business-hours")]
+    public async Task<IActionResult> BusinessHours(long storefrontId, CancellationToken ct) => Ok(await service.BusinessHours(storefrontId, ct));
+    /// <summary>STORE-03: replace the whole week in one transaction.</summary>
+    [HttpPut("{storefrontId:long}/business-hours")]
+    public async Task<IActionResult> SaveBusinessHours(long storefrontId, StorefrontHoursInput input, CancellationToken ct) => Ok(await service.SaveBusinessHours(storefrontId, input, ct));
     [HttpGet("food-categories")]
     public async Task<IActionResult> Categories(CancellationToken ct) => Ok(await service.Categories(ct));
     [HttpGet("{storefrontId:long}/menu-items")]

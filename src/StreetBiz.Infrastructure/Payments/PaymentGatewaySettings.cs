@@ -54,6 +54,35 @@ public sealed class PaymentProviderSettings
     /// <summary>v2 request type; "captureWallet" opens the MoMo wallet / QR page.</summary>
     public string RequestType { get; set; } = "captureWallet";
 
+    // ---- ZaloPay Gateway v2 (https://docs.zalopay.vn). Switched off until Enabled is true AND every
+    // credential below is present, so a half-filled section never starts a checkout. Keys belong in
+    // user-secrets / environment variables, never in the committed appsettings.json.
+    // ApiBaseUrl, ReturnUrl, FeeReturnUrl and PenaltyReturnUrl are shared with MoMo's fields above.
+
+    /// <summary>The explicit switch for ZaloPay; false by default.</summary>
+    public bool Enabled { get; set; }
+
+    /// <summary>ZaloPay's numeric app_id (kept as text: it is only ever sent and compared as text).</summary>
+    public string? AppId { get; set; }
+
+    /// <summary>Signs create/query requests.</summary>
+    public string? Key1 { get; set; }
+
+    /// <summary>Verifies the callback ZaloPay sends back.</summary>
+    public string? Key2 { get; set; }
+
+    /// <summary>Public URL of POST /api/payments/zalopay/callback. ZaloPay cannot reach localhost, so locally the payment screen asks the backend to query ZaloPay instead.</summary>
+    public string? CallbackUrl { get; set; }
+
+    public bool IsZaloPayConfigured =>
+        Enabled
+        && !string.IsNullOrWhiteSpace(ApiBaseUrl)
+        && !string.IsNullOrWhiteSpace(AppId)
+        && !string.IsNullOrWhiteSpace(Key1)
+        && !string.IsNullOrWhiteSpace(Key2)
+        && !string.IsNullOrWhiteSpace(ReturnUrl)
+        && !string.IsNullOrWhiteSpace(CallbackUrl);
+
     public bool IsMomoConfigured =>
         !string.IsNullOrWhiteSpace(ApiBaseUrl)
         && !string.IsNullOrWhiteSpace(PartnerCode)

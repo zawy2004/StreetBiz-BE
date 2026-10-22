@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Mvc;
 using StreetBiz.Application.Common.Exceptions;
 using StreetBiz.Application.Common.Interfaces;
 using StreetBiz.Application.Common.Security;
+using StreetBiz.Application.Features.AiMarketplace;
 using StreetBiz.Application.Features.FoodSafety;
 using StreetBiz.Application.Features.WardSlots;
 
@@ -20,7 +21,8 @@ public sealed class UploadsController(
     ICurrentUser currentUser,
     IWardActorResolver wardActors,
     IBusinessRegistrationRepository registrations,
-    IFoodSafetyService foodSafety) : ControllerBase
+    IFoodSafetyService foodSafety,
+    IAiMarketplaceRepository vendorReports) : ControllerBase
 {
 
     /// <summary>Uploads one evidence file (JPG/PNG/WEBP/PDF, max 5 MB) and returns its URL.</summary>
@@ -32,11 +34,15 @@ public sealed class UploadsController(
     {
         var userId = currentUser.UserId ?? throw new AuthenticationException(AppMessages.SessionExpired);
 
-        // REG-02 (vendor registration evidence) and WARD-11/12 (on-site
-        // inspection photos, violation evidence) are the only callers; scoping
-        // to these two roles stops others from filling the disk with files
-        // that can never be attached to anything.
-        if (currentUser.RoleCode != RoleCodes.Vendor && currentUser.RoleCode != RoleCodes.WardAuthority)
+        // REG-02 (vendor registration evidence), WARD-11/12 (on-site inspection
+        // photos, violation evidence) and BUY-05 (the photo a customer attaches
+        // to a report about a vendor) are the callers; scoping to these roles
+        // stops others from filling the disk with files that can never be
+        // attached to anything. A customer's file is read back only by its owner
+        // and by the ward officer of the report it is attached to.
+        if (currentUser.RoleCode != RoleCodes.Vendor
+            && currentUser.RoleCode != RoleCodes.WardAuthority
+            && currentUser.RoleCode != RoleCodes.Customer)
         {
             throw new ForbiddenException(RegMessages.NotAVendor);
         }
@@ -73,7 +79,7 @@ public sealed class UploadsController(
 
     /// <summary>
     /// Downloads an evidence file. PRI-02/PRI-07: only the owning vendor and the ward
-    /// officer whose ward the registration belongs to. Platform Administrator is
+    /// officer whose ward the registration (or the citizen report carrying the photo) belongs to. Platform Administrator is
     /// deliberately excluded — BR-44 keeps that role out of registration identity
     /// evidence entirely.
     /// </summary>
@@ -121,7 +127,8 @@ public sealed class UploadsController(
 
         var url = EvidenceFiles.BuildUrl(ownerUserId, fileName);
         return await registrations.EvidenceBelongsToWardAsync(ownerUserId, url, actor.WardId, cancellationToken)
-            || await foodSafety.EvidenceBelongsToWardAsync(url, actor.WardId, cancellationToken);
+            || await foodSafety.EvidenceBelongsToWardAsync(url, actor.WardId, cancellationToken)
+            || await vendorReports.ReportEvidenceBelongsToWardAsync(url, actor.WardId, cancellationToken);
     }
 
     private static ValidationAppException FileError(string message) =>

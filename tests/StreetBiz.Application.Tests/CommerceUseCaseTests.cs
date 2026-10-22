@@ -109,6 +109,35 @@ public sealed class CommerceUseCaseTests
         gateway.VerifyAll();
     }
 
+    [Theory]
+    [InlineData(OrderStatuses.Cancelled, "thất bại")]
+    [InlineData(OrderStatuses.Placed, "đã được thanh toán")]
+    public async Task Replaying_a_checkout_whose_payment_already_ended_never_opens_a_new_payment_page(
+        string status, string expectedFragment)
+    {
+        var repository = new Mock<ICommerceRepository>();
+        repository.Setup(x => x.CheckoutAsync(7, 3, PaymentProviders.Momo, "old-key", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OrderMutationResult(
+                OrderMutationOutcome.Updated,
+                Order(status) with
+                {
+                    PaymentTransactionId = 42,
+                    PaymentIdempotencyKey = "old-key",
+                    PaymentAmount = 50_000,
+                    PaymentProvider = PaymentProviders.Momo,
+                    PaymentStatus = status == OrderStatuses.Cancelled ? "FAILED" : "SUCCESS",
+                }));
+        var gateway = new Mock<IPaymentGateway>(MockBehavior.Strict);
+        gateway.Setup(x => x.IsProviderAvailable(PaymentProviders.Momo)).Returns(true);
+
+        var action = () => new CheckoutOrderCommandHandler(CustomerContext(), repository.Object, gateway.Object)
+            .Handle(new CheckoutOrderCommand(3, "momo", "old-key"), default);
+
+        (await action.Should().ThrowAsync<ConflictException>()).Which.Message.Should().Contain(expectedFragment);
+        // The strict gateway mock fails the test if a checkout was created for the dead order.
+        gateway.Verify(x => x.CreateCheckoutAsync(It.IsAny<PaymentGatewayCheckoutRequest>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
     [Fact]
     public async Task Checkout_refuses_an_unconfigured_provider_before_writing_an_order()
     {

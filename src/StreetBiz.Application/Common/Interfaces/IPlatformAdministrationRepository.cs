@@ -67,4 +67,33 @@ public interface IPlatformAdministrationRepository
         ComplaintResolution resolution,
         long actorUserId,
         CancellationToken cancellationToken);
+
+    /// <summary>ADM-02: Customer and Vendor accounts only; officers and admins are never listed.</summary>
+    Task<PlatformPage<PlatformAccountRow>> ListAccountsAsync(
+        string? role,
+        string? status,
+        string? search,
+        int page,
+        int pageSize,
+        CancellationToken cancellationToken);
+
+    Task<PlatformAccountDetailRow?> GetAccountAsync(long userId, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// ADM-02: moves a Customer/Vendor account between ACTIVE and SUSPENDED in one serializable
+    /// transaction together with the audit row and the notification. Suspending also revokes every
+    /// session and pauses the vendor's open storefronts; reactivating reopens nothing.
+    /// </summary>
+    /// <summary>ADM-06: every figure for the period and the one before it, counted in a handful of grouped queries.</summary>
+    Task<PlatformDashboardFacts> GetDashboardFactsAsync(
+        DashboardRange range,
+        CancellationToken cancellationToken);
+
+    Task<AccountStatusChangeResult> ChangeAccountStatusAsync(
+        long userId,
+        string targetStatus,
+        string expectedStatus,
+        string? reason,
+        long actorUserId,
+        CancellationToken cancellationToken);
 }

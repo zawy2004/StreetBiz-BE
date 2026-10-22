@@ -680,10 +680,22 @@ public sealed class WardComplianceService(
             {
                 user_id = vendorUser,
                 notification_type = "ENROLLMENT_STATUS_UPDATE",
-                title = newStatus == "APPROVED" ? "Hồ sơ điểm bán đã được duyệt" : "Cập nhật hồ sơ điểm bán vỉa hè",
-                body = newStatus == "APPROVED"
-                    ? $"Hồ sơ điểm bán '{reg.display_name}' đã được UBND Phường xác nhận đủ điều kiện trật tự đô thị."
-                    : $"UBND Phường đã cập nhật trạng thái hồ sơ '{reg.display_name}': {decision.Reason.Trim()}",
+                title = newStatus switch
+                {
+                    RegistrationStatuses.Approved => "Hồ sơ điểm bán đã được duyệt",
+                    // WARD-06: say plainly that the file is waiting on the vendor, not just "updated".
+                    RegistrationStatuses.MoreInformationRequired => "Hồ sơ điểm bán cần bổ sung",
+                    _ => "Cập nhật hồ sơ điểm bán vỉa hè",
+                },
+                body = newStatus switch
+                {
+                    RegistrationStatuses.Approved =>
+                        $"Hồ sơ điểm bán '{reg.display_name}' đã được UBND Phường xác nhận đủ điều kiện trật tự đô thị.",
+                    RegistrationStatuses.MoreInformationRequired =>
+                        $"UBND Phường yêu cầu bổ sung hồ sơ '{reg.display_name}': {decision.Reason.Trim()}. " +
+                        "Hãy cập nhật và nộp lại hồ sơ để Phường xét tiếp.",
+                    _ => $"UBND Phường đã cập nhật trạng thái hồ sơ '{reg.display_name}': {decision.Reason.Trim()}",
+                },
                 related_entity_type = "BusinessRegistration",
                 related_entity_id = reg.registration_id,
                 is_read = false,

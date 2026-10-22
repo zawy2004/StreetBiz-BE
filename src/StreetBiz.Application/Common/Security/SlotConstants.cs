@@ -1,3 +1,5 @@
+using StreetBiz.Application.Common.Models;
+
 namespace StreetBiz.Application.Common.Security;
 
 /// <summary>SidewalkSlots.slot_status values (DB CHECK).</summary>
@@ -153,6 +155,40 @@ public static class AddressChangeStatuses
 
     /// <summary>Statuses that count as open (UQ_AddressChangeRequests_OpenPerRegistration).</summary>
     public static readonly string[] Open = [Pending, UnderReview];
+}
+
+/// <summary>
+/// SIDE-10 / BR-22: the previous adjacent slot named in an address change is given back after a grace
+/// period, and only once nothing is owed on it. The SRS fixes no number of days (it says "the defined
+/// grace period"), so the default lives here until the ward / supervisor confirms it; it matches the
+/// project's other grace constant (<c>FeeInstalmentPlanner.GraceDays</c>). The ward can extend it.
+/// </summary>
+public static class AdjacentSlotRelease
+{
+    public const int GraceDays = 7;
+    public const int ExtensionDays = 7;
+
+    /// <summary>Ward decisions on an address-change case while the old slot is waiting to be released.</summary>
+    public const string ExtendGrace = "EXTEND_GRACE";
+    public const string CancelRelease = "CANCEL_RELEASE";
+
+    /// <summary>The audit row WARD_EXTEND_GRACE (the ward service prefixes its decisions with WARD_).</summary>
+    public const string ExtendAuditAction = "WARD_EXTEND_GRACE";
+    public const string ReleaseAuditAction = "SIDE10_RELEASE";
+    public const string BlockedNotificationType = "SLOT_RELEASE_BLOCKED";
+    public const string ReleasedNotificationType = "SLOT_RELEASED";
+    public const string NotificationEntityType = "AddressChange";
+
+    /// <summary>Release states shown to the vendor.</summary>
+    public const string PendingRelease = "PENDING_RELEASE";
+    public const string Released = "RELEASED";
+
+    /// <summary>The last day of the grace period (Vietnamese calendar), counted from the day the change was requested.</summary>
+    public static DateOnly GraceEndsOn(DateTime requestedAtUtc, int extensionDays) =>
+        BusinessCalendar.DateOf(requestedAtUtc).AddDays(GraceDays + extensionDays);
+
+    /// <summary>The slot goes back on the day after the grace period ends, not on its last day.</summary>
+    public static bool IsDue(DateOnly graceEndsOn, DateOnly today) => today > graceEndsOn;
 }
 
 /// <summary>SlotTransferRequests.transfer_status values (DB CHECK).</summary>

@@ -545,9 +545,12 @@ public interface IAiComplianceService
     /// against phone number -- the caller passes only the evidence file URLs to analyze.
     Task<AiIdExtractionResult> ExtractIdDocumentAsync(IReadOnlyList<WardEvidenceDto> evidence, CancellationToken ct);
 
-    /// Compares AI-extracted identity data against the vendor's self-declared profile.
+    /// Compares AI-extracted identity data against the vendor's self-declared profile (SRS AIC-02, "cross-check
+    /// registration authenticity"): the declared name and the declared CCCD number are both checked against what the
+    /// card says, and any difference is returned as a discrepancy for the officer. The declared id number is the one
+    /// the vendor typed in the registration, not the one OCR read.
     Task<AiDocumentCheckResult> CompareDeclaredProfileAsync(
-        string declaredName, string? extractedIdNumber, string declaredAddress,
+        string declaredName, string? declaredIdNumber, string declaredAddress,
         AiIdExtractionResult extraction, CancellationToken ct);
 
     /// Multimodal analysis of an on-site inspection photo against the permitted slot dimensions.

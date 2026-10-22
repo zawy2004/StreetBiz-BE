@@ -58,6 +58,17 @@ public sealed class CheckoutOrderCommandHandler(
             cancellationToken);
         var order = mutation.RequireOrder();
         var row = mutation.Order!;
+        // PAY-02: the same Idempotency-Key replays the order it created, whatever became of it. A replay
+        // of a payment that already failed (or was paid) must not open a fresh payment page for that
+        // dead order: money taken for an order that is no longer waiting would be refused by the
+        // callback. Retrying a failed payment means a new checkout with a new key (a new order).
+        if (row.OrderStatus != OrderStatuses.PendingPayment)
+        {
+            throw new ConflictException(row.OrderStatus == OrderStatuses.Cancelled
+                ? CommerceMessages.CheckoutPaymentEnded
+                : CommerceMessages.CheckoutAlreadyPaid);
+        }
+
         if (!row.PaymentTransactionId.HasValue
             || !row.PaymentAmount.HasValue
             || string.IsNullOrWhiteSpace(row.PaymentIdempotencyKey)

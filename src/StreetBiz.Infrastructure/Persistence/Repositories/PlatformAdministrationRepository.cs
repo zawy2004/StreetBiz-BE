@@ -8,7 +8,7 @@ using StreetBiz.Infrastructure.Persistence.ScaffoldedModels;
 
 namespace StreetBiz.Infrastructure.Persistence.Repositories;
 
-public sealed class PlatformAdministrationRepository(
+public sealed partial class PlatformAdministrationRepository(
     StreetBizDbContext db,
     TimeProvider clock) : IPlatformAdministrationRepository
 {
