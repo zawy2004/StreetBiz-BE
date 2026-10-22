@@ -72,7 +72,7 @@ public sealed class EsriGeocodingService(HttpClient httpClient, IMemoryCache cac
                 }
 
                 // "…, Đà Nẵng, 50312, VNM" -> "…, Đà Nẵng": a postcode makes one street look like several.
-                var label = Regex.Replace(Regex.Replace(raw, @",\s*VNM$", string.Empty), @",\s*\d{5}(?=,|$)", string.Empty);
+                var label = DropRepeats(Regex.Replace(Regex.Replace(raw, @",\s*VNM$", string.Empty), @",\s*\d{5}(?=,|$)", string.Empty));
                 if (!seen.Add(label))
                 {
                     continue;
@@ -95,6 +95,15 @@ public sealed class EsriGeocodingService(HttpClient httpClient, IMemoryCache cac
         {
             return [];
         }
+    }
+
+    /// <summary>"Chợ Cồn, Hùng Vương, Đà Nẵng, Hải Châu, Đà Nẵng" -> "Chợ Cồn, Hùng Vương, Hải Châu, Đà Nẵng":
+    /// Esri sometimes names the city twice; keep each part's last (broadest) place.</summary>
+    private static string DropRepeats(string label)
+    {
+        var parts = label.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
+        var kept = parts.Where((part, i) => !parts.Skip(i + 1).Contains(part, StringComparer.OrdinalIgnoreCase));
+        return string.Join(", ", kept);
     }
 
     private sealed record EsriResponse([property: JsonPropertyName("candidates")] List<EsriCandidate>? Candidates);

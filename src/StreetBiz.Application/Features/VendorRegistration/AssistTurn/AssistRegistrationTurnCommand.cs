@@ -149,7 +149,18 @@ public sealed class AssistRegistrationTurnCommandHandler(
                 new SearchSlotsQuery(lat, lng, SlotPreviewRadiusMeters, null, null, null, null, null, null, Take: 30),
                 cancellationToken);
             slotPreview = nearby.Take(3).Select(s => Preview(s, draft)).ToList();
-            wardOptions = WardOptions(nearby, location?.Label, wards);
+
+            // The ward question usually comes on a later turn (after the pin is confirmed), which
+            // carries no fresh lookup: name the wards from the spoken place's label again. The
+            // geocoder caches it, so this costs no second request.
+            var mapLabel = location?.Label;
+            if (mapLabel is null && draft.WardUnitId is null && !string.IsNullOrWhiteSpace(draft.LocationText))
+            {
+                mapLabel = (await geocoding.SearchAsync($"{draft.LocationText}, Đà Nẵng", 3, cancellationToken))
+                    .FirstOrDefault()?.DisplayName;
+            }
+
+            wardOptions = WardOptions(nearby, mapLabel, wards);
             if (location is not null)
             {
                 location = location with { WardOptions = wardOptions };

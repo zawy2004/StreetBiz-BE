@@ -47,11 +47,11 @@ public static partial class AssistGuards
         var accepted = new List<AssistFieldProposal>();
 
         // Text fields: must be backed by words the vendor actually said.
-        foreach (var (field, max) in new[]
+        foreach (var (field, max, label) in new[]
                  {
-                     (AssistFields.BusinessLine, RegistrationFieldLimits.BusinessLine),
-                     (AssistFields.LocationText, MaxLocationText),
-                     (AssistFields.DeclaredAddress, RegistrationFieldLimits.DeclaredAddress),
+                     (AssistFields.BusinessLine, RegistrationFieldLimits.BusinessLine, "món bán"),
+                     (AssistFields.LocationText, MaxLocationText, "chỗ bán"),
+                     (AssistFields.DeclaredAddress, RegistrationFieldLimits.DeclaredAddress, "địa chỉ cửa hàng"),
                  })
         {
             if (!byField.TryGetValue(field, out var f))
@@ -67,8 +67,15 @@ public static partial class AssistGuards
 
             if (!SaidIt(said, f.Evidence))
             {
-                warnings.Add($"Bỏ qua \"{field}\": không khớp lời đã nói.");
+                // Shown to the vendor: their words, not the field's code name.
+                warnings.Add($"Trợ lý chưa chắc phần {label} nên chưa điền.");
                 continue;
+            }
+
+            // "bún bò, bánh mì" -> "Bún bò, bánh mì": it is printed on the registration as written.
+            if (field == AssistFields.BusinessLine)
+            {
+                value = char.ToUpper(value[0], CultureInfo.GetCultureInfo("vi-VN")) + value[1..];
             }
 
             accepted.Add(new AssistFieldProposal(field, value, f.Confidence, f.Evidence, null, false, AssistProposalSources.Ai));

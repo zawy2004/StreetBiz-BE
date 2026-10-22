@@ -47,6 +47,19 @@ public sealed class EsriGeocodingServiceTests
     }
 
     [Fact]
+    public async Task A_city_named_twice_in_the_label_is_named_once()
+    {
+        var handler = new Stub(_ => Ok("""
+            {"candidates":[{"address":"Chợ Cồn","score":99,"location":{"x":108.2197,"y":16.0686},
+              "attributes":{"LongLabel":"Chợ Cồn, Đường Hùng Vương, Đà Nẵng, Hải Châu, Đà Nẵng, VNM"}}]}
+            """));
+
+        var points = await Esri(handler).SearchAsync("chợ Cồn, Đà Nẵng", 3, CancellationToken.None);
+
+        points.Single().DisplayName.Should().Be("Chợ Cồn, Đường Hùng Vương, Hải Châu, Đà Nẵng");
+    }
+
+    [Fact]
     public async Task A_failed_search_is_an_empty_list_not_an_error()
     {
         var points = await Esri(new Stub(_ => new HttpResponseMessage(HttpStatusCode.InternalServerError))).SearchAsync("x", 3, CancellationToken.None);

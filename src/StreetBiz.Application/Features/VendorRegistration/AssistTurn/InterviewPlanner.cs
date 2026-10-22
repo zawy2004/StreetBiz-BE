@@ -45,7 +45,7 @@ public static class InterviewPlanner
             {
                 return new AssistQuestion(
                     AssistQuestionKeys.Location,
-                    $"Có phải {s} bán ở chỗ này không? Kéo ghim nếu chưa đúng.",
+                    $"Có phải {s} bán ở chỗ này không? Chạm vào bản đồ để dời ghim nếu chưa đúng.",
                     AssistInputs.Map,
                     [],
                     AssistFields.LocationText,

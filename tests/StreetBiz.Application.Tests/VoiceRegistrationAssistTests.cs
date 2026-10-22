@@ -235,7 +235,17 @@ public sealed class AssistGuardsTests
             Today, warnings);
 
         accepted.Select(a => a.Field).Should().Equal(AssistFields.BusinessLine);
-        warnings.Should().ContainSingle(w => w.Contains(AssistFields.DeclaredAddress));
+        // The vendor reads this: their words, never the field's code name.
+        warnings.Should().ContainSingle().Which.Should().Be("Trợ lý chưa chắc phần địa chỉ cửa hàng nên chưa điền.");
+    }
+
+    [Fact]
+    public void The_dishes_start_with_a_capital_as_they_are_printed_on_the_registration()
+    {
+        var accepted = AssistGuards.Accept(AssistQuestionKeys.Opening, "Tôi bán bún bò với bánh mì",
+            [F(AssistFields.BusinessLine, "bún bò, bánh mì", "bún bò với bánh mì")], Today, []);
+
+        accepted.Single().Value.Should().Be("Bún bò, bánh mì");
     }
 
     [Fact]
@@ -415,6 +425,26 @@ public sealed class AssistRegistrationTurnHandlerTests
         result.Draft.LocationConfirmed.Should().BeFalse("the vendor confirms the pin on the map");
         result.NextQuestion!.Key.Should().Be(AssistQuestionKeys.VendorType);
         result.IsAiGenerated.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task After_the_pin_is_confirmed_the_ward_question_still_names_the_wards_of_the_spoken_place()
+    {
+        // No slot near the spot, so only the place's label can name the ward.
+        sender.Setup(s => s.Send(It.IsAny<SearchSlotsQuery>(), It.IsAny<CancellationToken>())).ReturnsAsync([]);
+        geocoding.Setup(g => g.SearchAsync("chợ Cồn, Đà Nẵng", 3, It.IsAny<CancellationToken>()))
+            .ReturnsAsync([new GeoPoint(16.068m, 108.214m, "Chợ Cồn, Hải Châu, Đà Nẵng")]);
+        var pinned = new AssistDraft(
+            BusinessLine: "Bún bò", VendorType: VendorTypes.Itinerant, LocationText: "chợ Cồn",
+            Latitude: 16.0681m, Longitude: 108.2142m, LocationConfirmed: true);
+
+        var result = await Handler().Handle(
+            new AssistRegistrationTurnCommand(AssistQuestionKeys.Location, pinned, null, null, null, false), CancellationToken.None);
+
+        result.NextQuestion!.Key.Should().Be(AssistQuestionKeys.Ward);
+        result.NextQuestion.Choices.Select(c => c.Label).Should().Equal("Phường Hải Châu 1");
+        result.Location.Should().BeNull("nothing new was looked up for the client to show");
+        extractor.VerifyNoOtherCalls();
     }
 
     [Fact]
