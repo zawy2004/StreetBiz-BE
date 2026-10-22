@@ -115,6 +115,11 @@ public sealed class AssistRegistrationTurnCommandHandler(
         {
             var questionText = InterviewPlanner.Next(draft, [], wards)?.Text ?? string.Empty;
             (transcript, extraction, sttProvider) = await HearAsync(request, draft, questionText, today, cancellationToken);
+            if (request.Audio is not null && string.IsNullOrWhiteSpace(transcript))
+            {
+                warnings.Add("Trợ lý chưa nghe thấy tiếng. Nói gần micro hơn, hoặc bấm \"Gõ thay\".");
+            }
+
             proposals = AssistGuards.KeepRelevant(
                 AssistGuards.Accept(request.QuestionKey, transcript, extraction?.Fields ?? [], today, warnings),
                 request.QuestionKey,
@@ -172,7 +177,10 @@ public sealed class AssistRegistrationTurnCommandHandler(
         {
             // Nothing usable for what was asked: count the try so the planner can switch to typing.
             draft = draft with { Attempts = Bump(draft.Attempts, request.QuestionKey) };
-            warnings.Add("Trợ lý chưa nghe ra câu trả lời.");
+            if (!string.IsNullOrWhiteSpace(transcript))
+            {
+                warnings.Add("Trợ lý chưa nghe ra câu trả lời.");
+            }
         }
         else if (answered && request.QuestionKey == AssistQuestionKeys.Opening)
         {

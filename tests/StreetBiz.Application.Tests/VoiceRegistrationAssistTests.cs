@@ -428,6 +428,22 @@ public sealed class AssistRegistrationTurnHandlerTests
     }
 
     [Fact]
+    public async Task A_silent_clip_fills_nothing_and_says_so_once()
+    {
+        stt.Setup(s => s.TranscribeAsync(It.IsAny<byte[]>(), "audio/m4a", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new SpeechTranscript(string.Empty, "groq:whisper", 300));
+        var draft = new AssistDraft(BusinessLine: "Bún bò", VendorType: VendorTypes.Itinerant, LocationSkipped: true, WardUnitId: 10);
+
+        var result = await Handler().Handle(
+            new AssistRegistrationTurnCommand(AssistQuestionKeys.Capital, draft, null, [1, 2], "audio/m4a", true), CancellationToken.None);
+
+        result.Proposals.Should().BeEmpty();
+        result.Warnings.Should().ContainSingle().Which.Should().Contain("chưa nghe thấy tiếng");
+        result.Draft.Attempts![AssistQuestionKeys.Capital].Should().Be(1, "a silent try still counts toward switching to typing");
+        extractor.VerifyNoOtherCalls();
+    }
+
+    [Fact]
     public async Task After_the_pin_is_confirmed_the_ward_question_still_names_the_wards_of_the_spoken_place()
     {
         // No slot near the spot, so only the place's label can name the ward.
@@ -633,6 +649,29 @@ public sealed class ConfirmAssistedRegistrationHandlerTests
 
     private static ConfirmAssistedRegistrationCommand Command() =>
         new(700, new AssistConfirmationRequest(6, [AssistFields.BusinessLine], [AssistFields.CapitalAmount], 210));
+
+    /// <summary>
+    /// What web and app send (voice-filing.ts: WATCHED and AI_FIELD_TO_WIZARD), copied here so a
+    /// rename on either side fails this test. Found missing on the emulator on 23/10/2026: the
+    /// owner fields and the coordinates were refused, so the officer never saw the [AI] label.
+    /// </summary>
+    [Fact]
+    public void Every_field_name_the_clients_report_is_accepted()
+    {
+        string[] clientFields =
+        [
+            "vendorType", "displayName", "declaredAddress", "addressLatitude", "addressLongitude", "wardUnitId",
+            "businessLine", "capitalAmount", "laborCount", "plannedStartDate", "contactAddress", "foodSafetyCommitment",
+            "ownerDateOfBirth", "ownerGender", "ownerNationality", "ownerEthnicity", "idIssuedDate", "idIssuedPlace",
+            "permanentAddress",
+        ];
+        var validator = new ConfirmAssistedRegistrationCommandValidator();
+
+        validator.Validate(new ConfirmAssistedRegistrationCommand(700, new AssistConfirmationRequest(7, clientFields, clientFields, 300)))
+            .IsValid.Should().BeTrue();
+        validator.Validate(new ConfirmAssistedRegistrationCommand(700, new AssistConfirmationRequest(7, ["idNumber"], [], 300)))
+            .IsValid.Should().BeFalse("free text or a CCCD field never goes into the log");
+    }
 
     [Fact]
     public async Task Records_the_vendors_own_acceptance()

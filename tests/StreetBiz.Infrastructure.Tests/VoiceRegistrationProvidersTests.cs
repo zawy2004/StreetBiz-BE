@@ -72,6 +72,34 @@ public sealed class VoiceRegistrationProvidersTests
     }
 
     [Fact]
+    public async Task Silence_and_Whispers_known_inventions_are_not_a_transcript()
+    {
+        // The emulator's silent microphone, 23/10/2026: Whisper "heard" a YouTube outro.
+        var handler = new Recorder((_, _) => Json(HttpStatusCode.OK, """
+            {"text":"Hãy subscribe cho kênh Ghiền Mì Gõ Để không bỏ lỡ những video hấp dẫn",
+             "segments":[{"text":"Hãy subscribe cho kênh Ghiền Mì Gõ","no_speech_prob":0.2},
+                         {"text":" Để không bỏ lỡ những video hấp dẫn","no_speech_prob":0.1}]}
+            """));
+        var stt = new GroqWhisperSpeechToText(new HttpClient(handler), Config(), new AiKeyPools(Config()), NullLogger<GroqWhisperSpeechToText>.Instance);
+
+        (await stt.TranscribeAsync([1], "audio/m4a", CancellationToken.None)).Text.Should().BeEmpty();
+        handler.Calls.Single().Body.Should().Contain("verbose_json");
+    }
+
+    [Fact]
+    public void Only_the_segments_that_are_speech_are_kept()
+    {
+        using var doc = System.Text.Json.JsonDocument.Parse("""
+            {"text":"bán bún bò ... cảm ơn các bạn đã theo dõi",
+             "segments":[{"text":" bán bún bò","no_speech_prob":0.05},
+                         {"text":" ...","no_speech_prob":0.91},
+                         {"text":" Cảm ơn các bạn đã theo dõi","no_speech_prob":0.3}]}
+            """);
+
+        GroqWhisperSpeechToText.SpokenText(doc.RootElement).Should().Be("bán bún bò");
+    }
+
+    [Fact]
     public async Task Speech_to_text_moves_to_the_next_key_when_one_is_rate_limited()
     {
         var handler = new Recorder((req, _) => req.Headers.Authorization!.Parameter == "gsk_test_key_one" || req.Headers.Authorization!.Parameter == "gsk_test_key_two"

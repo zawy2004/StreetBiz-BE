@@ -17,12 +17,20 @@ public sealed record ConfirmAssistedRegistrationCommand(long RegistrationId, Ass
 
 public sealed class ConfirmAssistedRegistrationCommandValidator : AbstractValidator<ConfirmAssistedRegistrationCommand>
 {
-    private static readonly IReadOnlySet<string> KnownFields = new HashSet<string>(StringComparer.Ordinal)
+    /// <summary>
+    /// Field names the clients report: the registration's own fields as the wizard names them
+    /// (REG-01 payload, camelCase) plus the interview-only ones. Anything else is refused so the
+    /// log never carries free text.
+    /// </summary>
+    public static readonly IReadOnlySet<string> KnownFields = new HashSet<string>(StringComparer.Ordinal)
     {
-        AssistFields.BusinessLine, AssistFields.VendorType, AssistFields.LocationText, AssistFields.DeclaredAddress,
-        AssistFields.CapitalAmount, AssistFields.LaborCount, AssistFields.PlannedStartDate,
-        AssistFields.ContactSameAsPermanent, AssistFields.Hours, AssistFields.CartWidthMeters,
-        "wardUnitId", "displayName",
+        // REG-01 fields (web/app new-registration-store)
+        "vendorType", "displayName", "declaredAddress", "addressLatitude", "addressLongitude", "wardUnitId",
+        "businessLine", "capitalAmount", "laborCount", "plannedStartDate", "contactAddress", "foodSafetyCommitment",
+        "ownerDateOfBirth", "ownerGender", "ownerNationality", "ownerEthnicity", "idIssuedDate", "idIssuedPlace",
+        "permanentAddress",
+        // interview-only
+        AssistFields.LocationText, AssistFields.ContactSameAsPermanent, AssistFields.Hours, AssistFields.CartWidthMeters,
     };
 
     public ConfirmAssistedRegistrationCommandValidator()
@@ -30,6 +38,8 @@ public sealed class ConfirmAssistedRegistrationCommandValidator : AbstractValida
         RuleFor(x => x.RegistrationId).GreaterThan(0);
         RuleFor(x => x.Request.Turns).InclusiveBetween(0, 200);
         RuleFor(x => x.Request.DurationSeconds).InclusiveBetween(0, 24 * 3600);
+        RuleFor(x => x.Request.AiFields!.Count).LessThanOrEqualTo(KnownFields.Count).When(x => x.Request.AiFields is not null);
+        RuleFor(x => x.Request.EditedFields!.Count).LessThanOrEqualTo(KnownFields.Count).When(x => x.Request.EditedFields is not null);
         RuleForEach(x => x.Request.AiFields).Must(f => KnownFields.Contains(f));
         RuleForEach(x => x.Request.EditedFields).Must(f => KnownFields.Contains(f));
     }

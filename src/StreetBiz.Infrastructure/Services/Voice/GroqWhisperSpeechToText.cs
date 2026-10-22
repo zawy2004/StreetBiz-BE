@@ -33,6 +33,21 @@ public sealed class GroqWhisperSpeechToText(
         "cầu Rồng, sông Hàn, Hải Châu, Thanh Khê, Sơn Trà, Ngũ Hành Sơn, Liên Chiểu, Cẩm Lệ, kiệt, ki-ốt, xe đẩy, gánh, " +
         "triệu, nghìn, căn cước";
 
+    /// <summary>A segment Whisper itself thinks is probably not speech is dropped.</summary>
+    public const double NoSpeechThreshold = 0.6;
+
+    /// <summary>
+    /// What Whisper says when it hears silence or noise in Vietnamese: YouTube outros learnt from
+    /// its training data ("Hãy subscribe cho kênh Ghiền Mì Gõ…"). Found on the emulator's silent
+    /// microphone (23/10/2026). A segment containing one is dropped, so the vendor is asked again
+    /// instead of reading a sentence they never said. Compared without accents.
+    /// </summary>
+    public static readonly IReadOnlyList<string> KnownHallucinations =
+    [
+        "subscribe", "ghien mi go", "dang ky kenh", "dang ky cho kenh", "nho dang ky", "like va share",
+        "video hap dan", "cam on cac ban da theo doi", "cam on cac ban da xem", "hen gap lai cac ban",
+    ];
+
     private static readonly IReadOnlyDictionary<string, string> Extensions = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
     {
         ["audio/wav"] = "wav", ["audio/x-wav"] = "wav", ["audio/wave"] = "wav",
@@ -63,7 +78,8 @@ public sealed class GroqWhisperSpeechToText(
             form.Add(new StringContent(model), "model");
             form.Add(new StringContent("vi"), "language");
             form.Add(new StringContent("0"), "temperature");
-            form.Add(new StringContent("json"), "response_format");
+            // verbose_json: per-segment no_speech_prob, to drop what was never said.
+            form.Add(new StringContent("verbose_json"), "response_format");
             form.Add(new StringContent(vocabulary), "prompt");
 
             using var request = new HttpRequestMessage(HttpMethod.Post, "https://api.groq.com/openai/v1/audio/transcriptions") { Content = form };
@@ -76,8 +92,7 @@ public sealed class GroqWhisperSpeechToText(
                 if (response.IsSuccessStatusCode)
                 {
                     using var doc = JsonDocument.Parse(body);
-                    var text = doc.RootElement.TryGetProperty("text", out var t) ? t.GetString()?.Trim() ?? string.Empty : string.Empty;
-                    return new SpeechTranscript(text, "groq:" + model, (int)watch.ElapsedMilliseconds);
+                    return new SpeechTranscript(SpokenText(doc.RootElement), "groq:" + model, (int)watch.ElapsedMilliseconds);
                 }
 
                 logger.LogWarning("X01 speech to text: Groq {Model} with key [..{Suffix}] failed with {Status}: {Body}",
@@ -102,6 +117,35 @@ public sealed class GroqWhisperSpeechToText(
         }
 
         throw Unavailable();
+    }
+
+    /// <summary>The transcript without silence and without Whisper's known inventions.</summary>
+    public static string SpokenText(JsonElement root)
+    {
+        var parts = new List<string>();
+        if (root.TryGetProperty("segments", out var segments) && segments.ValueKind == JsonValueKind.Array && segments.GetArrayLength() > 0)
+        {
+            foreach (var segment in segments.EnumerateArray())
+            {
+                var silent = segment.TryGetProperty("no_speech_prob", out var p) && p.ValueKind == JsonValueKind.Number && p.GetDouble() >= NoSpeechThreshold;
+                var text = segment.TryGetProperty("text", out var t) ? t.GetString()?.Trim() ?? string.Empty : string.Empty;
+                if (!silent && text.Length > 0 && !IsHallucination(text))
+                {
+                    parts.Add(text);
+                }
+            }
+
+            return string.Join(' ', parts);
+        }
+
+        var whole = root.TryGetProperty("text", out var w) ? w.GetString()?.Trim() ?? string.Empty : string.Empty;
+        return IsHallucination(whole) ? string.Empty : whole;
+    }
+
+    private static bool IsHallucination(string text)
+    {
+        var folded = AssistGuards.Fold(text);
+        return KnownHallucinations.Any(h => folded.Contains(h, StringComparison.Ordinal));
     }
 
     private static AiUnavailableException Unavailable() =>
