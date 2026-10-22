@@ -81,6 +81,63 @@ public sealed class AiComplianceServiceTests
     }
 
     [Fact]
+    public async Task A_declared_id_number_that_differs_from_the_card_is_flagged_for_the_officer()
+    {
+        var service = BuildService(new StubHandler(_ => throw new InvalidOperationException("Comparison is local")));
+        var extraction = new AiIdExtractionResult("048095001234", "Nguyễn Văn A", "Hải Châu, Đà Nẵng", 99, true, "FPT.AI");
+
+        var result = await service.CompareDeclaredProfileAsync("Nguyễn Văn A", "048095009999", "Hải Châu, Đà Nẵng", extraction, default);
+
+        result.MatchPercentage.Should().Be(60);
+        result.IsMatch.Should().BeFalse();
+        result.NeedsManualVerification.Should().BeTrue();
+        result.Discrepancies.Should().ContainSingle(d => d.Contains("048095009999") && d.Contains("048095001234"));
+    }
+
+    [Theory]
+    [InlineData("048 095 001 234")]
+    [InlineData("048-095-001-234")]
+    [InlineData(" 048095001234 ")]
+    public async Task Spaces_and_dashes_in_the_declared_number_are_not_a_difference(string declared)
+    {
+        var service = BuildService(new StubHandler(_ => throw new InvalidOperationException("Comparison is local")));
+        var extraction = new AiIdExtractionResult("048095001234", "Nguyễn Văn A", "Hải Châu, Đà Nẵng", 99, true, "FPT.AI");
+
+        var result = await service.CompareDeclaredProfileAsync("Nguyễn Văn A", declared, "Hải Châu, Đà Nẵng", extraction, default);
+
+        result.MatchPercentage.Should().Be(100);
+        result.Discrepancies.Should().BeEmpty();
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    public async Task A_declaration_with_no_id_number_has_nothing_to_compare_against(string? declared)
+    {
+        var service = BuildService(new StubHandler(_ => throw new InvalidOperationException("Comparison is local")));
+        var extraction = new AiIdExtractionResult("048095001234", "Nguyễn Văn A", "Hải Châu, Đà Nẵng", 99, true, "FPT.AI");
+
+        var result = await service.CompareDeclaredProfileAsync("Nguyễn Văn A", declared, "Hải Châu, Đà Nẵng", extraction, default);
+
+        result.MatchPercentage.Should().Be(100);
+        result.Discrepancies.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task A_wrong_name_and_a_wrong_number_together_leave_a_very_low_match_with_both_listed()
+    {
+        var service = BuildService(new StubHandler(_ => throw new InvalidOperationException("Comparison is local")));
+        var extraction = new AiIdExtractionResult("048095001234", "Trần Thị B", "Hải Châu, Đà Nẵng", 99, true, "FPT.AI");
+
+        var result = await service.CompareDeclaredProfileAsync("Nguyễn Văn A", "048095009999", "Hải Châu, Đà Nẵng", extraction, default);
+
+        result.MatchPercentage.Should().Be(20);
+        result.Discrepancies.Should().HaveCount(2);
+        result.Summary.Should().Contain("sai lệch");
+    }
+
+    [Fact]
     public async Task No_API_key_configured_returns_an_honest_non_AI_result_not_a_guess()
     {
         var handler = new StubHandler(_ => throw new InvalidOperationException("Should never call out with no key configured"));

@@ -4,6 +4,7 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using StreetBiz.Application.Common.Models;
+using StreetBiz.Application.Features.AddressChanges.ReleaseAdjacentSlots;
 using StreetBiz.Application.Features.Finance.FeeReminders;
 
 namespace StreetBiz.Infrastructure.Services;
@@ -18,9 +19,10 @@ public sealed class FeeReminderOptions
 }
 
 /// <summary>
-/// FEE-02/SYS-06 background timer. Each tick runs three independent steps, in this order:
+/// FEE-02/SYS-06 background timer. Each tick runs four independent steps, in this order:
 /// reconcile schedules with their contracts (SYS-03: bill contracts nothing bills, close the
-/// instalments of contracts that ended early), the overdue/reminder sweep, then settle or close
+/// instalments of contracts that ended early), the overdue/reminder sweep, the SIDE-10 release of
+/// slots whose address-change grace period is over, then settle or close
 /// payments left PENDING. Reconciling first means no reminder goes out for an instalment that is
 /// about to be closed.
 ///
@@ -72,6 +74,20 @@ public sealed class FeeReminderHostedService(
                 logger.LogInformation(
                     "Fee reminder sweep: {OverdueCount} instalment(s) marked OVERDUE, {ReminderCount} reminder(s) sent.",
                     result.OverdueCount, result.ReminderCount);
+            }
+        }, cancellationToken);
+
+        // After the reminder sweep, which is what turns a missed instalment into OVERDUE: a slot is
+        // only held back by a debt the database already counts as one.
+        await StepAsync("Adjacent slot release sweep", async sender =>
+        {
+            var result = await sender.Send(new ReleaseDueAdjacentSlotsCommand(today), cancellationToken);
+            if (result.Released > 0 || result.WaitingForPayment > 0)
+            {
+                logger.LogInformation(
+                    "Adjacent slot release: {Released} slot(s) returned after their grace period, "
+                    + "{Waiting} held back by unpaid fees.",
+                    result.Released, result.WaitingForPayment);
             }
         }, cancellationToken);
 
