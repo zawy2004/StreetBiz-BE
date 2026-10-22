@@ -5,6 +5,7 @@ using StreetBiz.API.Controllers;
 using StreetBiz.Application.Common.Exceptions;
 using StreetBiz.Application.Common.Interfaces;
 using StreetBiz.Application.Common.Security;
+using StreetBiz.Application.Features.AiMarketplace;
 using StreetBiz.Application.Features.FoodSafety;
 using StreetBiz.Application.Features.WardSlots;
 
@@ -18,12 +19,14 @@ public sealed class UploadsControllerTests
         ICurrentUser currentUser,
         IWardActorResolver? wardActors = null,
         IBusinessRegistrationRepository? registrations = null,
-        IFileStorage? storage = null) =>
+        IFileStorage? storage = null,
+        IAiMarketplaceRepository? vendorReports = null) =>
         new(storage ?? Mock.Of<IFileStorage>(),
             currentUser,
             wardActors ?? Mock.Of<IWardActorResolver>(),
             registrations ?? Mock.Of<IBusinessRegistrationRepository>(),
-            Mock.Of<IFoodSafetyService>());
+            Mock.Of<IFoodSafetyService>(),
+            vendorReports ?? Mock.Of<IAiMarketplaceRepository>());
 
     private static Mock<ICurrentUser> User(long userId, string roleCode)
     {
@@ -34,14 +37,14 @@ public sealed class UploadsControllerTests
     }
 
     [Fact]
-    public async Task Only_vendor_accounts_may_upload_evidence()
+    public async Task Only_vendors_ward_officers_and_customers_may_upload_evidence()
     {
         var currentUser = new Mock<ICurrentUser>();
         currentUser.SetupGet(c => c.UserId).Returns(1);
-        currentUser.SetupGet(c => c.RoleCode).Returns(RoleCodes.Customer);
+        currentUser.SetupGet(c => c.RoleCode).Returns(RoleCodes.PlatformAdmin);
         var controller = Build(currentUser.Object);
 
-        // A CUSTOMER account has no legitimate use for REG-02 evidence, so the
+        // A platform administrator has no legitimate use for evidence files, so the
         // endpoint should refuse it before ever touching the request body.
         var act = () => controller.Upload(file: null, CancellationToken.None);
 
@@ -108,5 +111,50 @@ public sealed class UploadsControllerTests
         var result = await controller.Download(ownerUserId: 7, FileName, CancellationToken.None);
 
         result.Should().BeOfType<Microsoft.AspNetCore.Mvc.NotFoundResult>();
+    }
+
+    [Fact]
+    public async Task A_customer_may_attach_a_photo_to_a_report_about_a_vendor()
+    {
+        // BUY-05: the photo goes through this endpoint too, so a missing file is a validation error, not a role error.
+        var controller = Build(User(8, RoleCodes.Customer).Object);
+
+        var act = () => controller.Upload(file: null, CancellationToken.None);
+
+        await act.Should().ThrowAsync<ValidationAppException>();
+    }
+
+    [Fact]
+    public async Task A_ward_officer_may_open_the_photo_of_a_report_in_their_own_ward()
+    {
+        var wardActors = new Mock<IWardActorResolver>();
+        wardActors.Setup(a => a.ResolveAsync(50, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new WardActor(50, WardId: 10, "Officer"));
+        var reports = new Mock<IAiMarketplaceRepository>();
+        reports.Setup(r => r.ReportEvidenceBelongsToWardAsync(
+                EvidenceFiles.BuildUrl(8, FileName), 10, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+        var controller = Build(User(50, RoleCodes.WardAuthority).Object, wardActors.Object, vendorReports: reports.Object);
+
+        // Storage has no such file, so reaching a 404 proves the access check passed.
+        var result = await controller.Download(ownerUserId: 8, FileName, CancellationToken.None);
+
+        result.Should().BeOfType<Microsoft.AspNetCore.Mvc.NotFoundResult>();
+    }
+
+    [Fact]
+    public async Task A_ward_officer_cannot_open_the_photo_of_a_report_in_another_ward()
+    {
+        var wardActors = new Mock<IWardActorResolver>();
+        wardActors.Setup(a => a.ResolveAsync(50, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new WardActor(50, WardId: 11, "Officer"));
+        var reports = new Mock<IAiMarketplaceRepository>();
+        reports.Setup(r => r.ReportEvidenceBelongsToWardAsync(It.IsAny<string>(), 10, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+        var controller = Build(User(50, RoleCodes.WardAuthority).Object, wardActors.Object, vendorReports: reports.Object);
+
+        var act = () => controller.Download(ownerUserId: 8, FileName, CancellationToken.None);
+
+        await act.Should().ThrowAsync<ForbiddenException>();
     }
 }

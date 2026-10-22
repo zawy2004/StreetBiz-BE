@@ -221,7 +221,8 @@ public sealed class ReportSuspiciousVendorCommandValidator : AbstractValidator<R
 
 public sealed class ReportSuspiciousVendorCommandHandler(
     ICustomerContext customer,
-    ICommunityVendorRepository vendors)
+    ICommunityVendorRepository vendors,
+    StreetBiz.Application.Features.AiMarketplace.IVendorReportPreprocessor? preprocessor = null)
     : IRequestHandler<ReportSuspiciousVendorCommand, VendorReportReceiptDto>
 {
     public async Task<VendorReportReceiptDto> Handle(
@@ -250,6 +251,8 @@ public sealed class ReportSuspiciousVendorCommandHandler(
                 request.SlotId,
                 request.ScannedPermitId),
             cancellationToken);
+        // AIB-01: the photo is read in the background so the ward officer finds the notes ready; never awaited.
+        preprocessor?.Enqueue(reportId);
         return new(reportId, VendorReportStatuses.Pending);
     }
 }
