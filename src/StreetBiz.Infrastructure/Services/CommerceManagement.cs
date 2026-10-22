@@ -4,6 +4,7 @@ using StreetBiz.Application.Common.Exceptions;
 using StreetBiz.Application.Common.Interfaces;
 using StreetBiz.Application.Common.Security;
 using StreetBiz.Application.Features.Commerce;
+using StreetBiz.Application.Common.Models;
 using StreetBiz.Application.Features.FoodSafety;
 using StreetBiz.Infrastructure.Persistence;
 using StreetBiz.Infrastructure.Persistence.ScaffoldedModels;
@@ -66,6 +67,78 @@ public sealed class CommerceManagement(StreetBizDbContext db, IVendorContext ven
             return store.storefront_id;
         }, ct);
         return (await Stores(ct)).Single(x => x.StorefrontId == storeId);
+    }
+
+    public async Task<StorefrontHoursDto> BusinessHours(long storeId, CancellationToken ct)
+    {
+        var vendor = await vendors.RequireVendorIdAsync(ct);
+        return await ReadHours(storeId, vendor, ct);
+    }
+
+    public async Task<StorefrontHoursDto> SaveBusinessHours(long storeId, StorefrontHoursInput input, CancellationToken ct)
+    {
+        var vendor = await vendors.RequireVendorIdAsync(ct);
+        await Write(async () =>
+        {
+            var store = await OwnedStore(storeId, vendor, ct);
+            var (from, to) = await RentalWindow(store.contract_id, ct);
+            // Validated against the zone's hours inside the transaction, so a ward changing them
+            // between the editor opening and saving cannot let a stale window through.
+            var rows = StorefrontHoursRules.Validate(input.Hours, from, to);
+
+            var existing = await db.StorefrontBusinessHours.Where(x => x.storefront_id == storeId).ToListAsync(ct);
+            db.StorefrontBusinessHours.RemoveRange(existing);
+            db.StorefrontBusinessHours.AddRange(rows.Select(row => new StorefrontBusinessHour
+            {
+                storefront_id = storeId,
+                day_of_week = row.DayOfWeek,
+                opens_at = row.OpensAt,
+                closes_at = row.ClosesAt,
+            }));
+            var ownerUserId = await db.Vendors.Where(x => x.vendor_id == vendor).Select(x => x.user_id).SingleAsync(ct);
+            db.AuditLogs.Add(new AuditLog
+            {
+                actor_user_id = ownerUserId,
+                action = "STORE_HOURS_UPDATE",
+                entity_type = "Storefront",
+                entity_id = storeId,
+                details = System.Text.Json.JsonSerializer.Serialize(new { before = existing.Count, after = rows.Count }),
+                created_at = Now,
+            });
+            store.updated_at = Now;
+            await db.SaveChangesAsync(ct);
+            return true;
+        }, ct);
+        return await ReadHours(storeId, vendor, ct);
+    }
+
+    private async Task<StorefrontHoursDto> ReadHours(long storeId, long vendor, CancellationToken ct)
+    {
+        var store = await db.Storefronts.AsNoTracking()
+            .Where(x => x.storefront_id == storeId && x.registration.vendor_id == vendor)
+            .Select(x => new { x.availability_status, x.contract_id })
+            .SingleOrDefaultAsync(ct)
+            ?? throw new NotFoundException("Không tìm thấy gian hàng của bạn.");
+        var rows = await db.StorefrontBusinessHours.AsNoTracking().Where(x => x.storefront_id == storeId)
+            .OrderBy(x => x.day_of_week).ThenBy(x => x.opens_at)
+            .Select(x => new StorefrontHourRow(x.day_of_week, x.opens_at, x.closes_at)).ToListAsync(ct);
+        var (from, to) = await RentalWindow(store.contract_id, ct);
+        return new StorefrontHoursDto(
+            storeId,
+            rows.Select(x => new BusinessHourItem(x.DayOfWeek, StorefrontHoursRules.Format(x.OpensAt), StorefrontHoursRules.Format(x.ClosesAt))).ToList(),
+            from is { } f && to is { } t ? new RentalWindowDto(StorefrontHoursRules.Format(f), StorefrontHoursRules.Format(t), f > t) : null,
+            store.availability_status,
+            store.availability_status == "OPEN" && StorefrontHours.IsOpen(rows, StorefrontHours.LocalNow(Now)));
+    }
+
+    /// <summary>The hours the ward rents the contract's pitch for (its zone's available_from/to), if it set any.</summary>
+    private async Task<(TimeOnly? From, TimeOnly? To)> RentalWindow(long contractId, CancellationToken ct)
+    {
+        var zone = await db.RentalContracts.AsNoTracking().Where(x => x.contract_id == contractId)
+            .Select(x => new { x.slot.zone.available_from, x.slot.zone.available_to }).SingleOrDefaultAsync(ct);
+        return zone is { available_from: not null, available_to: not null }
+            ? (zone.available_from, zone.available_to)
+            : (null, null);
     }
 
     public async Task<IReadOnlyList<SellerCategoryDto>> Categories(CancellationToken ct)
@@ -217,8 +290,10 @@ public sealed class CommerceManagement(StreetBizDbContext db, IVendorContext ven
     public async Task<OrderReviewDto?> Review(long orderId, CancellationToken ct)
     {
         await OwnedOrder(orderId, await customers.RequireCustomerUserIdAsync(ct), ct);
-        return await db.Reviews.AsNoTracking().Where(x => x.order_id == orderId)
-            .Select(x => new OrderReviewDto(x.review_id, x.rating, x.review_text)).SingleOrDefaultAsync(ct);
+        var review = await db.Reviews.AsNoTracking().Where(x => x.order_id == orderId)
+            .Select(x => new { x.review_id, x.rating, x.review_text, x.created_at }).SingleOrDefaultAsync(ct);
+        return review is null ? null : new OrderReviewDto(review.review_id, review.rating, review.review_text,
+            DateTime.SpecifyKind(ReviewRules.EditableUntil(review.created_at), DateTimeKind.Utc));
     }
 
     public async Task<OrderReviewDto> SaveReview(long orderId, OrderReviewInput input, CancellationToken ct)
@@ -233,6 +308,10 @@ public sealed class CommerceManagement(StreetBizDbContext db, IVendorContext ven
             var row = await db.Reviews.SingleOrDefaultAsync(x => x.order_id == orderId, ct);
             if (row is not null && await db.ReportedContents.AnyAsync(x => x.content_type == "REVIEW" && x.content_id == row.review_id && x.status == "HIDDEN", ct))
                 throw new ForbiddenException("Đánh giá đã bị quản trị viên ẩn.");
+            // BR-68: the first submission is open to anyone with a completed order; an edit has to come
+            // within the editing period counted from that first submission, not from the last edit.
+            if (row is not null && Now > ReviewRules.EditableUntil(row.created_at))
+                throw new DomainRuleException(ReviewRules.EditWindowClosed);
             if (row is null)
             {
                 row = new Review { order_id = orderId, customer_user_id = customer, created_at = Now };
@@ -242,7 +321,8 @@ public sealed class CommerceManagement(StreetBizDbContext db, IVendorContext ven
             row.rating = input.Rating;
             row.review_text = input.Text?.Trim();
             await db.SaveChangesAsync(ct);
-            return new OrderReviewDto(row.review_id, row.rating, row.review_text);
+            return new OrderReviewDto(row.review_id, row.rating, row.review_text,
+                DateTime.SpecifyKind(ReviewRules.EditableUntil(row.created_at), DateTimeKind.Utc));
         }, ct);
     }
 

@@ -73,6 +73,11 @@ public sealed partial class CommerceRepository(
             items = items.Where(item => storefronts.Contains(item.storefront_id));
         }
 
+        if (filter.MinRating is { } minRating)
+        {
+            items = items.Where(item => RatedAtLeast(minRating).Contains(item.storefront.registration.vendor_id));
+        }
+
         var ordered = filter.Sort switch
         {
             MarketplaceMenuSorts.PriceAsc => items.OrderBy(item => item.unit_price),
@@ -971,6 +976,8 @@ public sealed partial class CommerceRepository(
     // storefront list, its counts and this search can never disagree about what is visible. The
     // in-term and vendor/registration consistency checks that EligibleStores() adds belong to the
     // write paths (cart, checkout, menu edits), which call it directly.
+    public IQueryable<MenuItem> SellableMenuItems() => MarketplaceMenuQuery();
+
     private IQueryable<MenuItem> MarketplaceMenuQuery() =>
         PublicStorefronts()
             .SelectMany(storefront => storefront.MenuItems)

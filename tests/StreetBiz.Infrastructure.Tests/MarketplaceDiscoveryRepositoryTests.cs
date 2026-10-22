@@ -93,6 +93,41 @@ public sealed class MarketplaceDiscoveryRepositoryTests
     }
 
     [Fact]
+    public async Task The_minimum_rating_keeps_only_storefronts_rated_at_least_that_and_drops_unrated_ones()
+    {
+        using var f = await Fixture.Create();
+
+        // Only the breakfast stall has ratings (4.5 from 3 people); the others have none.
+        Assert.Equal(new long[] { BreakfastStall }, await Ids(f, NoFilter with { MinRating = 4m }));
+        Assert.Equal(new long[] { BreakfastStall }, await Ids(f, NoFilter with { MinRating = 4.5m }));
+        Assert.Empty(await Ids(f, NoFilter with { MinRating = 4.6m }));
+        Assert.Equal(new long[] { BreakfastStall, EveningCafe, NoonNoodles }, await Ids(f, NoFilter with { MinRating = null }));
+    }
+
+    [Fact]
+    public async Task The_rating_filter_combines_with_the_other_criteria()
+    {
+        using var f = await Fixture.Create();
+
+        Assert.Equal(new long[] { BreakfastStall }, await Ids(f, NoFilter with { MinRating = 4m, CategoryId = 1, OpenAt = SaturdayMorning }));
+        Assert.Empty(await Ids(f, NoFilter with { MinRating = 4m, WardId = 2 }));
+    }
+
+    [Fact]
+    public async Task Menu_search_can_be_limited_to_dishes_of_well_rated_storefronts()
+    {
+        using var f = await Fixture.Create();
+        var all = new MarketplaceMenuFilter(null, null, null, null, null, null, MarketplaceMenuSorts.Name);
+
+        async Task<string[]> Names(MarketplaceMenuFilter filter) =>
+            (await f.Repository.SearchMenuItemsAsync(filter, 50, default)).Select(i => i.ItemName).ToArray();
+
+        Assert.Equal(["Sticky rice", "Sweet rice"], await Names(all with { MinRating = 4m }));
+        Assert.Empty(await Names(all with { MinRating = 5m }));
+        Assert.Equal(["Sweet rice"], await Names(all with { MinRating = 4m, MaxPrice = 25_000 }));
+    }
+
+    [Fact]
     public async Task Storefront_detail_lists_the_public_menu_only()
     {
         using var f = await Fixture.Create();

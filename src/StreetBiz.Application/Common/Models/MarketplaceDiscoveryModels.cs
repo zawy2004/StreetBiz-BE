@@ -13,7 +13,9 @@ public sealed record MarketplaceStorefrontFilter(
     int? WardId,
     int? CategoryId,
     MarketplaceOpenAt? OpenAt,
-    GeoBoundingBox? Area);
+    GeoBoundingBox? Area,
+    /// <summary>DISC-05: keep storefronts whose community rating is at least this (unrated ones are dropped).</summary>
+    decimal? MinRating = null);
 
 public sealed record MarketplaceMenuFilter(
     string? Query,
@@ -22,7 +24,9 @@ public sealed record MarketplaceMenuFilter(
     decimal? MinPrice,
     decimal? MaxPrice,
     MarketplaceOpenAt? OpenAt,
-    string Sort);
+    string Sort,
+    /// <summary>DISC-05: keep dishes of storefronts whose community rating is at least this.</summary>
+    decimal? MinRating = null);
 
 public sealed record MarketplaceStorefrontRow(
     long StorefrontId,

@@ -33,6 +33,23 @@ public static class OrderStatuses
         value is Placed or Accepted or Preparing or ReadyForPickup;
 }
 
+/// <summary>
+/// REV-02 / BR-68: a review can be edited by its author only for a limited time after it was first
+/// submitted. The SRS addendum proposes 7 days and marks the number as awaiting supervisor sign-off,
+/// so it lives here, in one place, until it is confirmed.
+/// </summary>
+public static class ReviewRules
+{
+    public const int EditWindowDays = 7;
+    public static readonly TimeSpan EditWindow = TimeSpan.FromDays(EditWindowDays);
+
+    /// <summary>The last instant a review submitted at <paramref name="submittedAt"/> can still be edited.</summary>
+    public static DateTime EditableUntil(DateTime submittedAt) => submittedAt + EditWindow;
+
+    public const string EditWindowClosed =
+        "Đã quá thời hạn chỉnh sửa đánh giá (7 ngày kể từ lúc gửi), bạn không thể sửa nữa.";
+}
+
 public static class SellerOrderDecisions
 {
     public const string Accept = "ACCEPT";
@@ -89,5 +106,8 @@ public static class CommerceMessages
     public const string OrderConflict = "Trạng thái đơn hàng vừa thay đổi. Vui lòng tải lại và thử lại.";
     public const string CheckoutAlreadyPending =
         "Bạn có một đơn đang chờ thanh toán. Hãy thanh toán hoặc huỷ đơn đó trước khi sửa giỏ hàng.";
+    public const string CheckoutPaymentEnded =
+        "Lần thanh toán này đã thất bại hoặc đơn đã bị huỷ. Hãy bấm thanh toán lại để tạo đơn mới.";
+    public const string CheckoutAlreadyPaid = "Đơn này đã được thanh toán.";
     public const string PaymentNotFound = "Đơn trả trước chưa có giao dịch thanh toán thành công.";
 }
