@@ -49,14 +49,14 @@ public class RegistrationFieldsValidator<T> : AbstractValidator<T> where T : IRe
 
         RuleFor(x => x.DisplayName)
             .NotEmpty().WithMessage(RegMessages.DisplayNameRequired)
-            .MaximumLength(180).WithMessage(RegMessages.DisplayNameTooLong);
+            .MaximumLength(RegistrationFieldLimits.DisplayName).WithMessage(RegMessages.DisplayNameTooLong);
 
         // BR-07: a fixed storefront must declare an address.
         RuleFor(x => x.DeclaredAddress)
             .NotEmpty()
             .When(x => x.VendorType == VendorTypes.FixedStorefront)
             .WithMessage(RegMessages.FixedNeedsAddress);
-        RuleFor(x => x.DeclaredAddress).MaximumLength(500).WithMessage(RegMessages.FieldTooLong);
+        RuleFor(x => x.DeclaredAddress).MaximumLength(RegistrationFieldLimits.DeclaredAddress).WithMessage(RegMessages.FieldTooLong);
 
         RuleFor(x => x.WardUnitId).GreaterThan(0).WithMessage(AppMessages.InvalidWard);
 
@@ -75,10 +75,10 @@ public class RegistrationFieldsValidator<T> : AbstractValidator<T> where T : IRe
         RuleFor(x => x.OwnerGender)
             .Must(g => g != null && OwnerGenders.All.Contains(g))
             .WithMessage(RegMessages.OwnerGenderRequired);
-        RuleFor(x => x.OwnerEthnicity).MaximumLength(50).WithMessage(RegMessages.FieldTooLong);
+        RuleFor(x => x.OwnerEthnicity).MaximumLength(RegistrationFieldLimits.Ethnicity).WithMessage(RegMessages.FieldTooLong);
         RuleFor(x => x.OwnerNationality)
             .NotEmpty().WithMessage(RegMessages.OwnerNationalityRequired)
-            .MaximumLength(50).WithMessage(RegMessages.FieldTooLong);
+            .MaximumLength(RegistrationFieldLimits.Nationality).WithMessage(RegMessages.FieldTooLong);
         RuleFor(x => x.IdType)
             .Must(t => t != null && OwnerIdTypes.All.Contains(t))
             .WithMessage(RegMessages.IdTypeRequired);
@@ -88,17 +88,17 @@ public class RegistrationFieldsValidator<T> : AbstractValidator<T> where T : IRe
             .WithMessage(RegMessages.DateMustBePast);
         RuleFor(x => x.IdIssuedPlace)
             .NotEmpty().WithMessage(RegMessages.IdIssuedPlaceRequired)
-            .MaximumLength(150).WithMessage(RegMessages.FieldTooLong);
+            .MaximumLength(RegistrationFieldLimits.IdIssuedPlace).WithMessage(RegMessages.FieldTooLong);
         RuleFor(x => x.PermanentAddress)
             .NotEmpty().WithMessage(RegMessages.PermanentAddressRequired)
-            .MaximumLength(300).WithMessage(RegMessages.FieldTooLong);
-        RuleFor(x => x.ContactAddress).MaximumLength(300).WithMessage(RegMessages.FieldTooLong);
+            .MaximumLength(RegistrationFieldLimits.PermanentAddress).WithMessage(RegMessages.FieldTooLong);
+        RuleFor(x => x.ContactAddress).MaximumLength(RegistrationFieldLimits.ContactAddress).WithMessage(RegMessages.FieldTooLong);
 
         // ---- Ngành nghề, quy mô hộ kinh doanh ----
         RuleFor(x => x.BusinessLine)
             .NotEmpty().WithMessage(RegMessages.BusinessLineRequired)
-            .MaximumLength(300).WithMessage(RegMessages.FieldTooLong);
-        RuleFor(x => x.BusinessLineCode).MaximumLength(20).WithMessage(RegMessages.FieldTooLong);
+            .MaximumLength(RegistrationFieldLimits.BusinessLine).WithMessage(RegMessages.FieldTooLong);
+        RuleFor(x => x.BusinessLineCode).MaximumLength(RegistrationFieldLimits.BusinessLineCode).WithMessage(RegMessages.FieldTooLong);
         RuleFor(x => x.CapitalAmount).NotNull().GreaterThanOrEqualTo(0)
             .WithMessage(RegMessages.CapitalAmountRequired);
         RuleFor(x => x.LaborCount).NotNull().GreaterThanOrEqualTo(0)
@@ -112,9 +112,9 @@ public class RegistrationFieldsValidator<T> : AbstractValidator<T> where T : IRe
         {
             member.RuleFor(m => m.FullName)
                 .NotEmpty().WithMessage(RegMessages.HouseholdMemberNameRequired)
-                .MaximumLength(150).WithMessage(RegMessages.FieldTooLong);
-            member.RuleFor(m => m.IdNumber).MaximumLength(12).WithMessage(RegMessages.FieldTooLong);
-            member.RuleFor(m => m.RelationshipToOwner).MaximumLength(50).WithMessage(RegMessages.FieldTooLong);
+                .MaximumLength(RegistrationFieldLimits.HouseholdMemberName).WithMessage(RegMessages.FieldTooLong);
+            member.RuleFor(m => m.IdNumber).MaximumLength(RegistrationFieldLimits.HouseholdMemberIdNumber).WithMessage(RegMessages.FieldTooLong);
+            member.RuleFor(m => m.RelationshipToOwner).MaximumLength(RegistrationFieldLimits.HouseholdMemberRelationship).WithMessage(RegMessages.FieldTooLong);
             member.RuleFor(m => m.DateOfBirth)
                 .Must(d => d!.Value <= Today).When(m => m.DateOfBirth is not null)
                 .WithMessage(RegMessages.DateMustBePast);

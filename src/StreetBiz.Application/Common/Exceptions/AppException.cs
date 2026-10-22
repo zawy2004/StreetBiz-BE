@@ -49,3 +49,13 @@ public sealed class TooManyRequestsException(string message, int retryAfterSecon
     public override int StatusCode => 429;
     public override string ErrorCode => "otp_cooldown";
 }
+
+/// <summary>
+/// 503 - every configured AI provider failed or is out of quota. The client falls back to manual
+/// entry (X01 T7) instead of showing a dead end.
+/// </summary>
+public sealed class AiUnavailableException(string message) : AppException(message)
+{
+    public override int StatusCode => 503;
+    public override string ErrorCode => "ai_unavailable";
+}
