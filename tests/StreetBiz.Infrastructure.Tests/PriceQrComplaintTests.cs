@@ -448,6 +448,27 @@ public sealed class PriceQrComplaintTests
     }
 
     [Fact]
+    public async Task A_vendor_with_two_businesses_is_named_by_the_one_whose_board_priced_the_complaint()
+    {
+        using var f = await Fixture.Create();
+        var dish = await f.AddDish("Bún chả", 45_000, "suất");
+        // The same vendor later registered a second business, which is now its newest registration.
+        f.Db.BusinessRegistrations.Add(new BusinessRegistration { registration_id = 3, vendor_id = 10, ward_unit_id = 1, vendor_type = "ITINERANT", display_name = "Xôi Cô A", registration_status = "APPROVED" });
+        await f.Db.SaveChangesAsync();
+        f.Db.ChangeTracker.Clear();
+        f.Clock.Advance(TimeSpan.FromHours(1));
+        await f.ReportHandler(customerId: 2).Handle(new ReportSuspiciousVendorCommand(
+            10, null, null, null, null, VendorReportTypes.Overcharge, dish, 2, 120_000, new DateTimeOffset(T0.AddMinutes(30))), default);
+        var reportId = (await f.Db.VendorReports.AsNoTracking().SingleAsync()).report_id;
+
+        var row = await f.Inbox().GetVendorReportAsync(reportId, default);
+        var listed = Assert.Single(await f.Inbox().ListVendorReportsForWardAsync(1, Filter(f.Clock.GetUtcNow().UtcDateTime), 1, 20, default));
+
+        Assert.Equal("Quầy A", row!.VendorName);
+        Assert.Equal("Quầy A", listed.VendorName);
+    }
+
+    [Fact]
     public async Task The_detail_carries_the_price_evidence_the_vendors_90_day_count_the_outcome_and_the_record()
     {
         using var f = await Fixture.Create();

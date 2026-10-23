@@ -182,6 +182,13 @@ public sealed class AiMarketplaceRepository(StreetBizDbContext db, CommerceRepos
                 .Where(violation => violation.source_report_id == report.report_id)
                 .Select(violation => (long?)violation.violation_id)
                 .FirstOrDefault(),
+            // Which of the vendor's businesses the report is about, when it says: the stall whose
+            // board priced the dish, else the stall on the scanned permit.
+            SubjectName = report.price_history != null
+                ? report.price_history.storefront.registration.display_name
+                : report.scanned_permit != null
+                    ? report.scanned_permit.contract.application.registration.display_name
+                    : null,
         }).ToListAsync(cancellationToken);
         if (heads.Count == 0)
         {
@@ -228,7 +235,8 @@ public sealed class AiMarketplaceRepository(StreetBizDbContext db, CommerceRepos
                 head.report_status,
                 head.created_at,
                 head.ai_extracted_location,
-                registration?.display_name,
+                // A vendor with several businesses: name the one reported, not merely its latest.
+                head.SubjectName ?? registration?.display_name,
                 head.vendor_id,
                 head.slot_id,
                 head.SlotCode,
