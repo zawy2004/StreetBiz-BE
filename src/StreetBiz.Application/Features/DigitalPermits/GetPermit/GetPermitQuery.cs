@@ -15,7 +15,8 @@ public sealed record GetPermitQuery(long ContractId) : IRequest<DigitalPermitDto
 
 public sealed class GetPermitQueryHandler(
     IVendorContext vendorContext,
-    IDigitalPermitRepository permits)
+    IDigitalPermitRepository permits,
+    IPermitLinks? links = null)
     : IRequestHandler<GetPermitQuery, DigitalPermitDto>
 {
     public async Task<DigitalPermitDto> Handle(GetPermitQuery request, CancellationToken cancellationToken)
@@ -30,6 +31,7 @@ public sealed class GetPermitQueryHandler(
             throw new ForbiddenException(AppMessages.Forbidden);
         }
 
-        return permit.ToDto();
+        // The link wraps the signed token as it is: no new code, no sequential id (SIDE-08).
+        return permit.ToDto() with { QrUrl = links?.ScanUrl(permit.QrPayload) };
     }
 }

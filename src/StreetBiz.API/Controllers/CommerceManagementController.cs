@@ -29,6 +29,9 @@ public sealed class SellerStorefrontsController(ICommerceManagement service) : C
     public async Task<IActionResult> AddItem(long storefrontId, SellerMenuInput input, CancellationToken ct) => Ok(await service.SaveMenu(storefrontId, null, input, ct));
     [HttpPut("{storefrontId:long}/menu-items/{itemId:long}")]
     public async Task<IActionResult> UpdateItem(long storefrontId, long itemId, SellerMenuInput input, CancellationToken ct) => Ok(await service.SaveMenu(storefrontId, itemId, input, ct));
+    /// <summary>BUY-06: the price board, its version ("bản số N"), the latest changes and the print/QR links.</summary>
+    [HttpGet("{storefrontId:long}/price-board")]
+    public async Task<IActionResult> PriceBoard(long storefrontId, CancellationToken ct) => Ok(await service.PriceBoard(storefrontId, ct));
     [HttpDelete("{storefrontId:long}/menu-items/{itemId:long}")]
     public async Task<IActionResult> Archive(long storefrontId, long itemId, CancellationToken ct)
     {

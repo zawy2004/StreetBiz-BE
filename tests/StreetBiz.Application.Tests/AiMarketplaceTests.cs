@@ -788,7 +788,9 @@ public sealed class VendorReportAssistUseCaseTests
     [Fact]
     public async Task The_officers_list_is_scoped_to_their_own_ward()
     {
-        repository.Setup(x => x.ListVendorReportsForWardAsync(Ward, "PENDING", 2, ListWardVendorReportsQueryHandler.PageSize, It.IsAny<CancellationToken>()))
+        repository.Setup(x => x.ListVendorReportsForWardAsync(
+                Ward, It.Is<VendorReportListFilter>(filter => filter.Status == "PENDING" && filter.Type == null && filter.Overdue == null),
+                2, ListWardVendorReportsQueryHandler.PageSize, It.IsAny<CancellationToken>()))
             .ReturnsAsync([Report(Evidence())]);
         var handler = new ListWardVendorReportsQueryHandler(actors.Object, repository.Object);
 

@@ -158,6 +158,18 @@ public static class DependencyInjection
 
         services.AddTokenSigningOptions(configuration);
         services.AddSingleton<IPermitTokenService, PermitTokenService>();
+        services.AddSingleton<IPermitLinks, PermitLinks>();
+
+        // BUY-07 / WARD-19: the ward's internal target for closing a citizen report (D4: 7 working days).
+        var vendorReports = new VendorReportSettings();
+        configuration.GetSection(VendorReportSettings.SectionName).Bind(vendorReports);
+        if (vendorReports.DueWorkingDays is < 1 or > 60)
+        {
+            throw new InvalidOperationException("VendorReports:DueWorkingDays must be between 1 and 60.");
+        }
+
+        services.AddSingleton(vendorReports);
+        services.AddScoped<StreetBiz.Application.Features.VendorReports.IVendorReportDecisions, VendorReportDecisions>();
         services.AddSingleton<IOrderPickupTokenService, OrderPickupTokenService>();
 
         services.Configure<Sidewalk.SidewalkSettings>(configuration.GetSection(Sidewalk.SidewalkSettings.SectionName));

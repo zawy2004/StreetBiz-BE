@@ -216,7 +216,11 @@ public sealed record RecordWardViolationRequest(
     string? ContainmentMeasures = null,
     /// <summary>Mẫu 01 mục 10 (Điều 61 Luật XLVPHC). WitnessRole/Method null unless True.</summary>
     bool ExplanationRequired = false,
-    string? ExplanationMethod = null);
+    string? ExplanationMethod = null,
+    /// <summary>WARD-19: the citizen report this record is raised from. It must be PENDING, in the
+    /// officer's ward and about the same vendor or slot; the record is then CUSTOMER_REPORT and the
+    /// report closes as VIOLATION_RECORDED in the same transaction. One record per report.</summary>
+    long? SourceReportId = null);
 
 public sealed record RecordExplanationRequest(string Content);
 

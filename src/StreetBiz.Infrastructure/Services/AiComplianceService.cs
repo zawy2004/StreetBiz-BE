@@ -811,7 +811,11 @@ public sealed class AiComplianceService : IAiComplianceService
     {
         (string Type, string[] Keywords)[] rules =
         [
-            ("EXPIRED_OR_INVALID_PERMIT", ["HẾT HẠN", "KHÔNG PHÉP", "SAI NỘI DUNG", "EXPIRED", "INVALID"]),
+            // Price complaints first (BUY-07): their wording ("bán", "kinh doanh") would otherwise
+            // fall through to the encroachment rule below.
+            ("PRICE_ABOVE_POSTED", ["CAO HƠN GIÁ NIÊM YẾT", "BỊ TÍNH CAO", "BÁN CAO", "OVERCHARGE"]),
+            ("PRICE_NOT_POSTED", ["KHÔNG NIÊM YẾT", "KHÔNG TREO BẢNG GIÁ", "PRICE NOT POSTED"]),
+            ("EXPIRED_OR_INVALID_PERMIT",["HẾT HẠN", "KHÔNG PHÉP", "SAI NỘI DUNG", "EXPIRED", "INVALID"]),
             ("HYGIENE_LITTERING", ["RÁC", "VỆ SINH", "TRASH", "LITTER"]),
             ("OBSTRUCT_PUBLIC_ORDER", ["CẢN TRỞ", "AN NINH", "OBSTRUCT"]),
             ("STREET_VENDING_RESTRICTED", ["HÀNG RONG", "TUYẾN CẤM", "VENDING"]),

@@ -1,6 +1,7 @@
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Metadata;
+using StreetBiz.Application.Features.AiMarketplace;
 using StreetBiz.Infrastructure.Persistence;
 using StreetBiz.Infrastructure.Persistence.Repositories;
 using StreetBiz.Infrastructure.Persistence.ScaffoldedModels;
@@ -101,11 +102,12 @@ public sealed class AiMarketplaceRepositoryTests
     {
         using var f = await Fixture.Create();
 
-        var ward1 = await f.Repository.ListVendorReportsForWardAsync(1, null, 1, 20, default);
-        var ward2 = await f.Repository.ListVendorReportsForWardAsync(2, null, 1, 20, default);
+        var ward1 = await f.Repository.ListVendorReportsForWardAsync(1, Filter(), 1, 20, default);
+        var ward2 = await f.Repository.ListVendorReportsForWardAsync(2, Filter(), 1, 20, default);
 
         // Report 1 names a ward-1 slot, report 3 only scanned a ward-1 permit, report 2 is about a ward-2 vendor.
-        Assert.Equal([3L, 1L], ward1.Select(r => r.ReportId));
+        // A pending report comes before a closed one (WARD-19 order), whatever their filing time.
+        Assert.Equal([1L, 3L], ward1.Select(r => r.ReportId));
         Assert.Equal([2L], ward2.Select(r => r.ReportId));
     }
 
@@ -114,10 +116,10 @@ public sealed class AiMarketplaceRepositoryTests
     {
         using var f = await Fixture.Create();
 
-        Assert.Equal([3L], (await f.Repository.ListVendorReportsForWardAsync(1, "REVIEWED", 1, 20, default)).Select(r => r.ReportId));
-        Assert.Equal([3L], (await f.Repository.ListVendorReportsForWardAsync(1, null, 1, 1, default)).Select(r => r.ReportId));
-        Assert.Equal([1L], (await f.Repository.ListVendorReportsForWardAsync(1, null, 2, 1, default)).Select(r => r.ReportId));
-        Assert.Empty(await f.Repository.ListVendorReportsForWardAsync(1, null, 3, 1, default));
+        Assert.Equal([3L], (await f.Repository.ListVendorReportsForWardAsync(1, Filter("REVIEWED"), 1, 20, default)).Select(r => r.ReportId));
+        Assert.Equal([1L], (await f.Repository.ListVendorReportsForWardAsync(1, Filter(), 1, 1, default)).Select(r => r.ReportId));
+        Assert.Equal([3L], (await f.Repository.ListVendorReportsForWardAsync(1, Filter(), 2, 1, default)).Select(r => r.ReportId));
+        Assert.Empty(await f.Repository.ListVendorReportsForWardAsync(1, Filter(), 3, 1, default));
     }
 
     [Fact]
@@ -144,6 +146,9 @@ public sealed class AiMarketplaceRepositoryTests
         // Only the note changed: the report is still waiting for the officer.
         Assert.Equal("PENDING", report.Status);
     }
+
+    private static VendorReportListFilter Filter(string? status = null, string? type = null, bool? overdue = null) =>
+        new(status, type, overdue, Day.AddDays(1));
 
     private sealed class Fixture : IDisposable
     {

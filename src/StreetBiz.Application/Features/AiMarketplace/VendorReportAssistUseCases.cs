@@ -3,7 +3,9 @@ using MediatR;
 using StreetBiz.Application.Common.Exceptions;
 using StreetBiz.Application.Common.Interfaces;
 using StreetBiz.Application.Common.Security;
+using StreetBiz.Application.DTOs.Community;
 using StreetBiz.Application.Features.AiAssistance;
+using StreetBiz.Application.Features.CommunityVendors;
 using StreetBiz.Application.Features.WardSlots;
 
 namespace StreetBiz.Application.Features.AiMarketplace;
@@ -232,7 +234,10 @@ public sealed class VendorReportAssistant(
 
 #region Ward queries
 
-public sealed record ListWardVendorReportsQuery(string? Status, int Page = 1) : IRequest<IReadOnlyList<WardVendorReportSummaryDto>>;
+/// <param name="Type">GENERAL, OVERCHARGE or PRICE_NOT_POSTED; null for every type.</param>
+/// <param name="Overdue">true: only pending reports past their due time; false: the others.</param>
+public sealed record ListWardVendorReportsQuery(string? Status, int Page = 1, string? Type = null, bool? Overdue = null)
+    : IRequest<IReadOnlyList<WardVendorReportSummaryDto>>;
 
 public sealed record WardVendorReportSummaryDto(
     long ReportId,
@@ -241,7 +246,11 @@ public sealed record WardVendorReportSummaryDto(
     DateTime CreatedAt,
     string? VendorName,
     string? SlotCode,
-    bool HasPhoto);
+    bool HasPhoto,
+    string ReportType = VendorReportTypes.General,
+    DateTime? DueAt = null,
+    bool IsOverdue = false,
+    string? Resolution = null);
 
 public sealed class ListWardVendorReportsQueryValidator : AbstractValidator<ListWardVendorReportsQuery>
 {
@@ -249,13 +258,16 @@ public sealed class ListWardVendorReportsQueryValidator : AbstractValidator<List
     {
         RuleFor(x => x.Status).Must(status => status is null or VendorReportStatuses.Pending or VendorReportStatuses.Reviewed or VendorReportStatuses.Dismissed)
             .WithMessage("Unsupported report status.");
+        RuleFor(x => x.Type).Must(type => type is null || VendorReportTypes.IsValid(type))
+            .WithMessage("Unsupported report type.");
         RuleFor(x => x.Page).InclusiveBetween(1, 10_000);
     }
 }
 
 public sealed class ListWardVendorReportsQueryHandler(
     IWardActorContext actorContext,
-    IAiMarketplaceRepository repository) : IRequestHandler<ListWardVendorReportsQuery, IReadOnlyList<WardVendorReportSummaryDto>>
+    IAiMarketplaceRepository repository,
+    TimeProvider? clock = null) : IRequestHandler<ListWardVendorReportsQuery, IReadOnlyList<WardVendorReportSummaryDto>>
 {
     public const int PageSize = 20;
 
@@ -264,10 +276,19 @@ public sealed class ListWardVendorReportsQueryHandler(
         CancellationToken cancellationToken)
     {
         var actor = await actorContext.RequireAsync(cancellationToken);
-        var rows = await repository.ListVendorReportsForWardAsync(actor.WardId, request.Status, request.Page, PageSize, cancellationToken);
+        var now = (clock ?? TimeProvider.System).GetUtcNow().UtcDateTime;
+        var rows = await repository.ListVendorReportsForWardAsync(
+            actor.WardId,
+            new VendorReportListFilter(request.Status, request.Type, request.Overdue, now),
+            request.Page,
+            PageSize,
+            cancellationToken);
         return rows
             .Select(row => new WardVendorReportSummaryDto(
-                row.ReportId, row.Reason, row.Status, row.CreatedAt, row.VendorName, row.SlotCode, !string.IsNullOrWhiteSpace(row.EvidenceUrl)))
+                row.ReportId, row.Reason, row.Status, row.CreatedAt, row.VendorName, row.SlotCode,
+                !string.IsNullOrWhiteSpace(row.EvidenceUrl), row.ReportType,
+                WardVendorReportAccess.Utc(row.DueAt), VendorReportRules.IsOverdue(row.Status, row.DueAt, now),
+                row.Outcome?.Resolution))
             .ToArray();
     }
 }
@@ -282,12 +303,14 @@ public sealed class GetWardVendorReportQueryValidator : AbstractValidator<GetWar
 public sealed class GetWardVendorReportQueryHandler(
     IWardActorContext actorContext,
     IAiMarketplaceRepository repository,
-    IVendorReportAssistant assistant) : IRequestHandler<GetWardVendorReportQuery, WardVendorReportDto>
+    IVendorReportAssistant assistant,
+    TimeProvider? clock = null) : IRequestHandler<GetWardVendorReportQuery, WardVendorReportDto>
 {
     public async Task<WardVendorReportDto> Handle(GetWardVendorReportQuery request, CancellationToken cancellationToken)
     {
         var report = await WardVendorReportAccess.RequireAsync(actorContext, repository, request.ReportId, cancellationToken);
-        return WardVendorReportAccess.ToDto(report, await assistant.ReadAsync(report, cancellationToken));
+        return WardVendorReportAccess.ToDto(
+            report, await assistant.ReadAsync(report, cancellationToken), (clock ?? TimeProvider.System).GetUtcNow().UtcDateTime);
     }
 }
 
@@ -302,7 +325,8 @@ public sealed class RunVendorReportAssistCommandValidator : AbstractValidator<Ru
 public sealed class RunVendorReportAssistCommandHandler(
     IWardActorContext actorContext,
     IAiMarketplaceRepository repository,
-    IVendorReportAssistant assistant) : IRequestHandler<RunVendorReportAssistCommand, WardVendorReportDto>
+    IVendorReportAssistant assistant,
+    TimeProvider? clock = null) : IRequestHandler<RunVendorReportAssistCommand, WardVendorReportDto>
 {
     public async Task<WardVendorReportDto> Handle(RunVendorReportAssistCommand request, CancellationToken cancellationToken)
     {
@@ -310,7 +334,7 @@ public sealed class RunVendorReportAssistCommandHandler(
         var assist = await assistant.RunAsync(report, force: true, cancellationToken);
         // Re-read so the stored location the run just wrote is in the view.
         var fresh = await repository.GetVendorReportAsync(request.ReportId, cancellationToken) ?? report;
-        return WardVendorReportAccess.ToDto(fresh, assist);
+        return WardVendorReportAccess.ToDto(fresh, assist, (clock ?? TimeProvider.System).GetUtcNow().UtcDateTime);
     }
 }
 
@@ -327,12 +351,28 @@ internal static class WardVendorReportAccess
         var report = await repository.GetVendorReportAsync(reportId, cancellationToken);
         return report is not null && report.WardIds.Contains(actor.WardId)
             ? report
-            : throw new NotFoundException("Không tìm thấy phản ánh trong phường của bạn.");
+            : throw new NotFoundException(CommunityMessages.ReportNotFound);
     }
 
-    public static WardVendorReportDto ToDto(VendorReportContextRow report, VendorReportAssistDto assist) => new(
+    public static WardVendorReportDto ToDto(VendorReportContextRow report, VendorReportAssistDto assist, DateTime nowUtc) => new(
         report.ReportId, report.Reason, report.EvidenceUrl, report.Status, report.CreatedAt, report.VendorName,
-        report.SlotCode, report.AiExtractedLocation, assist);
+        report.SlotCode, report.AiExtractedLocation, assist,
+        report.ReportType,
+        Utc(report.DueAt),
+        VendorReportRules.IsOverdue(report.Status, report.DueAt, nowUtc),
+        report.VendorId,
+        report.SlotId,
+        report.ScannedPermitId,
+        report.PriceEvidence?.ToDto(),
+        report.Outcome is { } outcome
+            ? new VendorReportOutcomeDto(outcome.Resolution, outcome.Note, outcome.RefundAmount,
+                Utc(outcome.ReviewedAt), outcome.ReviewedByName)
+            : null,
+        report.ReportsAgainstVendor90Days,
+        VendorReportTypes.SuggestedViolationType(report.ReportType),
+        report.ViolationId);
+
+    public static DateTime? Utc(DateTime? value) => value is { } v ? DateTime.SpecifyKind(v, DateTimeKind.Utc) : null;
 }
 
 #endregion

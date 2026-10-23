@@ -99,11 +99,15 @@ public sealed class GetPublicVendorProfileQueryHandler(ICommunityVendorRepositor
     }
 }
 
+/// <param name="QrPayload">The scanned text: the bare signed token or a <c>/q/{token}</c> link.</param>
+/// <param name="PrintedVersion">The version printed on the paper board (<c>?v=</c>); read from the
+/// link itself when omitted.</param>
 public sealed record VerifyPublicPermitCommand(
     string QrPayload,
     decimal? Latitude,
     decimal? Longitude,
-    string? PhotoUrl) : IRequest<PermitVerificationDto>;
+    string? PhotoUrl,
+    int? PrintedVersion = null) : IRequest<PermitVerificationDto>;
 
 public sealed class VerifyPublicPermitCommandValidator : AbstractValidator<VerifyPublicPermitCommand>
 {
@@ -115,9 +119,16 @@ public sealed class VerifyPublicPermitCommandValidator : AbstractValidator<Verif
         RuleFor(x => x.Latitude).InclusiveBetween(-90, 90).When(x => x.Latitude.HasValue);
         RuleFor(x => x.Longitude).InclusiveBetween(-180, 180).When(x => x.Longitude.HasValue);
         RuleFor(x => x.PhotoUrl).MaximumLength(500);
+        RuleFor(x => x.PrintedVersion).GreaterThan(0).When(x => x.PrintedVersion.HasValue);
     }
 }
 
+/// <summary>
+/// BUY-02 / BUY-06. Every answer is a live lookup (BR-39): the signature first, then
+/// vw_PermitValidity, then the price board, each read now; nothing is cached and every scan is
+/// logged. The price board is shown only for a VALID permit, whatever the storefront's own
+/// open/paused/closed state: posting prices is a legal duty, not a marketplace feature.
+/// </summary>
 public sealed class VerifyPublicPermitCommandHandler(
     ICommunityVendorRepository vendors,
     IPermitTokenService tokens,
@@ -128,12 +139,13 @@ public sealed class VerifyPublicPermitCommandHandler(
         VerifyPublicPermitCommand request,
         CancellationToken cancellationToken)
     {
+        var token = PermitQrText.ExtractToken(request.QrPayload);
         PublicPermitVerificationRow? permit = null;
-        if (tokens.TryParse(request.QrPayload, out var claims))
+        if (tokens.TryParse(token, out var claims))
         {
             permit = await vendors.GetPermitVerificationAsync(
                 claims.ContractId,
-                request.QrPayload,
+                token,
                 cancellationToken);
         }
 
@@ -147,20 +159,36 @@ public sealed class VerifyPublicPermitCommandHandler(
             request.Longitude,
             request.PhotoUrl), cancellationToken);
 
-        return permit is null
-            ? new(false, result, null, null, null, null, null, null, null, null, null)
-            : new(
-                permit.EffectiveStatus == PermitEffectiveStatuses.Valid,
-                permit.EffectiveStatus,
-                permit.PermitId,
-                permit.VendorId,
-                permit.DisplayName,
-                permit.SlotId,
-                permit.SlotCode,
-                permit.Latitude,
-                permit.Longitude,
-                permit.StartDate,
-                permit.EndDate);
+        if (permit is null)
+        {
+            return new(false, result, null, null, null, null, null, null, null, null, null);
+        }
+
+        var isValid = permit.EffectiveStatus == PermitEffectiveStatuses.Valid;
+        PublicPriceBoardDto? board = null;
+        if (isValid && await vendors.GetPriceBoardByContractAsync(permit.ContractId, cancellationToken) is { } row)
+        {
+            var printed = request.PrintedVersion ?? PermitQrText.PrintedVersion(request.QrPayload);
+            board = new PublicPriceBoardDto(
+                row.Version,
+                row.UpdatedAt is { } updated ? DateTime.SpecifyKind(updated, DateTimeKind.Utc) : null,
+                printed is null ? null : printed == row.Version,
+                row.Items.Select(item => item.ToDto()).ToArray());
+        }
+
+        return new(
+            isValid,
+            permit.EffectiveStatus,
+            permit.PermitId,
+            permit.VendorId,
+            permit.DisplayName,
+            permit.SlotId,
+            permit.SlotCode,
+            permit.Latitude,
+            permit.Longitude,
+            permit.StartDate,
+            permit.EndDate,
+            board);
     }
 }
 
@@ -200,28 +228,64 @@ public sealed class UpsertVendorCommentCommandHandler(
     }
 }
 
+/// <param name="ReportType">GENERAL, OVERCHARGE ("bị tính cao hơn giá niêm yết") or
+/// PRICE_NOT_POSTED. Only an OVERCHARGE names a dish, a quantity, the amount charged and when.</param>
+/// <param name="PurchasedAt">When the customer paid; must carry its UTC offset.</param>
 public sealed record ReportSuspiciousVendorCommand(
     long VendorId,
-    string Reason,
+    string? Reason,
     string? EvidenceUrl,
     long? SlotId,
-    long? ScannedPermitId) : IRequest<VendorReportReceiptDto>;
+    long? ScannedPermitId,
+    string ReportType = VendorReportTypes.General,
+    long? MenuItemId = null,
+    int? Quantity = null,
+    decimal? ChargedAmount = null,
+    DateTimeOffset? PurchasedAt = null) : IRequest<VendorReportReceiptDto>;
 
 public sealed class ReportSuspiciousVendorCommandValidator : AbstractValidator<ReportSuspiciousVendorCommand>
 {
     public ReportSuspiciousVendorCommandValidator()
     {
         RuleFor(x => x.VendorId).GreaterThan(0);
-        RuleFor(x => x.Reason).NotEmpty().MaximumLength(500);
+        RuleFor(x => x.ReportType).Must(VendorReportTypes.IsValid)
+            .WithMessage("ReportType must be GENERAL, OVERCHARGE or PRICE_NOT_POSTED.");
+        // A typed complaint says what it is about by its type; a general one needs words.
+        RuleFor(x => x.Reason).NotEmpty().When(x => x.ReportType == VendorReportTypes.General);
+        RuleFor(x => x.Reason).MaximumLength(VendorReportRules.NoteMaxLength);
         RuleFor(x => x.EvidenceUrl).MaximumLength(500);
         RuleFor(x => x.SlotId).GreaterThan(0).When(x => x.SlotId.HasValue);
         RuleFor(x => x.ScannedPermitId).GreaterThan(0).When(x => x.ScannedPermitId.HasValue);
+
+        When(x => x.ReportType == VendorReportTypes.Overcharge, () =>
+        {
+            RuleFor(x => x.MenuItemId).NotNull().GreaterThan(0);
+            RuleFor(x => x.Quantity).NotNull().InclusiveBetween(1, VendorReportRules.MaxQuantity);
+            RuleFor(x => x.ChargedAmount).NotNull()
+                .InclusiveBetween(1, VendorReportRules.MaxChargedAmount)
+                .Must(amount => amount is null || decimal.Truncate(amount.Value) == amount.Value)
+                .WithMessage("ChargedAmount must be a whole number of VND.");
+            RuleFor(x => x.PurchasedAt).NotNull();
+        });
+        When(x => x.ReportType != VendorReportTypes.Overcharge, () =>
+            RuleFor(x => x)
+                .Must(x => x.MenuItemId is null && x.Quantity is null && x.ChargedAmount is null && x.PurchasedAt is null)
+                .WithMessage("Only an OVERCHARGE report names a dish, a quantity, an amount and a purchase time."));
     }
 }
 
+/// <summary>
+/// BUY-05 / BUY-07. A customer account files the report (D3), so there is someone to send the result
+/// to. For an overcharge the posted price is the server's: the MenuItemPriceHistory row in force when
+/// the customer paid, times the quantity; nothing in the request can set it. A report never closes
+/// itself and never leads to a penalty by itself (BR-41/43): the ward decides. It may be filed while
+/// the vendor's permit is not valid, which is exactly when a customer is told to report.
+/// </summary>
 public sealed class ReportSuspiciousVendorCommandHandler(
     ICustomerContext customer,
     ICommunityVendorRepository vendors,
+    VendorReportSettings settings,
+    TimeProvider clock,
     StreetBiz.Application.Features.AiMarketplace.IVendorReportPreprocessor? preprocessor = null)
     : IRequestHandler<ReportSuspiciousVendorCommand, VendorReportReceiptDto>
 {
@@ -230,7 +294,7 @@ public sealed class ReportSuspiciousVendorCommandHandler(
         CancellationToken cancellationToken)
     {
         var customerUserId = await customer.RequireCustomerUserIdAsync(cancellationToken);
-        _ = await vendors.GetPublicProfileAsync(request.VendorId, cancellationToken)
+        var target = await vendors.GetReportTargetAsync(request.VendorId, request.ScannedPermitId, cancellationToken)
             ?? throw new NotFoundException(CommunityMessages.VendorNotFound);
 
         if (!await vendors.ReportReferencesBelongToVendorAsync(
@@ -242,23 +306,142 @@ public sealed class ReportSuspiciousVendorCommandHandler(
             throw new DomainRuleException(CommunityMessages.ReportReferenceMismatch);
         }
 
+        if (await vendors.HasPendingReportAsync(customerUserId, request.VendorId, cancellationToken))
+        {
+            throw new ConflictException(CommunityMessages.DuplicatePendingReport);
+        }
+
+        var now = clock.GetUtcNow().UtcDateTime;
+        PostedPriceRow? price = null;
+        DateTime? purchasedAt = null;
+        decimal? postedAmount = null;
+        if (request.ReportType == VendorReportTypes.Overcharge)
+        {
+            purchasedAt = VendorReportRules.PurchaseTime(request.PurchasedAt!.Value, now);
+            price = await vendors.FindPostedPriceAsync(
+                    request.VendorId, request.MenuItemId!.Value, purchasedAt.Value, cancellationToken)
+                ?? throw new NotFoundException(CommunityMessages.MenuItemNotFound);
+            if (price.PriceHistoryId is null || price.UnitPrice is null || !price.IsListed)
+            {
+                throw new DomainRuleException(CommunityMessages.NotListedAtPurchase);
+            }
+
+            postedAmount = price.UnitPrice.Value * request.Quantity!.Value;
+            if (request.ChargedAmount!.Value <= postedAmount)
+            {
+                throw new DomainRuleException(CommunityMessages.NotAbovePostedPrice);
+            }
+        }
+
+        var dueAt = VendorReportRules.DueAt(BusinessCalendar.Today(clock), settings.DueWorkingDays);
+        var vendorName = price?.StorefrontName ?? target.DisplayName;
+        var slotCode = price?.SlotCode ?? target.SlotCode;
+        var reason = string.IsNullOrWhiteSpace(request.Reason)
+            ? DefaultReason(request.ReportType, price, request.Quantity)
+            : request.Reason.Trim();
+        var notices = VendorReportNotices.ForNewReport(
+            request.ReportType, vendorName, slotCode, dueAt, price, request.Quantity, request.ChargedAmount, postedAmount);
+
         var reportId = await vendors.AddReportAsync(
             request.VendorId,
             customerUserId,
             new CustomerVendorReport(
-                request.Reason.Trim(),
+                reason,
                 string.IsNullOrWhiteSpace(request.EvidenceUrl) ? null : request.EvidenceUrl.Trim(),
                 request.SlotId,
-                request.ScannedPermitId),
+                request.ScannedPermitId,
+                request.ReportType,
+                price?.MenuItemId,
+                price?.PriceHistoryId,
+                price is null ? null : request.Quantity,
+                postedAmount,
+                price is null ? null : request.ChargedAmount,
+                purchasedAt,
+                dueAt),
+            notices,
             cancellationToken);
         // AIB-01: the photo is read in the background so the ward officer finds the notes ready; never awaited.
         preprocessor?.Enqueue(reportId);
-        return new(reportId, VendorReportStatuses.Pending);
+        return new(reportId, VendorReportStatuses.Pending, request.ReportType, dueAt, postedAmount,
+            price is null ? null : request.ChargedAmount);
     }
+
+    private static string DefaultReason(string reportType, PostedPriceRow? price, int? quantity) => reportType switch
+    {
+        VendorReportTypes.Overcharge when price is not null =>
+            $"Bị tính cao hơn giá niêm yết: {quantity} {price.PriceUnit} {price.ItemName}.",
+        VendorReportTypes.PriceNotPosted => "Quầy không treo bảng giá.",
+        _ => "Phản ánh về quầy.",
+    };
+}
+
+/// <summary>"Phản ánh của tôi": the calling customer's own reports, newest first, with their outcome.</summary>
+public sealed record ListMyVendorReportsQuery(int Page = 1) : IRequest<IReadOnlyList<MyVendorReportDto>>;
+
+public sealed class ListMyVendorReportsQueryValidator : AbstractValidator<ListMyVendorReportsQuery>
+{
+    public ListMyVendorReportsQueryValidator() => RuleFor(x => x.Page).InclusiveBetween(1, 10_000);
+}
+
+public sealed class ListMyVendorReportsQueryHandler(
+    ICustomerContext customer,
+    ICommunityVendorRepository vendors,
+    TimeProvider clock) : IRequestHandler<ListMyVendorReportsQuery, IReadOnlyList<MyVendorReportDto>>
+{
+    public const int PageSize = 20;
+
+    public async Task<IReadOnlyList<MyVendorReportDto>> Handle(
+        ListMyVendorReportsQuery request,
+        CancellationToken cancellationToken)
+    {
+        var customerUserId = await customer.RequireCustomerUserIdAsync(cancellationToken);
+        var now = clock.GetUtcNow().UtcDateTime;
+        var rows = await vendors.ListMyReportsAsync(customerUserId, request.Page, PageSize, cancellationToken);
+        return rows.Select(row => new MyVendorReportDto(
+                row.ReportId,
+                row.VendorId,
+                row.VendorName,
+                row.SlotCode,
+                row.ReportType,
+                row.Reason,
+                row.Status,
+                Utc(row.CreatedAt),
+                row.DueAt is { } due ? Utc(due) : null,
+                VendorReportRules.IsOverdue(row.Status, row.DueAt, now),
+                row.Resolution,
+                row.ResolutionNote,
+                row.RefundAmount,
+                row.ReviewedAt is { } reviewed ? Utc(reviewed) : null,
+                row.HasPhoto,
+                row.PriceEvidence?.ToDto()))
+            .ToArray();
+    }
+
+    private static DateTime Utc(DateTime value) => DateTime.SpecifyKind(value, DateTimeKind.Utc);
 }
 
 internal static class CommunityVendorMapping
 {
+    public static PriceBoardItemDto ToDto(this PriceBoardItemRow row) => new(
+        row.MenuItemId,
+        row.Name,
+        row.NameEn,
+        row.PriceUnit,
+        row.UnitPrice);
+
+    public static VendorReportPriceEvidenceDto ToDto(this VendorReportPriceEvidenceRow row) => new(
+        row.MenuItemId,
+        row.ItemName,
+        row.PriceUnit,
+        row.PostedUnitPrice,
+        row.PriceVersion,
+        DateTime.SpecifyKind(row.PriceVersionAt, DateTimeKind.Utc),
+        row.Quantity,
+        row.PostedAmount,
+        row.ChargedAmount,
+        row.ChargedAmount - row.PostedAmount,
+        DateTime.SpecifyKind(row.PurchasedAt, DateTimeKind.Utc));
+
     public static ActiveVendorLocationDto ToDto(this ActiveVendorLocationRow row, double? distance) => new(
         row.VendorId,
         row.DisplayName,
