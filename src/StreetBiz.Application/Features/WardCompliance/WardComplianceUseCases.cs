@@ -367,7 +367,8 @@ public sealed class InspectWardPermitQueryValidator : AbstractValidator<InspectW
 {
     public InspectWardPermitQueryValidator()
     {
-        RuleFor(x => x.Request.PermitCodeOrPayload).NotEmpty().WithMessage("Mã giấy phép hoặc payload QR không được để trống.");
+        RuleFor(x => x.Request.PermitCodeOrPayload).NotEmpty().WithMessage("Mã giấy phép hoặc payload QR không được để trống.")
+            .MaximumLength(500).WithMessage("Nội dung mã QR không quá 500 ký tự.");
         RuleFor(x => x.Request.Latitude).InclusiveBetween(-90, 90).When(x => x.Request.Latitude.HasValue);
         RuleFor(x => x.Request.Longitude).InclusiveBetween(-180, 180).When(x => x.Request.Longitude.HasValue);
     }
@@ -529,6 +530,7 @@ public sealed class RecordWardViolationCommandValidator : AbstractValidator<Reco
             .Must(r => r is "WITNESS" or "WARD_REPRESENTATIVE")
             .When(x => x.Request.WitnessRole is not null)
             .WithMessage("Vai trò người chứng kiến không hợp lệ.");
+        RuleFor(x => x.Request.SourceReportId).GreaterThan(0).When(x => x.Request.SourceReportId.HasValue);
     }
 }
 

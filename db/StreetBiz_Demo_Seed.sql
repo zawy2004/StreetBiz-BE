@@ -161,10 +161,11 @@ BEGIN
 END;
 GO
 
--- WARD-03 / WARD-12: the five legal-citation violation types, priced per ward with the
+-- WARD-03 / WARD-12: the seven legal-citation violation types, priced per ward with the
 -- Nghi dinh they come from (PenaltyFeeSchedules.legal_basis). AI only classifies a
 -- violation onto one of these codes and drafts wording from legal_basis; it never
--- invents a citation. Amounts sit inside the statutory range quoted in each row.
+-- invents a citation. Each amount is the midpoint of the statutory bracket quoted in its
+-- row (Luật XLVPHC Điều 23 khoản 4), which the officer may move within the bracket.
 IF NOT EXISTS (SELECT 1 FROM PenaltyFeeSchedules WHERE violation_type = 'UNAUTHORIZED_BUSINESS_USE')
 BEGIN
     INSERT INTO PenaltyFeeSchedules (ward_unit_id, violation_type, penalty_amount, legal_basis, created_by)
@@ -180,7 +181,13 @@ BEGIN
         ('HYGIENE_LITTERING',         CAST(1500000 AS DECIMAL(18,0)),
             N'Nghị định 45/2022/NĐ-CP: vứt, thải, để rác thải sinh hoạt trên vỉa hè, lòng đường (khung 1.000.000 - 2.000.000đ)'),
         ('OBSTRUCT_PUBLIC_ORDER',     CAST(4000000 AS DECIMAL(18,0)),
-            N'Nghị định 144/2021/NĐ-CP: đổ rác, vật cản gây mất an ninh trật tự công cộng (khung 3.000.000 - 5.000.000đ)')
+            N'Nghị định 144/2021/NĐ-CP: đổ rác, vật cản gây mất an ninh trật tự công cộng (khung 3.000.000 - 5.000.000đ)'),
+        -- BUY-07 price complaints. Amounts are for an individual (Điều 3 khoản 4: an organisation
+        -- pays double); Nghị định 114/2026/NĐ-CP changed who may fine, not Điều 13.
+        ('PRICE_NOT_POSTED',          CAST(750000 AS DECIMAL(18,0)),
+            N'Nghị định 87/2024/NĐ-CP, Điều 13, khoản 1, điểm a: không niêm yết giá hàng hóa, dịch vụ bằng một trong các hình thức theo quy định của pháp luật; buộc niêm yết giá theo đúng quy định (khoản 4 điểm a) (khung 500.000 - 1.000.000đ)'),
+        ('PRICE_ABOVE_POSTED',        CAST(7500000 AS DECIMAL(18,0)),
+            N'Nghị định 87/2024/NĐ-CP, Điều 13, khoản 2: bán cao hơn giá niêm yết hàng hóa, dịch vụ do tổ chức, cá nhân định giá; buộc trả lại cho khách hàng số tiền đã thu cao hơn giá niêm yết (khoản 4 điểm b) (khung 5.000.000 - 10.000.000đ)')
     ) AS v(violation_type_code, amount, legal_basis);
 END;
 GO
@@ -500,8 +507,10 @@ END;
 GO
 
 /* SIDE-08 permits. qr_payload is a placeholder, NOT a real IPermitTokenService
-   token -- scanning one of these will not verify. Re-issue through the API when
-   testing WARD-11 / BUY-02 scan flows. */
+   token: a real one is signed with Permit:SigningKey, which differs per machine.
+   scripts/setup-local-db.ps1 signs these with the local key right after the seed
+   (dotnet run -- --sign-demo-permits); run on its own, the seed leaves them
+   unscannable. */
 IF NOT EXISTS (SELECT 1 FROM DigitalPermits)
 BEGIN
     SET IDENTITY_INSERT DigitalPermits ON;
@@ -665,25 +674,77 @@ BEGIN
 END;
 GO
 
+-- Each dish carries its real unit of sale (BUY-06). Bún chả Hải Châu serves tourists, so its
+-- vendor also typed English names; Cô Lan left them empty (optional, D8). Dishes date from
+-- their storefront's opening, so the price history below starts there too.
 IF NOT EXISTS (SELECT 1 FROM MenuItems)
 BEGIN
     SET IDENTITY_INSERT MenuItems ON;
-    INSERT INTO MenuItems (menu_item_id, storefront_id, category_id, item_name, description, unit_price, availability_status) VALUES
-        ( 1, 1, 3, N'Bánh mì thịt nướng', N'Bánh mì giòn, thịt nướng than hoa, rau thơm.', 25000, 'AVAILABLE'),
-        ( 2, 1, 3, N'Bánh mì chả cá',     N'Chả cá chiên nóng, sốt đặc biệt.',             25000, 'AVAILABLE'),
-        ( 3, 1, 3, N'Xôi gà xé',          N'Xôi nếp dẻo, gà xé phay, hành phi.',           30000, 'AVAILABLE'),
-        ( 4, 1, 3, N'Xôi xéo',            N'Xôi đậu xanh, mỡ hành, chà bông.',             25000, 'AVAILABLE'),
-        ( 5, 1, 4, N'Sữa đậu nành',       N'Sữa đậu nành nóng, không đường.',              10000, 'AVAILABLE'),
+    INSERT INTO MenuItems
+        (menu_item_id, storefront_id, category_id, item_name, item_name_en, description, unit_price, price_unit,
+         availability_status, created_at, updated_at)
+    VALUES
+        ( 1, 1, 3, N'Bánh mì thịt nướng', NULL, N'Bánh mì giòn, thịt nướng than hoa, rau thơm.', 25000, N'ổ',
+            'AVAILABLE', DATEADD(DAY, -28, SYSUTCDATETIME()), NULL),
+        ( 2, 1, 3, N'Bánh mì chả cá',     NULL, N'Chả cá chiên nóng, sốt đặc biệt.',             25000, N'ổ',
+            'AVAILABLE', DATEADD(DAY, -28, SYSUTCDATETIME()), NULL),
+        ( 3, 1, 3, N'Xôi gà xé',          NULL, N'Xôi nếp dẻo, gà xé phay, hành phi.',           30000, N'gói',
+            'AVAILABLE', DATEADD(DAY, -28, SYSUTCDATETIME()), NULL),
+        ( 4, 1, 3, N'Xôi xéo',            NULL, N'Xôi đậu xanh, mỡ hành, chà bông.',             25000, N'gói',
+            'AVAILABLE', DATEADD(DAY, -28, SYSUTCDATETIME()), NULL),
+        ( 5, 1, 4, N'Sữa đậu nành',       NULL, N'Sữa đậu nành nóng, không đường.',              10000, N'ly',
+            'AVAILABLE', DATEADD(DAY, -28, SYSUTCDATETIME()), NULL),
         -- Archived: a stall sells at most 5 dishes (MenuRules.MaxActiveItemsPerStorefront).
-        ( 6, 1, 4, N'Cà phê sữa đá',      N'Cà phê phin truyền thống.',                    18000, 'ARCHIVED'),
+        ( 6, 1, 4, N'Cà phê sữa đá',      NULL, N'Cà phê phin truyền thống.',                    18000, N'ly',
+            'ARCHIVED',  DATEADD(DAY, -28, SYSUTCDATETIME()), DATEADD(DAY, -14, SYSUTCDATETIME())),
 
-        ( 7, 2, 2, N'Bún chả Hà Nội',     N'Chả miếng, chả viên nướng than, nước mắm chua ngọt.', 45000, 'AVAILABLE'),
-        ( 8, 2, 2, N'Bún chả đặc biệt',   N'Thêm nem cua bể và chả viên.',                 65000, 'AVAILABLE'),
-        ( 9, 2, 5, N'Nem cua bể',         N'Nem vuông nhân cua bể, chiên giòn (2 cái).',   30000, 'AVAILABLE'),
-        (10, 2, 4, N'Trà đá',             N'Trà xanh đá, miễn phí khi ăn tại chỗ.',         3000, 'AVAILABLE'),
-        (11, 2, 4, N'Nước sâm',           N'Nước sâm lạnh nấu thủ công.',                 12000, 'ARCHIVED'),
-        (12, 2, 6, N'Chè đỗ đen',         N'Chè đỗ đen nước cốt dừa.',                     20000, 'AVAILABLE');
+        ( 7, 2, 2, N'Bún chả Hà Nội',     N'Hanoi grilled pork with noodles',
+            N'Chả miếng, chả viên nướng than, nước mắm chua ngọt.', 45000, N'suất',
+            'AVAILABLE', DATEADD(DAY, -10, SYSUTCDATETIME()), NULL),
+        ( 8, 2, 2, N'Bún chả đặc biệt',   N'Special grilled pork noodles',
+            N'Thêm nem cua bể và chả viên.',                 65000, N'suất',
+            'AVAILABLE', DATEADD(DAY, -10, SYSUTCDATETIME()), NULL),
+        ( 9, 2, 5, N'Nem cua bể',         N'Crab spring rolls (2 pieces)',
+            N'Nem vuông nhân cua bể, chiên giòn (2 cái).',   30000, N'đĩa',
+            'AVAILABLE', DATEADD(DAY, -10, SYSUTCDATETIME()), NULL),
+        (10, 2, 4, N'Trà đá',             N'Iced tea',
+            N'Trà xanh đá, miễn phí khi ăn tại chỗ.',         3000, N'ly',
+            'AVAILABLE', DATEADD(DAY, -10, SYSUTCDATETIME()), NULL),
+        (11, 2, 4, N'Nước sâm',           N'Herbal cooling drink',
+            N'Nước sâm lạnh nấu thủ công.',                 12000, N'ly',
+            'ARCHIVED',  DATEADD(DAY, -10, SYSUTCDATETIME()), DATEADD(DAY, -3, SYSUTCDATETIME())),
+        (12, 2, 6, N'Chè đỗ đen',         N'Black bean sweet soup',
+            N'Chè đỗ đen nước cốt dừa.',                     20000, N'ly',
+            'AVAILABLE', DATEADD(DAY, -10, SYSUTCDATETIME()), NULL);
     SET IDENTITY_INSERT MenuItems OFF;
+END;
+GO
+
+-- BUY-06 price history: one CREATED row per dish, written by the stall's vendor (vendor 1,
+-- account 5, owns both storefronts) when the dish was added; the two archived dishes also carry
+-- the ARCHIVED row that took them off the board, so the latest row of every dish matches the
+-- dish as it stands. Ids are pinned: history row n is dish n's CREATED row (13 and 14 are the
+-- archivals), and report 4 below points at row 7. Each board is therefore at "bản số 7".
+IF NOT EXISTS (SELECT 1 FROM MenuItemPriceHistory)
+BEGIN
+    SET IDENTITY_INSERT MenuItemPriceHistory ON;
+    INSERT INTO MenuItemPriceHistory
+        (price_history_id, menu_item_id, storefront_id, item_name, item_name_en, price_unit, unit_price,
+         is_listed, change_kind, changed_by, changed_at)
+    SELECT m.menu_item_id, m.menu_item_id, m.storefront_id, m.item_name, m.item_name_en, m.price_unit, m.unit_price,
+           1, 'CREATED', 5, m.created_at
+    FROM MenuItems m
+    WHERE m.menu_item_id BETWEEN 1 AND 12;
+
+    INSERT INTO MenuItemPriceHistory
+        (price_history_id, menu_item_id, storefront_id, item_name, item_name_en, price_unit, unit_price,
+         is_listed, change_kind, changed_by, changed_at)
+    SELECT v.price_history_id, m.menu_item_id, m.storefront_id, m.item_name, m.item_name_en, m.price_unit, m.unit_price,
+           0, 'ARCHIVED', 5, m.updated_at
+    FROM (VALUES (CAST(13 AS BIGINT), CAST(6 AS BIGINT)), (CAST(14 AS BIGINT), CAST(11 AS BIGINT)))
+        AS v(price_history_id, menu_item_id)
+    JOIN MenuItems m ON m.menu_item_id = v.menu_item_id;
+    SET IDENTITY_INSERT MenuItemPriceHistory OFF;
 END;
 GO
 
@@ -918,21 +979,51 @@ GO
    report. Fictional data throughout.
    ============================================================ */
 
--- Customer and community reports (BUY-05). No violation row points at a report: the
--- violations below leave source_report_id NULL.
+-- Customer and community reports (BUY-05, BUY-07, WARD-19): one of each kind the ward inbox
+-- shows. Officer 2 (ward 10) handles them all.
+--   1: PENDING, GENERAL, past its handling target (the "quá hạn" filter has a row)
+--   2: REVIEWED / VIOLATION_RECORDED: violation 4 below was raised from it (source_report_id 2)
+--   3: DISMISSED, with the reason the reporter reads
+--   4: PENDING OVERCHARGE with full price evidence: 2 suất Bún chả Hà Nội posted at 45.000đ
+--      (price history row 7, in force at purchase) = 90.000đ, charged 120.000đ
+--   5: REVIEWED / MEDIATED OVERCHARGE: the vendor refunded the 20.000đ difference at the stall
+-- due_at is the end (UTC+7) of a Vietnamese day about 7 working days after the report: the API
+-- computes it from BusinessCalendar; here it is written as calendar days so the seed has no
+-- holiday table to consult. At most one PENDING report per reporter and vendor
+-- (UQ_VendorReports_OnePendingPerReporter): 1 is customer 9's, 4 is customer 10's.
 IF NOT EXISTS (SELECT 1 FROM VendorReports)
 BEGIN
+    DECLARE @todayVn DATE = CAST(SWITCHOFFSET(SYSDATETIMEOFFSET(), '+07:00') AS DATE);
     SET IDENTITY_INSERT VendorReports ON;
     INSERT INTO VendorReports
         (report_id, reporter_user_id, vendor_id, slot_id, scanned_permit_id, report_reason,
-         report_status, reviewed_by, reviewed_at, created_at)
+         report_status, reviewed_by, reviewed_at, created_at,
+         report_type, menu_item_id, price_history_id, quantity, posted_amount, charged_amount, purchased_at,
+         due_at, resolution, resolution_note, refund_amount)
     VALUES
         (1, 9,  1,  NULL, NULL, N'Ô bày hàng lấn ra lối đi bộ vào giờ cao điểm buổi sáng.',
-            'PENDING', NULL, NULL, DATEADD(DAY, -1, SYSUTCDATETIME())),
-        (2, 10, NULL, 15, NULL, N'Có người bày bán tại ô NVL-15 nhưng không thấy giấy phép.',
-            'REVIEWED', 2, DATEADD(DAY, -1, SYSUTCDATETIME()), DATEADD(DAY, -2, SYSUTCDATETIME())),
+            'PENDING', NULL, NULL, DATEADD(DAY, -12, SYSUTCDATETIME()),
+            'GENERAL', NULL, NULL, NULL, NULL, NULL, NULL,
+            DATEADD(HOUR, 17, CAST(DATEADD(DAY, -3, @todayVn) AS DATETIME2)), NULL, NULL, NULL),
+        (2, 10, NULL, 9, NULL, N'Có người bày bán tại ô NVL-09 nhưng không thấy giấy phép.',
+            'REVIEWED', 2, DATEADD(DAY, -3, SYSUTCDATETIME()), DATEADD(DAY, -4, SYSUTCDATETIME()),
+            'GENERAL', NULL, NULL, NULL, NULL, NULL, NULL,
+            DATEADD(HOUR, 17, CAST(DATEADD(DAY, 5, @todayVn) AS DATETIME2)),
+            'VIOLATION_RECORDED', N'Đã lập biên bản vi phạm số 4 tại ô NVL-09.', NULL),
         (3, 9,  1,  NULL, 2, N'Nghi ngờ giấy phép giả.',
-            'DISMISSED', 2, DATEADD(DAY, -6, SYSUTCDATETIME()), DATEADD(DAY, -7, SYSUTCDATETIME()));
+            'DISMISSED', 2, DATEADD(DAY, -6, SYSUTCDATETIME()), DATEADD(DAY, -7, SYSUTCDATETIME()),
+            'GENERAL', NULL, NULL, NULL, NULL, NULL, NULL,
+            DATEADD(HOUR, 17, CAST(DATEADD(DAY, 2, @todayVn) AS DATETIME2)),
+            'DISMISSED', N'Cán bộ đã đối chiếu tại quầy: giấy phép còn hiệu lực và mã QR khớp với hệ thống, không có dấu hiệu giả mạo.', NULL),
+        (4, 10, 1,  8, 2, N'Gọi 2 suất bún chả Hà Nội, bảng giá ghi 45.000đ một suất nhưng bị tính 120.000đ.',
+            'PENDING', NULL, NULL, DATEADD(HOUR, -25, SYSUTCDATETIME()),
+            'OVERCHARGE', 7, 7, 2, 90000, 120000, DATEADD(HOUR, -26, SYSUTCDATETIME()),
+            DATEADD(HOUR, 17, CAST(DATEADD(DAY, 8, @todayVn) AS DATETIME2)), NULL, NULL, NULL),
+        (5, 9,  1,  1, 1, N'Mua 2 ổ bánh mì thịt nướng, bảng giá 25.000đ một ổ nhưng bị lấy 70.000đ.',
+            'REVIEWED', 2, DATEADD(DAY, -4, SYSUTCDATETIME()), DATEADD(DAY, -5, SYSUTCDATETIME()),
+            'OVERCHARGE', 1, 1, 2, 50000, 70000, DATEADD(HOUR, -121, SYSUTCDATETIME()),
+            DATEADD(HOUR, 17, CAST(DATEADD(DAY, 4, @todayVn) AS DATETIME2)),
+            'MEDIATED', N'Người bán xác nhận tính nhầm, đã hoàn lại 20.000đ cho khách tại quầy và cam kết treo bảng giá rõ ràng.', 20000);
     SET IDENTITY_INSERT VendorReports OFF;
 END;
 GO
@@ -962,9 +1053,10 @@ GO
    9. WARD COMPLIANCE, CONTINUED: A CONTRACT WITHOUT A SCHEDULE, VIOLATIONS, PENALTIES
    (WARD-12, FEE-01/04/05, SYS-03)
 
-   Violations 1 and 2 are on the contracts that exist; 3 is a customer report; 4 names
-   only a slot, so it has no penalty at all. Of the penalties, 1 is paid, 2 unpaid and
-   3 waived. Their payments are in section 12.
+   Violations 1 and 2 are on the contracts that exist; 3 is a customer report taken
+   outside the app (no report row); 4 was raised from report 2 and names only a slot, so
+   it has no penalty at all. Of the penalties, 1 is paid, 2 unpaid and 3 waived. Their
+   payments are in section 12.
 
    Contracts 1 and 2 already carry a hand-written fee schedule, which makes them
    useful for reading screens but useless for exercising SYS-03: regenerating a
@@ -1022,9 +1114,10 @@ BEGIN
         (3, 1, 1, 1, 'WASTE_DISPOSAL',
             N'Người dân phản ánh đổ nước thải ra vỉa hè cuối buổi bán.',
             NULL, 2, 'CUSTOMER_REPORT', NULL, DATEADD(DAY, -12, SYSUTCDATETIME())),
+        -- Raised from report 2 (WARD-19), which it closed as VIOLATION_RECORDED.
         (4, NULL, 9, NULL, 'NO_PERMIT',
             N'Xe đẩy bán hàng tại ô NVL-09 không xuất trình được giấy phép; chưa xác định được chủ.',
-            NULL, 2, 'ON_SITE', NULL, DATEADD(DAY, -3, SYSUTCDATETIME()));
+            NULL, 2, 'CUSTOMER_REPORT', 2, DATEADD(DAY, -3, SYSUTCDATETIME()));
     SET IDENTITY_INSERT Violations OFF;
 END;
 GO
@@ -1341,6 +1434,40 @@ BEGIN
 END;
 GO
 
+-- BUY-07 / WARD-19: what the reports in section 9 sent, worded as VendorReportNotices words it.
+-- The vendor (account 5) is told what was reported and how it ended, never who reported it and
+-- never the officer's note (written for the reporter, it may name them).
+IF NOT EXISTS (SELECT 1 FROM Notifications WHERE notification_type LIKE 'VENDOR_REPORT%')
+BEGIN
+    DECLARE @todayVn DATE = CAST(SWITCHOFFSET(SYSDATETIMEOFFSET(), '+07:00') AS DATE);
+    INSERT INTO Notifications
+        (user_id, notification_type, title, body, related_entity_type, related_entity_id, is_read, sent_at)
+    VALUES
+        (2, 'VENDOR_REPORT_NEW', N'Có phản ánh mới cần xử lý',
+            CONCAT(N'Bán cao hơn giá niêm yết: quầy "Bún chả Hải Châu" (ô NVL-08). Hạn xử lý: hết ngày ',
+                   FORMAT(DATEADD(DAY, 8, @todayVn), 'dd/MM/yyyy'), N'.'),
+            'VendorReport', 4, 0, DATEADD(HOUR, -25, SYSUTCDATETIME())),
+        (5, 'VENDOR_REPORT_AGAINST_YOU', N'Có khiếu nại về giá tại quầy của bạn',
+            N'Một khách báo bị tính 120.000đ cho 2 suất Bún chả Hà Nội, trong khi giá niêm yết lúc mua là 90.000đ. Hãy kiểm tra và chủ động hoàn phần chênh lệch nếu tính sai; phường sẽ xem xét và báo kết quả.',
+            'VendorReport', 4, 0, DATEADD(HOUR, -25, SYSUTCDATETIME())),
+        (9, 'VENDOR_REPORT_RESOLVED', N'Phản ánh của bạn đã có kết quả',
+            N'Phường đã hòa giải phản ánh về quầy "Bánh mì & Xôi Cô Lan", người bán hoàn lại 20.000đ. Người bán xác nhận tính nhầm, đã hoàn lại 20.000đ cho khách tại quầy và cam kết treo bảng giá rõ ràng.',
+            'VendorReport', 5, 1, DATEADD(DAY, -4, SYSUTCDATETIME())),
+        (5, 'VENDOR_REPORT_RESOLVED', N'Phản ánh về quầy của bạn đã được đóng',
+            N'Phường ghi nhận đã hòa giải phản ánh về quầy "Bánh mì & Xôi Cô Lan", người bán hoàn lại 20.000đ.',
+            'VendorReport', 5, 1, DATEADD(DAY, -4, SYSUTCDATETIME())),
+        (9, 'VENDOR_REPORT_RESOLVED', N'Phản ánh của bạn đã có kết quả',
+            N'Phường không chấp nhận phản ánh về quầy "Bún chả Hải Châu". Lý do: Cán bộ đã đối chiếu tại quầy: giấy phép còn hiệu lực và mã QR khớp với hệ thống, không có dấu hiệu giả mạo.',
+            'VendorReport', 3, 1, DATEADD(DAY, -6, SYSUTCDATETIME())),
+        (5, 'VENDOR_REPORT_RESOLVED', N'Phản ánh về quầy của bạn đã được đóng',
+            N'Phường đã xem xét và không chấp nhận phản ánh về quầy "Bún chả Hải Châu".',
+            'VendorReport', 3, 1, DATEADD(DAY, -6, SYSUTCDATETIME())),
+        (10, 'VENDOR_REPORT_RESOLVED', N'Phản ánh của bạn đã có kết quả',
+            N'Phường đã lập biên bản vi phạm đối với quầy tại ô NVL-09 từ phản ánh của bạn. Đã lập biên bản vi phạm số 4 tại ô NVL-09.',
+            'VendorReport', 2, 0, DATEADD(DAY, -3, SYSUTCDATETIME()));
+END;
+GO
+
 
 /* ============================================================
    Summary
@@ -1362,6 +1489,8 @@ SELECT
     (SELECT COUNT(*) FROM PaymentCallbackEvents)  AS [callbacks],
     (SELECT COUNT(*) FROM Storefronts)            AS [storefronts],
     (SELECT COUNT(*) FROM MenuItems)              AS [menu_items],
+    (SELECT COUNT(*) FROM MenuItemPriceHistory)   AS [price_history],
+    (SELECT COUNT(*) FROM VendorReports)          AS [vendor_reports],
     (SELECT COUNT(*) FROM Orders)                 AS [orders],
     (SELECT COUNT(*) FROM SlotTransferRequests)   AS [transfers],
     (SELECT COUNT(*) FROM Notifications)          AS [notifications];

@@ -1,4 +1,7 @@
 
+using StreetBiz.Application.Common.Models;
+using StreetBiz.Application.DTOs.Community;
+
 namespace StreetBiz.Application.Features.AiMarketplace;
 
 #region Read models
@@ -31,7 +34,28 @@ public sealed record VendorReportContextRow(
     string? PermitContractStatus,
     string? PermitSlotCode,
     long? PermitSlotId,
-    IReadOnlyList<int> WardIds);
+    IReadOnlyList<int> WardIds,
+    string ReportType = "GENERAL",
+    DateTime? DueAt = null,
+    VendorReportOutcomeRow? Outcome = null,
+    VendorReportPriceEvidenceRow? PriceEvidence = null,
+    int ReportsAgainstVendor90Days = 0,
+    long? ViolationId = null);
+
+/// <summary>How an officer closed a report (WARD-19); null while it is pending.</summary>
+public sealed record VendorReportOutcomeRow(
+    string Resolution,
+    string? Note,
+    decimal? RefundAmount,
+    DateTime? ReviewedAt,
+    string? ReviewedByName);
+
+/// <param name="Overdue">true: only pending reports past their due time; false: all others.</param>
+public sealed record VendorReportListFilter(
+    string? Status,
+    string? Type,
+    bool? Overdue,
+    DateTime NowUtc);
 
 public interface IAiMarketplaceRepository
 {
@@ -45,8 +69,12 @@ public interface IAiMarketplaceRepository
 
     Task<VendorReportContextRow?> GetVendorReportAsync(long reportId, CancellationToken cancellationToken);
 
+    /// <summary>
+    /// The ward's reports, pending and overdue first, then pending by nearest due time, then the
+    /// closed ones newest first.
+    /// </summary>
     Task<IReadOnlyList<VendorReportContextRow>> ListVendorReportsForWardAsync(
-        int wardId, string? status, int page, int pageSize, CancellationToken cancellationToken);
+        int wardId, VendorReportListFilter filter, int page, int pageSize, CancellationToken cancellationToken);
 
     /// <summary>True when a vendor report of the officer's ward carries this evidence file (so that officer may open it).</summary>
     Task<bool> ReportEvidenceBelongsToWardAsync(string evidenceUrl, int wardId, CancellationToken cancellationToken);
@@ -138,6 +166,11 @@ public sealed record VendorReportAssistDto(
     long? AiLogId,
     string Disclaimer);
 
+/// <param name="PriceEvidence">An overcharge's evidence: the posted price at purchase (server-computed),
+/// the quantity, the amount charged and the difference.</param>
+/// <param name="ReportsAgainstVendor90Days">Context only: never a score, never a reason to act alone.</param>
+/// <param name="SuggestedViolationType">The type "Lập biên bản" pre-selects: rule-based, not AI.</param>
+/// <param name="ViolationId">The biên bản raised from this report, if any.</param>
 public sealed record WardVendorReportDto(
     long ReportId,
     string Reason,
@@ -147,7 +180,25 @@ public sealed record WardVendorReportDto(
     string? VendorName,
     string? SlotCode,
     string? AiExtractedLocation,
-    VendorReportAssistDto Assist);
+    VendorReportAssistDto Assist,
+    string ReportType = "GENERAL",
+    DateTime? DueAt = null,
+    bool IsOverdue = false,
+    long? VendorId = null,
+    long? SlotId = null,
+    long? ScannedPermitId = null,
+    VendorReportPriceEvidenceDto? PriceEvidence = null,
+    VendorReportOutcomeDto? Outcome = null,
+    int ReportsAgainstVendor90Days = 0,
+    string? SuggestedViolationType = null,
+    long? ViolationId = null);
+
+public sealed record VendorReportOutcomeDto(
+    string Resolution,
+    string? Note,
+    decimal? RefundAmount,
+    DateTime? ReviewedAt,
+    string? ReviewedByName);
 
 #endregion
 

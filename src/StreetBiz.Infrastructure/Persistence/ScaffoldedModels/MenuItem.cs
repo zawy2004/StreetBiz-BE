@@ -13,11 +13,15 @@ public partial class MenuItem
 
     public string item_name { get; set; } = null!;
 
+    public string? item_name_en { get; set; }
+
     public string? description { get; set; }
 
     public string? image_url { get; set; }
 
     public decimal unit_price { get; set; }
+
+    public string price_unit { get; set; } = null!;
 
     public string availability_status { get; set; } = null!;
 
@@ -26,6 +30,8 @@ public partial class MenuItem
     public DateTime? updated_at { get; set; }
 
     public virtual ICollection<FoodSafetyApplicationItem> FoodSafetyApplicationItems { get; set; } = new List<FoodSafetyApplicationItem>();
+
+    public virtual ICollection<MenuItemPriceHistory> MenuItemPriceHistories { get; set; } = new List<MenuItemPriceHistory>();
 
     public virtual ICollection<OrderItem> OrderItems { get; set; } = new List<OrderItem>();
 

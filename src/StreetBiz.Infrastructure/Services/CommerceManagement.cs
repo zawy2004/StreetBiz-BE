@@ -5,6 +5,7 @@ using StreetBiz.Application.Common.Interfaces;
 using StreetBiz.Application.Common.Security;
 using StreetBiz.Application.Features.Commerce;
 using StreetBiz.Application.Common.Models;
+using StreetBiz.Application.DTOs.Community;
 using StreetBiz.Application.Features.FoodSafety;
 using StreetBiz.Infrastructure.Persistence;
 using StreetBiz.Infrastructure.Persistence.ScaffoldedModels;
@@ -12,7 +13,8 @@ using StreetBiz.Infrastructure.Persistence.ScaffoldedModels;
 namespace StreetBiz.Infrastructure.Services;
 
 public sealed class CommerceManagement(StreetBizDbContext db, IVendorContext vendors,
-    ICustomerContext customers, IFileStorage storage, TimeProvider clock) : ICommerceManagement
+    ICustomerContext customers, IFileStorage storage, TimeProvider clock, IPermitLinks? permitLinks = null,
+    IPermitTokenService? permitTokens = null) : ICommerceManagement
 {
     private DateTime Now => clock.GetUtcNow().UtcDateTime;
     private DateOnly Today => DateOnly.FromDateTime(Now.AddHours(7));
@@ -155,7 +157,7 @@ public sealed class CommerceManagement(StreetBizDbContext db, IVendorContext ven
             .OrderBy(x => x.menu_item_id).Select(x => new
             {
                 x.menu_item_id, x.storefront_id, x.category_id, x.category.category_name, x.category.requires_food_safety,
-                x.item_name, x.description, x.unit_price, x.availability_status, x.image_url,
+                x.item_name, x.description, x.unit_price, x.availability_status, x.image_url, x.item_name_en, x.price_unit,
                 Applications = x.FoodSafetyApplicationItems
                     .Select(a => new { a.application.application_status, a.application.expires_on }).ToList(),
             }).ToListAsync(ct);
@@ -169,7 +171,8 @@ public sealed class CommerceManagement(StreetBizDbContext db, IVendorContext ven
                 : x.Applications.Any(a => FoodSafetyStatuses.Open.Contains(a.application_status)) ? DishFoodSafetyStatuses.Pending
                 : DishFoodSafetyStatuses.Missing;
             return new SellerMenuItemDto(x.menu_item_id, x.storefront_id, x.category_id, x.item_name, x.description,
-                x.unit_price, x.availability_status, x.image_url, x.category_name, x.requires_food_safety, status, expiresOn);
+                x.unit_price, x.availability_status, x.image_url, x.category_name, x.requires_food_safety, status, expiresOn,
+                x.item_name_en, x.price_unit);
         }).ToList();
         return new SellerMenuDto(items, MenuRules.MaxActiveItemsPerStorefront);
     }
@@ -181,6 +184,12 @@ public sealed class CommerceManagement(StreetBizDbContext db, IVendorContext ven
         OptionalText(input.Description, 500);
         if (input.UnitPrice <= 0 || input.UnitPrice > 50_000_000 || decimal.Truncate(input.UnitPrice) != input.UnitPrice)
             throw new DomainRuleException("Giá món phải là số nguyên VND từ 1 đến 50.000.000.");
+        // BUY-06: a posted price names its unit (Luật Giá 2023 Điều 29); the English name is optional (D8).
+        Text(input.PriceUnit, PriceBoardRules.PriceUnitMaxLength, "Đơn vị tính");
+        if (input.NameEn?.Trim().Length > PriceBoardRules.NameEnMaxLength)
+            throw new DomainRuleException($"Tên tiếng Anh tối đa {PriceBoardRules.NameEnMaxLength} ký tự.");
+        var priceUnit = input.PriceUnit!.Trim();
+        var nameEn = string.IsNullOrWhiteSpace(input.NameEn) ? null : input.NameEn.Trim();
         if (input.AvailabilityStatus is not ("AVAILABLE" or "SOLD_OUT"))
             throw new DomainRuleException("Trạng thái món không hợp lệ.");
         var imageUrl = string.IsNullOrWhiteSpace(input.ImageUrl) ? null : input.ImageUrl.Trim();
@@ -212,6 +221,7 @@ public sealed class CommerceManagement(StreetBizDbContext db, IVendorContext ven
                     (FoodSafetyStatuses.Open.Contains(x.application.application_status) ||
                      (x.application.application_status == FoodSafetyStatuses.Approved && x.application.expires_on >= Today)), ct))
                 throw new ConflictException("Món đang có hồ sơ hoặc giấy ATTP; không thể đổi tên hay danh mục. Hãy thêm món mới.");
+            var before = itemId.HasValue ? PriceBoards.Snapshot(item) : default;
             if (!itemId.HasValue)
             {
                 item.storefront_id = storeId;
@@ -219,12 +229,20 @@ public sealed class CommerceManagement(StreetBizDbContext db, IVendorContext ven
                 db.MenuItems.Add(item);
             }
             item.item_name = input.Name.Trim();
+            item.item_name_en = nameEn;
             item.description = input.Description?.Trim();
             item.category_id = input.CategoryId;
             item.unit_price = input.UnitPrice;
+            item.price_unit = priceUnit;
             item.availability_status = input.AvailabilityStatus;
             if (imageUrl is not null) item.image_url = imageUrl;
             item.updated_at = Now;
+            // Price history in the same transaction (BUY-06): a new dish, or any change to what the
+            // board says about it. A new photo or description is not a new price.
+            if (!itemId.HasValue)
+                PriceBoards.Record(db, item, PriceBoardRules.Created, await OwnerUserId(vendor, ct), Now);
+            else if (PriceBoards.Snapshot(item) != before)
+                PriceBoards.Record(db, item, PriceBoardRules.Updated, await OwnerUserId(vendor, ct), Now);
             await db.SaveChangesAsync(ct);
             savedId = item.menu_item_id;
             return true;
@@ -240,12 +258,83 @@ public sealed class CommerceManagement(StreetBizDbContext db, IVendorContext ven
             await OwnedStore(storeId, vendor, ct);
             var item = await db.MenuItems.SingleOrDefaultAsync(x => x.menu_item_id == itemId && x.storefront_id == storeId, ct)
                 ?? throw new NotFoundException("Không tìm thấy món.");
+            var wasListed = PriceBoardRules.IsListed(item.availability_status);
             item.availability_status = "ARCHIVED";
             item.updated_at = Now;
+            // Taking a dish off the board is a board change; one already off it (hidden) is not.
+            if (wasListed)
+                PriceBoards.Record(db, item, PriceBoardRules.Archived, await OwnerUserId(vendor, ct), Now);
             await db.SaveChangesAsync(ct);
             return true;
         }, ct);
     }
+
+    /// <summary>
+    /// BUY-06: the board as it stands, its version, the 50 latest changes with the price before each,
+    /// and the public links for one paper board per slot the business holds. Each link wraps that
+    /// slot's live permit token (never a new code); without one, or without Permit:PublicScanBaseUrl,
+    /// they are null.
+    /// </summary>
+    public async Task<SellerPriceBoardDto> PriceBoard(long storeId, CancellationToken ct)
+    {
+        var vendor = await vendors.RequireVendorIdAsync(ct);
+        var board = await PriceBoards.ReadAsync(db,
+                db.Storefronts.Where(x => x.storefront_id == storeId && x.registration.vendor_id == vendor), ct)
+            ?? throw new NotFoundException("Không tìm thấy gian hàng của bạn.");
+        var history = await db.MenuItemPriceHistories.AsNoTracking()
+            .Where(x => x.storefront_id == storeId)
+            .OrderByDescending(x => x.changed_at).ThenByDescending(x => x.price_history_id)
+            .Take(PriceBoardRules.HistoryTake)
+            .Select(x => new
+            {
+                x.price_history_id, x.menu_item_id, x.item_name, x.item_name_en, x.price_unit, x.unit_price,
+                x.is_listed, x.change_kind, x.changed_at,
+                ChangedByRole = x.changed_byNavigation.role_code,
+                ChangedByName = x.changed_byNavigation.full_name,
+                PreviousUnitPrice = db.MenuItemPriceHistories
+                    .Where(p => p.menu_item_id == x.menu_item_id && p.price_history_id < x.price_history_id)
+                    .OrderByDescending(p => p.price_history_id)
+                    .Select(p => (decimal?)p.unit_price)
+                    .FirstOrDefault(),
+            })
+            .ToListAsync(ct);
+        // Every slot of this business with a permit that is live (or about to be): one paper board each.
+        // A token that does not parse (the demo seed's DO-NOT-SCAN placeholders) would print a QR that
+        // can only ever fail, so it is left out.
+        var registrationId = await db.Storefronts.AsNoTracking()
+            .Where(x => x.storefront_id == board.StorefrontId).Select(x => x.registration_id).SingleAsync(ct);
+        var today = Today;
+        var permits = await db.DigitalPermits.AsNoTracking()
+            .Where(x => x.permit_status == PermitStatuses.Active
+                && x.contract.contract_status == ContractStatuses.Active
+                && x.contract.end_date >= today
+                && x.contract.application.registration_id == registrationId)
+            .OrderBy(x => x.contract_id == board.ContractId ? 0 : 1).ThenBy(x => x.contract.slot.slot_code)
+            .Select(x => new { x.permit_id, x.contract_id, SlotCode = x.contract.slot.slot_code, x.qr_payload })
+            .ToListAsync(ct);
+        var boards = permits
+            .Where(x => permitTokens is null || permitTokens.TryParse(x.qr_payload, out _))
+            .Select(x => new PriceBoardPermitDto(x.permit_id, x.contract_id, x.SlotCode,
+                permitLinks?.ScanUrl(x.qr_payload, board.Version), permitLinks?.PrintUrl(x.qr_payload)))
+            .ToList();
+        return new SellerPriceBoardDto(
+            board.StorefrontId,
+            board.StorefrontName,
+            board.SlotCode,
+            board.Version,
+            board.UpdatedAt is { } updated ? DateTime.SpecifyKind(updated, DateTimeKind.Utc) : null,
+            boards.FirstOrDefault()?.QrUrl,
+            boards.FirstOrDefault()?.PrintUrl,
+            board.Items.Select(x => new PriceBoardItemDto(x.MenuItemId, x.Name, x.NameEn, x.PriceUnit, x.UnitPrice)).ToList(),
+            history.Select(x => new PriceHistoryEntryDto(
+                x.price_history_id, x.menu_item_id, x.item_name, x.item_name_en, x.price_unit, x.unit_price,
+                x.PreviousUnitPrice, x.is_listed, x.change_kind, DateTime.SpecifyKind(x.changed_at, DateTimeKind.Utc),
+                x.ChangedByRole == RoleCodes.Vendor ? x.ChangedByName ?? "Người bán" : "Quản trị viên")).ToList(),
+            boards);
+    }
+
+    private Task<long> OwnerUserId(long vendor, CancellationToken ct) =>
+        db.Vendors.Where(x => x.vendor_id == vendor).Select(x => x.user_id).SingleAsync(ct);
 
     public async Task<IReadOnlyList<CustomerComplaintDto>> Complaints(long orderId, CancellationToken ct)
     {

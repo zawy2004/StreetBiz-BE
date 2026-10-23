@@ -7,11 +7,15 @@ using System.Security.Claims;
 using StreetBiz.API.Extensions;
 using StreetBiz.Application;
 using StreetBiz.Application.Common.Models;
+using StreetBiz.Application.Common.Security;
 using StreetBiz.Infrastructure;
+using StreetBiz.Infrastructure.Persistence;
 using StreetBiz.Infrastructure.Storage;
 using StreetBiz.API.Hubs;
 
-var builder = WebApplication.CreateBuilder(args);
+// `--sign-demo-permits` is a one-off development command (see DemoPermits), not configuration.
+var signDemoPermits = args.Contains(DemoPermits.CommandLineSwitch);
+var builder = WebApplication.CreateBuilder(args.Where(arg => arg != DemoPermits.CommandLineSwitch).ToArray());
 
 builder.Host.UseSerilog((context, services, configuration) =>
 {
@@ -144,6 +148,26 @@ builder.Services
         tags: ["database", "ready"]);
 
 var app = builder.Build();
+
+if (signDemoPermits)
+{
+    // Run by scripts/setup-local-db.ps1 right after the demo seed: sign its placeholder permits with
+    // this machine's Permit:SigningKey, then exit without serving anything.
+    if (!app.Environment.IsDevelopment())
+    {
+        Console.Error.WriteLine($"{DemoPermits.CommandLineSwitch} only runs in Development.");
+        Environment.ExitCode = 1;
+        return;
+    }
+
+    using var scope = app.Services.CreateScope();
+    var signed = await DemoPermits.SignPlaceholdersAsync(
+        scope.ServiceProvider.GetRequiredService<StreetBizDbContext>(),
+        scope.ServiceProvider.GetRequiredService<IPermitTokenService>(),
+        CancellationToken.None);
+    Console.WriteLine($"Signed {signed} demo permit(s) with this machine's Permit:SigningKey.");
+    return;
+}
 
 // Request logging wraps the exception handler so it records the status the client
 // actually received (a validation failure is a 400, not a 500).

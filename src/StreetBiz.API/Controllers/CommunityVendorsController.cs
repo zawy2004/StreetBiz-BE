@@ -2,6 +2,8 @@ using MediatR;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
+using Microsoft.Net.Http.Headers;
+using StreetBiz.Application.Common.Security;
 using StreetBiz.Application.DTOs.Community;
 using StreetBiz.Application.Features.CommunityVendors;
 
@@ -24,18 +26,26 @@ public sealed class CommunityVendorsController(ISender sender) : ControllerBase
             new SearchActiveVendorsQuery(latitude, longitude, radiusMeters, take),
             cancellationToken));
 
-    /// <summary>BUY-02: cryptographically verify a permit QR and its live database status.</summary>
+    /// <summary>
+    /// BUY-02 / BUY-06: cryptographically verify a permit QR (the bare token or a /q/{token} link)
+    /// and its live database status, with the stall's price board when the permit is VALID.
+    /// BR-39: a conclusion is never to be reused, so the response forbids every cache.
+    /// </summary>
     [AllowAnonymous]
     [EnableRateLimiting("PublicPermitCheck")]
     [HttpPost("permits/verify")]
     public async Task<ActionResult<PermitVerificationDto>> VerifyPermit(
         VerifyPermitRequest request,
-        CancellationToken cancellationToken) =>
-        Ok(await sender.Send(new VerifyPublicPermitCommand(
+        CancellationToken cancellationToken)
+    {
+        Response.GetTypedHeaders().CacheControl = new CacheControlHeaderValue { NoStore = true };
+        return Ok(await sender.Send(new VerifyPublicPermitCommand(
             request.QrPayload,
             request.Latitude,
             request.Longitude,
-            request.PhotoUrl), cancellationToken));
+            request.PhotoUrl,
+            request.PrintedVersion), cancellationToken));
+    }
 
     /// <summary>BUY-03: public identity, permit, location, ratings and comments.</summary>
     [AllowAnonymous]
@@ -57,8 +67,13 @@ public sealed class CommunityVendorsController(ISender sender) : ControllerBase
             request.Rating,
             request.CommentText), cancellationToken));
 
-    /// <summary>BUY-05: report a suspicious vendor to the responsible ward workflow.</summary>
+    /// <summary>
+    /// BUY-05 / BUY-07: report a vendor to the responsible ward. An OVERCHARGE names the dish, the
+    /// quantity, the amount charged and when; the posted price is the server's, from the price history
+    /// at that moment. 409 while the caller already has a pending report about this vendor.
+    /// </summary>
     [Authorize]
+    [EnableRateLimiting("CommunityReport")]
     [HttpPost("vendors/{vendorId:long}/reports")]
     public async Task<ActionResult<VendorReportReceiptDto>> Report(
         long vendorId,
@@ -69,21 +84,45 @@ public sealed class CommunityVendorsController(ISender sender) : ControllerBase
             request.Reason,
             request.EvidenceUrl,
             request.SlotId,
-            request.ScannedPermitId), cancellationToken));
+            request.ScannedPermitId,
+            request.ReportType ?? VendorReportTypes.General,
+            request.MenuItemId,
+            request.Quantity,
+            request.ChargedAmount,
+            request.PurchasedAt), cancellationToken));
+
+    /// <summary>"Phản ánh của tôi": the calling customer's reports with their status, due time and outcome.</summary>
+    [Authorize]
+    [HttpGet("my-reports")]
+    public async Task<ActionResult<IReadOnlyList<MyVendorReportDto>>> MyReports(
+        [FromQuery] int page,
+        CancellationToken cancellationToken) =>
+        Ok(await sender.Send(new ListMyVendorReportsQuery(page < 1 ? 1 : page), cancellationToken));
 }
 
 public sealed record VerifyPermitRequest(
     string QrPayload,
     decimal? Latitude,
     decimal? Longitude,
-    string? PhotoUrl);
+    string? PhotoUrl,
+    int? PrintedVersion = null);
 
 public sealed record UpsertVendorCommentRequest(
     short Rating,
     string CommentText);
 
+/// <summary>
+/// There is deliberately no posted-price field: the posted price of an OVERCHARGE is computed by the
+/// server from MenuItemPriceHistory at <see cref="PurchasedAt"/>, and anything else a client sends is
+/// ignored.
+/// </summary>
 public sealed record ReportSuspiciousVendorRequest(
-    string Reason,
+    string? Reason,
     string? EvidenceUrl,
     long? SlotId,
-    long? ScannedPermitId);
+    long? ScannedPermitId,
+    string? ReportType = null,
+    long? MenuItemId = null,
+    int? Quantity = null,
+    decimal? ChargedAmount = null,
+    DateTimeOffset? PurchasedAt = null);

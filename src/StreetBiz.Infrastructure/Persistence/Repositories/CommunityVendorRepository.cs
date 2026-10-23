@@ -1,5 +1,6 @@
 using System.Data;
 using Microsoft.EntityFrameworkCore;
+using StreetBiz.Application.Common.Exceptions;
 using StreetBiz.Application.Common.Interfaces;
 using StreetBiz.Application.Common.Models;
 using StreetBiz.Application.Common.Security;
@@ -242,22 +243,248 @@ public sealed class CommunityVendorRepository(
         long vendorId,
         long customerUserId,
         CustomerVendorReport report,
+        NewVendorReportNotices notices,
         CancellationToken cancellationToken)
     {
-        var entity = new VendorReport
+        var strategy = dbContext.Database.CreateExecutionStrategy();
+        try
         {
-            vendor_id = vendorId,
-            reporter_user_id = customerUserId,
-            slot_id = report.SlotId,
-            scanned_permit_id = report.ScannedPermitId,
-            report_reason = report.Reason,
-            evidence_url = report.EvidenceUrl,
-            report_status = VendorReportStatuses.Pending,
-            created_at = clock.GetUtcNow().UtcDateTime,
-        };
-        dbContext.VendorReports.Add(entity);
-        await dbContext.SaveChangesAsync(cancellationToken);
-        return entity.report_id;
+            return await strategy.ExecuteAsync(async () =>
+            {
+                dbContext.ChangeTracker.Clear();
+                await using var transaction = await dbContext.Database.BeginTransactionAsync(
+                    IsolationLevel.Serializable,
+                    cancellationToken);
+                var now = clock.GetUtcNow().UtcDateTime;
+                var entity = new VendorReport
+                {
+                    vendor_id = vendorId,
+                    reporter_user_id = customerUserId,
+                    slot_id = report.SlotId,
+                    scanned_permit_id = report.ScannedPermitId,
+                    report_reason = report.Reason,
+                    evidence_url = report.EvidenceUrl,
+                    report_status = VendorReportStatuses.Pending,
+                    report_type = report.ReportType,
+                    menu_item_id = report.MenuItemId,
+                    price_history_id = report.PriceHistoryId,
+                    quantity = report.Quantity,
+                    posted_amount = report.PostedAmount,
+                    charged_amount = report.ChargedAmount,
+                    purchased_at = report.PurchasedAt,
+                    due_at = report.DueAt,
+                    created_at = now,
+                };
+                dbContext.VendorReports.Add(entity);
+                await dbContext.SaveChangesAsync(cancellationToken);
+
+                // The officers who will see it in their inbox, by the same routes the inbox uses.
+                var wards = await VendorReportRecords.WardIdsAsync(
+                    dbContext, vendorId, report.SlotId, report.ScannedPermitId, cancellationToken);
+                var officers = await dbContext.UserAccounts.AsNoTracking()
+                    .Where(user => user.role_code == RoleCodes.WardAuthority
+                        && user.account_status == AccountStatuses.Active
+                        && user.ward_unit_id != null
+                        && wards.Contains(user.ward_unit_id.Value))
+                    .Select(user => user.user_id)
+                    .ToListAsync(cancellationToken);
+                foreach (var officer in officers)
+                {
+                    VendorReportRecords.Notify(dbContext, officer, notices.ForWard, entity.report_id, now,
+                        VendorReportNotificationTypes.New);
+                }
+
+                if (await dbContext.Vendors.AsNoTracking().Where(vendor => vendor.vendor_id == vendorId)
+                        .Select(vendor => (long?)vendor.user_id).SingleOrDefaultAsync(cancellationToken) is { } vendorUserId)
+                {
+                    VendorReportRecords.Notify(dbContext, vendorUserId, notices.ForVendor, entity.report_id, now,
+                        VendorReportNotificationTypes.AgainstYou);
+                }
+
+                await dbContext.SaveChangesAsync(cancellationToken);
+                await transaction.CommitAsync(cancellationToken);
+                return entity.report_id;
+            });
+        }
+        catch (DbUpdateException)
+        {
+            // Two submissions racing past the handler's check: UQ_VendorReports_OnePendingPerReporter
+            // lets one in. The other gets the same answer the check gives.
+            dbContext.ChangeTracker.Clear();
+            if (await HasPendingReportAsync(customerUserId, vendorId, cancellationToken))
+            {
+                throw new ConflictException(CommunityMessages.DuplicatePendingReport);
+            }
+
+            throw;
+        }
     }
 
+    public async Task<ReportTargetRow?> GetReportTargetAsync(
+        long vendorId,
+        long? scannedPermitId,
+        CancellationToken cancellationToken)
+    {
+        if (!await dbContext.Vendors.AsNoTracking().AnyAsync(vendor => vendor.vendor_id == vendorId, cancellationToken))
+        {
+            return null;
+        }
+
+        var (name, slotCode) = await VendorReportRecords.SubjectAsync(
+            dbContext,
+            new VendorReport { vendor_id = vendorId, scanned_permit_id = scannedPermitId },
+            cancellationToken);
+        // No registration means no ward to send the report to.
+        return name is null ? null : new ReportTargetRow(vendorId, name, slotCode);
+    }
+
+    public async Task<PostedPriceRow?> FindPostedPriceAsync(
+        long vendorId,
+        long menuItemId,
+        DateTime atUtc,
+        CancellationToken cancellationToken)
+    {
+        var item = await dbContext.MenuItems.AsNoTracking()
+            .Where(row => row.menu_item_id == menuItemId && row.storefront.registration.vendor_id == vendorId)
+            .Select(row => new
+            {
+                row.menu_item_id,
+                row.storefront_id,
+                row.item_name,
+                row.storefront.storefront_name,
+                row.storefront.contract.slot.slot_code,
+            })
+            .SingleOrDefaultAsync(cancellationToken);
+        if (item is null)
+        {
+            return null;
+        }
+
+        // The row in force at the purchase: the last one written at or before it. Later rows (a price
+        // raised after the sale) cannot change what was posted then.
+        var posted = await dbContext.MenuItemPriceHistories.AsNoTracking()
+            .Where(row => row.menu_item_id == menuItemId && row.changed_at <= atUtc)
+            .OrderByDescending(row => row.changed_at)
+            .ThenByDescending(row => row.price_history_id)
+            .FirstOrDefaultAsync(cancellationToken);
+        return new PostedPriceRow(
+            item.menu_item_id,
+            item.storefront_id,
+            item.storefront_name,
+            item.slot_code,
+            posted?.price_history_id,
+            posted?.item_name ?? item.item_name,
+            posted?.price_unit,
+            posted?.unit_price,
+            posted?.is_listed ?? false,
+            posted?.changed_at);
+    }
+
+    public Task<bool> HasPendingReportAsync(
+        long reporterUserId,
+        long vendorId,
+        CancellationToken cancellationToken) =>
+        dbContext.VendorReports.AsNoTracking().AnyAsync(
+            report => report.reporter_user_id == reporterUserId
+                && report.vendor_id == vendorId
+                && report.report_status == VendorReportStatuses.Pending,
+            cancellationToken);
+
+    /// <summary>
+    /// The board of the household business holding <paramref name="contractId"/>. A business has one
+    /// storefront (one per registration) however many slots it rents, so the permit of every one of
+    /// its slots shows that same board, not only the slot the storefront was opened on.
+    /// </summary>
+    public Task<PriceBoardRow?> GetPriceBoardByContractAsync(
+        long contractId,
+        CancellationToken cancellationToken)
+    {
+        var registrationIds = dbContext.RentalContracts
+            .Where(contract => contract.contract_id == contractId)
+            .Select(contract => contract.application.registration_id);
+        return PriceBoards.ReadAsync(
+            dbContext,
+            dbContext.Storefronts.Where(storefront => registrationIds.Contains(storefront.registration_id)),
+            cancellationToken);
+    }
+
+    public async Task<IReadOnlyList<MyVendorReportRow>> ListMyReportsAsync(
+        long reporterUserId,
+        int page,
+        int pageSize,
+        CancellationToken cancellationToken)
+    {
+        var rows = await dbContext.VendorReports.AsNoTracking()
+            .Where(report => report.reporter_user_id == reporterUserId)
+            .OrderByDescending(report => report.created_at)
+            .ThenByDescending(report => report.report_id)
+            .Skip((page - 1) * pageSize)
+            .Take(pageSize)
+            .Select(report => new
+            {
+                report.report_id,
+                report.vendor_id,
+                StoreName = report.menu_item != null ? report.menu_item.storefront.storefront_name : null,
+                PermitName = report.scanned_permit != null
+                    ? report.scanned_permit.contract.application.registration.display_name
+                    : null,
+                VendorName = dbContext.BusinessRegistrations
+                    .Where(registration => registration.vendor_id == report.vendor_id)
+                    .OrderByDescending(registration => registration.registration_id)
+                    .Select(registration => registration.display_name)
+                    .FirstOrDefault(),
+                SlotCode = report.slot != null ? report.slot.slot_code
+                    : report.scanned_permit != null ? report.scanned_permit.contract.slot.slot_code
+                    : report.menu_item != null ? report.menu_item.storefront.contract.slot.slot_code
+                    : null,
+                report.report_type,
+                report.report_reason,
+                report.report_status,
+                report.created_at,
+                report.due_at,
+                report.resolution,
+                report.resolution_note,
+                report.refund_amount,
+                report.reviewed_at,
+                report.evidence_url,
+                report.menu_item_id,
+                report.quantity,
+                report.posted_amount,
+                report.charged_amount,
+                report.purchased_at,
+                PriceItemName = report.price_history != null ? report.price_history.item_name : null,
+                PriceUnit = report.price_history != null ? report.price_history.price_unit : null,
+                PriceUnitAmount = report.price_history != null ? (decimal?)report.price_history.unit_price : null,
+                PriceChangedAt = report.price_history != null ? (DateTime?)report.price_history.changed_at : null,
+                PriceVersion = report.price_history != null
+                    ? dbContext.MenuItemPriceHistories.Count(row =>
+                        row.storefront_id == report.price_history.storefront_id
+                        && row.price_history_id <= report.price_history.price_history_id)
+                    : 0,
+            })
+            .ToListAsync(cancellationToken);
+
+        return rows.Select(row => new MyVendorReportRow(
+                row.report_id,
+                row.vendor_id,
+                row.StoreName ?? row.PermitName ?? row.VendorName,
+                row.SlotCode,
+                row.report_type,
+                row.report_reason,
+                row.report_status,
+                row.created_at,
+                row.due_at,
+                row.resolution,
+                row.resolution_note,
+                row.refund_amount,
+                row.reviewed_at,
+                !string.IsNullOrWhiteSpace(row.evidence_url),
+                row.menu_item_id is { } item && row.PriceUnitAmount is { } unitPrice && row.quantity is { } quantity
+                    && row.posted_amount is { } posted && row.charged_amount is { } charged && row.purchased_at is { } purchased
+                    ? new VendorReportPriceEvidenceRow(
+                        item, row.PriceItemName!, row.PriceUnit!, unitPrice, row.PriceVersion, row.PriceChangedAt!.Value,
+                        quantity, posted, charged, purchased)
+                    : null))
+            .ToArray();
+    }
 }

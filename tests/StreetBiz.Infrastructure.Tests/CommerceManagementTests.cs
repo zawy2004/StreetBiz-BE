@@ -42,10 +42,10 @@ public sealed class CommerceManagementTests
     public async Task Menu_changes_reach_marketplace_and_archiving_preserves_history()
     {
         using var f = await Fixture.Create();
-        var added = await f.Service.SaveMenu(1, null, new(1, "Noodle", null, 30000, "AVAILABLE", Photo), default);
+        var added = await f.Service.SaveMenu(1, null, new(1, "Noodle", null, 30000, "AVAILABLE", Photo, PriceUnit: "phần"), default);
         Assert.Equal(Photo, added.ImageUrl);
         Assert.Equal("Noodle", (await f.Repository.GetMenuItemAsync(added.MenuItemId, default))!.ItemName);
-        await f.Service.SaveMenu(1, added.MenuItemId, new(1, "Noodle updated", null, 35000, "SOLD_OUT"), default);
+        await f.Service.SaveMenu(1, added.MenuItemId, new(1, "Noodle updated", null, 35000, "SOLD_OUT", PriceUnit: "phần"), default);
         Assert.Equal("SOLD_OUT", (await f.Repository.GetMenuItemAsync(added.MenuItemId, default))!.AvailabilityStatus);
         await f.Service.ArchiveMenu(1, added.MenuItemId, default);
         Assert.Null(await f.Repository.GetMenuItemAsync(added.MenuItemId, default));
@@ -57,14 +57,14 @@ public sealed class CommerceManagementTests
     {
         using var f = await Fixture.Create();
         await Assert.ThrowsAsync<DomainRuleException>(() =>
-            f.Service.SaveMenu(1, null, new(1, "No photo", null, 30000, "AVAILABLE"), default));
+            f.Service.SaveMenu(1, null, new(1, "No photo", null, 30000, "AVAILABLE", PriceUnit: "phần"), default));
         // Another user's photo, or a URL outside the menu-image channel, is refused.
         await Assert.ThrowsAsync<DomainRuleException>(() => f.Service.SaveMenu(1, null,
-            new(1, "Stolen", null, 30000, "AVAILABLE", "/api/uploads/menu-images/2/0123456789abcdef0123456789abcdef.jpg"), default));
+            new(1, "Stolen", null, 30000, "AVAILABLE", "/api/uploads/menu-images/2/0123456789abcdef0123456789abcdef.jpg", PriceUnit: "phần"), default));
         await Assert.ThrowsAsync<DomainRuleException>(() => f.Service.SaveMenu(1, null,
-            new(1, "Evidence", null, 30000, "AVAILABLE", "/api/uploads/evidence/1/0123456789abcdef0123456789abcdef.jpg"), default));
+            new(1, "Evidence", null, 30000, "AVAILABLE", "/api/uploads/evidence/1/0123456789abcdef0123456789abcdef.jpg", PriceUnit: "phần"), default));
         // Editing an existing dish may keep its current photo.
-        var edited = await f.Service.SaveMenu(1, 1, new(1, "Meal", "Now with notes", 25000, "AVAILABLE"), default);
+        var edited = await f.Service.SaveMenu(1, 1, new(1, "Meal", "Now with notes", 25000, "AVAILABLE", PriceUnit: "phần"), default);
         Assert.Equal("Now with notes", edited.Description);
     }
 
@@ -73,15 +73,15 @@ public sealed class CommerceManagementTests
     {
         using var f = await Fixture.Create();
         for (var i = 2; i <= MenuRules.MaxActiveItemsPerStorefront; i++)
-            await f.Service.SaveMenu(1, null, new(1, $"Dish {i}", null, 20000, "AVAILABLE", Photo), default);
+            await f.Service.SaveMenu(1, null, new(1, $"Dish {i}", null, 20000, "AVAILABLE", Photo, PriceUnit: "phần"), default);
         var menu = await f.Service.Menu(1, default);
         Assert.Equal(MenuRules.MaxActiveItemsPerStorefront, menu.Items.Count);
         Assert.Equal(MenuRules.MaxActiveItemsPerStorefront, menu.MaxItems);
         await Assert.ThrowsAsync<ConflictException>(() =>
-            f.Service.SaveMenu(1, null, new(1, "One too many", null, 20000, "AVAILABLE", Photo), default));
+            f.Service.SaveMenu(1, null, new(1, "One too many", null, 20000, "AVAILABLE", Photo, PriceUnit: "phần"), default));
         // Archiving frees a place.
         await f.Service.ArchiveMenu(1, 1, default);
-        await f.Service.SaveMenu(1, null, new(1, "Replacement", null, 20000, "AVAILABLE", Photo), default);
+        await f.Service.SaveMenu(1, null, new(1, "Replacement", null, 20000, "AVAILABLE", Photo, PriceUnit: "phần"), default);
     }
 
     [Fact]
@@ -114,7 +114,7 @@ public sealed class CommerceManagementTests
         Assert.True(Assert.Single(await f.Repository.SearchMenuItemsAsync(NoFilter, 50, default)).FoodSafetyCertified);
         // A certified dish cannot be renamed into another dish.
         await Assert.ThrowsAsync<ConflictException>(() =>
-            f.Service.SaveMenu(1, 1, new(1, "Different dish", null, 25000, "AVAILABLE"), default));
+            f.Service.SaveMenu(1, 1, new(1, "Different dish", null, 25000, "AVAILABLE", PriceUnit: "phần"), default));
 
         (await f.Db.FoodSafetyApplications.FindAsync(application.application_id))!.expires_on =
             DateOnly.FromDateTime(DateTime.UtcNow.AddDays(-2));
@@ -130,7 +130,7 @@ public sealed class CommerceManagementTests
         using var f = await Fixture.Create();
         (await f.Db.MenuItems.FindAsync(1L))!.availability_status = "HIDDEN";
         await f.Db.SaveChangesAsync();
-        await Assert.ThrowsAsync<ConflictException>(() => f.Service.SaveMenu(1, 1, new(1, "Hidden", null, 10000, "AVAILABLE"), default));
+        await Assert.ThrowsAsync<ConflictException>(() => f.Service.SaveMenu(1, 1, new(1, "Hidden", null, 10000, "AVAILABLE", PriceUnit: "phần"), default));
     }
 
     [Theory]
@@ -239,14 +239,14 @@ public sealed class CommerceManagementTests
         f.Db.ReportedContents.Add(report);
         await f.Db.SaveChangesAsync();
         f.Db.ChangeTracker.Clear();
-        await Assert.ThrowsAsync<ConflictException>(() => f.Service.SaveMenu(1, 1, new(1, "Meal", null, 25000, "AVAILABLE"), default));
+        await Assert.ThrowsAsync<ConflictException>(() => f.Service.SaveMenu(1, 1, new(1, "Meal", null, 25000, "AVAILABLE", PriceUnit: "phần"), default));
 
         var admin = new PlatformAdministrationRepository(f.Db, TimeProvider.System);
         Assert.Equal(ContentDecisionOutcome.Updated, (await admin.RestoreReportedContentAsync(report.content_report_id, "HIDDEN", 3, default)).Outcome);
         Assert.Equal("SOLD_OUT", (await f.Db.MenuItems.AsNoTracking().SingleAsync()).availability_status);
 
         f.Db.ChangeTracker.Clear();
-        await f.Service.SaveMenu(1, 1, new(1, "Meal", null, 25000, "AVAILABLE"), default);
+        await f.Service.SaveMenu(1, 1, new(1, "Meal", null, 25000, "AVAILABLE", PriceUnit: "phần"), default);
         Assert.Equal("AVAILABLE", (await f.Db.MenuItems.AsNoTracking().SingleAsync()).availability_status);
     }
 

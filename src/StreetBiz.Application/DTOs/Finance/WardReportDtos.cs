@@ -25,6 +25,10 @@ public sealed record RecentViolationDto(
     DateTime RecordedAt);
 
 /// <summary>WARD-15.</summary>
+/// <param name="OpenReports">Citizen reports (BUY-05/07) of the ward still PENDING.</param>
+/// <param name="OverdueReports">Of those, the ones past their internal due time (WARD-19).</param>
+/// <param name="AvgResolutionHours30d">Mean hours from filing to closing, over reports closed in
+/// the last 30 days; null when none were.</param>
 public sealed record WardDashboardDto(
     int SlotTotal,
     int SlotRented,
@@ -34,7 +38,10 @@ public sealed record WardDashboardDto(
     int ActiveContracts,
     decimal RevenueCollected,
     decimal OutstandingDebt,
-    int OpenViolations);
+    int OpenViolations,
+    int OpenReports = 0,
+    int OverdueReports = 0,
+    double? AvgResolutionHours30d = null);
 
 public static class WardReportMapper
 {
@@ -60,5 +67,8 @@ public static class WardReportMapper
         row.ActiveContracts,
         row.RevenueCollected,
         row.OutstandingDebt,
-        row.OpenViolations);
+        row.OpenViolations,
+        row.OpenReports,
+        row.OverdueReports,
+        row.AvgResolutionHours30d);
 }

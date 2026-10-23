@@ -4,6 +4,7 @@ using Microsoft.EntityFrameworkCore;
 using StreetBiz.Application.Common.Interfaces;
 using StreetBiz.Application.Common.Models;
 using StreetBiz.Application.Common.Security;
+using StreetBiz.Application.Features.Commerce;
 using StreetBiz.Infrastructure.Persistence.ScaffoldedModels;
 
 namespace StreetBiz.Infrastructure.Persistence.Repositories;
@@ -230,7 +231,7 @@ public sealed partial class PlatformAdministrationRepository(
             if (decision == ContentModerationDecisions.Hide)
             {
                 var contentOwner = await HideContentAsync(
-                    report.content_type, report.content_id, cancellationToken);
+                    report.content_type, report.content_id, actorUserId, cancellationToken);
                 if (!contentOwner.HasValue)
                 {
                     return ContentDecisionOutcome.ContentNotFound;
@@ -306,7 +307,7 @@ public sealed partial class PlatformAdministrationRepository(
             }
 
             var contentOwner = await RestoreContentAsync(
-                report.content_type, report.content_id, cancellationToken);
+                report.content_type, report.content_id, actorUserId, cancellationToken);
             if (!contentOwner.HasValue)
             {
                 return ContentDecisionOutcome.ContentNotFound;
@@ -684,6 +685,7 @@ public sealed partial class PlatformAdministrationRepository(
     private async Task<long?> HideContentAsync(
         string contentType,
         long contentId,
+        long actorUserId,
         CancellationToken cancellationToken)
     {
         switch (contentType)
@@ -696,8 +698,15 @@ public sealed partial class PlatformAdministrationRepository(
                     return null;
                 }
 
+                // Hiding a dish takes it off the stall's price board: that is a board change (BUY-06),
+                // recorded against the moderator in the same transaction.
+                var wasListed = PriceBoardRules.IsListed(menuItem.availability_status);
                 menuItem.availability_status = MenuItemHidden;
                 menuItem.updated_at = Now;
+                if (wasListed)
+                {
+                    PriceBoards.Record(db, menuItem, PriceBoardRules.Archived, actorUserId, Now);
+                }
                 return await db.MenuItems.Where(item => item.menu_item_id == contentId)
                     .Select(item => (long?)item.storefront.registration.vendor.user_id)
                     .SingleAsync(cancellationToken);
@@ -735,6 +744,7 @@ public sealed partial class PlatformAdministrationRepository(
     private async Task<long?> RestoreContentAsync(
         string contentType,
         long contentId,
+        long actorUserId,
         CancellationToken cancellationToken)
     {
         switch (contentType)
@@ -751,6 +761,7 @@ public sealed partial class PlatformAdministrationRepository(
                 {
                     menuItem.availability_status = MenuItemSoldOut;
                     menuItem.updated_at = Now;
+                    PriceBoards.Record(db, menuItem, PriceBoardRules.Restored, actorUserId, Now);
                 }
 
                 return await db.MenuItems.Where(item => item.menu_item_id == contentId)

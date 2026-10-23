@@ -18,7 +18,7 @@ namespace StreetBiz.Infrastructure.Persistence.Repositories;
 /// a sidewalk-compliance record, unlike vendor_id alone (nullable, and a vendor's registration can
 /// span more than one ward via BR-06's multiple storefronts).
 /// </summary>
-public sealed class WardReportRepository(StreetBizDbContext db) : IWardReportRepository
+public sealed class WardReportRepository(StreetBizDbContext db, TimeProvider? clock = null) : IWardReportRepository
 {
     public async Task<CollectionReportRow> GetCollectionReportAsync(
         int wardUnitId, DateOnly from, DateOnly to, CancellationToken cancellationToken)
@@ -122,6 +122,24 @@ public sealed class WardReportRepository(StreetBizDbContext db) : IWardReportRep
                 && (violation.Penalty == null || violation.Penalty.penalty_status == PenaltyStatuses.Unpaid),
                 cancellationToken);
 
+        // WARD-19: citizen reports still waiting, how many are past their internal due time, and how
+        // long closing one took over the last 30 days (filing to the officer's decision).
+        var now = (clock ?? TimeProvider.System).GetUtcNow().UtcDateTime;
+        var wardReports = VendorReportRecords.InWard(db, wardUnitId);
+        var openReports = await wardReports
+            .CountAsync(report => report.report_status == VendorReportStatuses.Pending, cancellationToken);
+        var overdueReports = await wardReports
+            .CountAsync(report => report.report_status == VendorReportStatuses.Pending
+                && report.due_at != null && report.due_at < now, cancellationToken);
+        var closed = await wardReports
+            .Where(report => report.report_status != VendorReportStatuses.Pending
+                && report.reviewed_at != null && report.reviewed_at >= now.AddDays(-30))
+            .Select(report => new { report.created_at, ReviewedAt = report.reviewed_at!.Value })
+            .ToListAsync(cancellationToken);
+        double? averageHours = closed.Count == 0
+            ? null
+            : Math.Round(closed.Average(report => (report.ReviewedAt - report.created_at).TotalHours), 1);
+
         return new WardDashboardRow(
             slotTotal,
             slotRented,
@@ -130,7 +148,10 @@ public sealed class WardReportRepository(StreetBizDbContext db) : IWardReportRep
             activeContracts,
             feeRevenue + penaltyRevenue,
             feeOutstanding + penaltyOutstanding,
-            openViolations);
+            openViolations,
+            openReports,
+            overdueReports,
+            averageHours);
     }
 
     public async Task<ReportPeriodFacts> GetPeriodFactsAsync(

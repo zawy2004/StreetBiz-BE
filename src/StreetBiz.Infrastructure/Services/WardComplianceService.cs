@@ -1557,7 +1557,9 @@ public sealed class WardComplianceService(
         InspectWardPermitRequest request,
         CancellationToken ct)
     {
-        var raw = request.PermitCodeOrPayload?.Trim() ?? "";
+        var scanned = request.PermitCodeOrPayload?.Trim() ?? "";
+        // A printed board's QR is a /q/{token} link (PermitQrText); older permits carry the bare token.
+        var raw = PermitQrText.ExtractToken(scanned);
 
         long? targetContractId = null;
         if (permitTokens.TryParse(raw, out var claims))
@@ -1648,7 +1650,7 @@ public sealed class WardComplianceService(
         var scanLog = new PermitScanLog
         {
             permit_id = validity.permit_id,
-            qr_payload = raw,
+            qr_payload = scanned,
             scanned_by = actor.UserId,
             scan_context = "WARD_INSPECTION",
             scanner_role = RoleCodes.WardAuthority,
@@ -2063,54 +2065,132 @@ public sealed class WardComplianceService(
             _ => (DateTime?)null,
         };
 
-        var violation = new Violation
+        // WARD-19: raised from a citizen report, the record and the report's closing are one
+        // transaction, so a report is never left open beside its biên bản nor closed without one.
+        long violationId = 0;
+        await Write(async () =>
         {
-            contract_id = request.ContractId,
-            slot_id = request.SlotId,
-            vendor_id = request.VendorId,
-            violation_type = request.ViolationType,
-            description = request.Description.Trim(),
-            evidence_url = request.EvidenceUrl,
-            recorded_by = actor.UserId,
-            recorder_role = RoleCodes.WardAuthority,
-            source = "ON_SITE",
-            recorded_at = Now,
-            prepared_location = NullIfBlank(request.PreparedLocation) ?? slotLocation,
-            witness_name = NullIfBlank(request.WitnessName),
-            witness_role = request.WitnessName is not null ? request.WitnessRole : null,
-            witness_occupation = NullIfBlank(request.WitnessOccupation),
-            witness_address = NullIfBlank(request.WitnessAddress),
-            violator_full_name = violatorName,
-            violator_date_of_birth = registration?.owner_date_of_birth,
-            violator_gender = registration?.owner_gender,
-            violator_nationality = registration?.owner_nationality,
-            violator_id_number = registration?.id_number,
-            violator_id_issued_date = registration?.id_issued_date,
-            violator_id_issued_place = registration?.id_issued_place,
-            violator_address = registration?.permanent_address ?? registration?.declared_address,
-            containment_measures = NullIfBlank(request.ContainmentMeasures),
-            explanation_required = request.ExplanationRequired,
-            explanation_method = explanationMethod,
-            explanation_deadline_at = explanationDeadline,
-        };
-        db.Violations.Add(violation);
-        await db.SaveChangesAsync(ct);
+            var source = request.SourceReportId is { } reportId
+                ? await RequireReportForViolationAsync(actor, reportId, request, ct)
+                : null;
+            var violation = new Violation
+            {
+                contract_id = request.ContractId,
+                slot_id = request.SlotId,
+                vendor_id = request.VendorId,
+                violation_type = request.ViolationType,
+                description = request.Description.Trim(),
+                evidence_url = request.EvidenceUrl,
+                recorded_by = actor.UserId,
+                recorder_role = RoleCodes.WardAuthority,
+                source = source is null ? "ON_SITE" : "CUSTOMER_REPORT",
+                source_report_id = source?.report_id,
+                recorded_at = Now,
+                prepared_location = NullIfBlank(request.PreparedLocation) ?? slotLocation,
+                witness_name = NullIfBlank(request.WitnessName),
+                witness_role = request.WitnessName is not null ? request.WitnessRole : null,
+                witness_occupation = NullIfBlank(request.WitnessOccupation),
+                witness_address = NullIfBlank(request.WitnessAddress),
+                violator_full_name = violatorName,
+                violator_date_of_birth = registration?.owner_date_of_birth,
+                violator_gender = registration?.owner_gender,
+                violator_nationality = registration?.owner_nationality,
+                violator_id_number = registration?.id_number,
+                violator_id_issued_date = registration?.id_issued_date,
+                violator_id_issued_place = registration?.id_issued_place,
+                violator_address = registration?.permanent_address ?? registration?.declared_address,
+                containment_measures = NullIfBlank(request.ContainmentMeasures),
+                explanation_required = request.ExplanationRequired,
+                explanation_method = explanationMethod,
+                explanation_deadline_at = explanationDeadline,
+            };
+            db.Violations.Add(violation);
+            await SaveViolationAsync(request.SourceReportId, ct);
 
-        // Mẫu 01 "Số: .../BB-VPHC" -- only knowable once violation_id exists.
-        violation.bien_ban_so = $"{violation.violation_id:0000}/BB-VPHC-{TodayVn.Year}";
+            // Mẫu 01 "Số: .../BB-VPHC" -- only knowable once violation_id exists.
+            violation.bien_ban_so = $"{violation.violation_id:0000}/BB-VPHC-{TodayVn.Year}";
 
-        db.AuditLogs.Add(new AuditLog
+            db.AuditLogs.Add(new AuditLog
+            {
+                actor_user_id = actor.UserId,
+                action = "VIOLATION_RECORDED",
+                entity_type = "Violation",
+                entity_id = violation.violation_id,
+                details = $"Cán bộ {actor.Name} lập biên bản {violation.bien_ban_so} vi phạm hành vi {request.ViolationType}: {request.Description.Trim()}",
+                created_at = Now
+            });
+
+            if (source is not null)
+            {
+                await VendorReportRecords.CloseAsync(
+                    db, source, VendorReportResolutions.ViolationRecorded, $"Đã lập biên bản số {violation.bien_ban_so}.",
+                    refundAmount: null, actor, Now, violation.violation_id, ct);
+            }
+
+            violationId = violation.violation_id;
+        }, ct);
+
+        return await GetViolationDetailAsync(actor, violationId, ct);
+    }
+
+    /// <summary>
+    /// The report a violation is raised from: PENDING, in the officer's ward (another ward's is not
+    /// found) and about the vendor or the slot the record names. The officer still chose to record it;
+    /// nothing here is automatic (BR-41/43).
+    /// </summary>
+    private async Task<VendorReport> RequireReportForViolationAsync(
+        WardActor actor, long reportId, RecordWardViolationRequest request, CancellationToken ct)
+    {
+        if (!await VendorReportRecords.InWard(db, actor.WardId).AnyAsync(r => r.report_id == reportId, ct))
         {
-            actor_user_id = actor.UserId,
-            action = "VIOLATION_RECORDED",
-            entity_type = "Violation",
-            entity_id = violation.violation_id,
-            details = $"Cán bộ {actor.Name} lập biên bản {violation.bien_ban_so} vi phạm hành vi {request.ViolationType}: {request.Description.Trim()}",
-            created_at = Now
-        });
+            throw new NotFoundException(CommunityMessages.ReportNotFound);
+        }
 
-        await db.SaveChangesAsync(ct);
-        return await GetViolationDetailAsync(actor, violation.violation_id, ct);
+        var report = await db.VendorReports.SingleAsync(r => r.report_id == reportId, ct);
+        if (report.report_status != VendorReportStatuses.Pending)
+        {
+            throw new WardException(409, "report_closed",
+                "Phản ánh đã được xử lý; mỗi phản ánh chỉ lập được một biên bản.");
+        }
+
+        var contract = request.ContractId is { } contractId
+            ? await db.RentalContracts.AsNoTracking().Where(c => c.contract_id == contractId)
+                .Select(c => new { c.vendor_id, c.slot_id }).SingleOrDefaultAsync(ct)
+            : null;
+        var vendorId = request.VendorId ?? contract?.vendor_id;
+        var slotId = request.SlotId ?? contract?.slot_id;
+        var permitSlotId = report.scanned_permit_id is { } permitId
+            ? await db.DigitalPermits.AsNoTracking().Where(p => p.permit_id == permitId)
+                .Select(p => (long?)p.contract.slot_id).SingleOrDefaultAsync(ct)
+            : null;
+        var sameVendor = vendorId is not null && vendorId == report.vendor_id;
+        var sameSlot = slotId is not null && (slotId == report.slot_id || slotId == permitSlotId);
+        if (!sameVendor && !sameSlot)
+        {
+            throw new WardException(400, "report_mismatch",
+                "Biên bản lập từ phản ánh phải cùng người bán hoặc cùng ô với phản ánh đó.");
+        }
+
+        return report;
+    }
+
+    /// <summary>UQ_Violations_OnePerSourceReport is the last word when two officers record from one report at once.</summary>
+    private async Task SaveViolationAsync(long? sourceReportId, CancellationToken ct)
+    {
+        try
+        {
+            await db.SaveChangesAsync(ct);
+        }
+        catch (DbUpdateException) when (sourceReportId is not null)
+        {
+            if (await db.Violations.AsNoTracking().AnyAsync(v => v.source_report_id == sourceReportId, ct))
+            {
+                throw new WardException(409, "report_closed",
+                    "Phản ánh đã được xử lý; mỗi phản ánh chỉ lập được một biên bản.");
+            }
+
+            throw;
+        }
     }
 
     public async Task<WardViolationDetailDto> RecordExplanationAsync(

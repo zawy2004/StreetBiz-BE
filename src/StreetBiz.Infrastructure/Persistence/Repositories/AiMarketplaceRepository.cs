@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using StreetBiz.Application.Common.Models;
 using StreetBiz.Application.Common.Security;
 using StreetBiz.Application.Features.AiMarketplace;
 using StreetBiz.Infrastructure.Persistence.ScaffoldedModels;
@@ -6,7 +7,8 @@ using StreetBiz.Infrastructure.Persistence.ScaffoldedModels;
 namespace StreetBiz.Infrastructure.Persistence.Repositories;
 
 /// <summary>Read models behind the AI marketplace and report-assist features (AIP-01..04, AIB-01).</summary>
-public sealed class AiMarketplaceRepository(StreetBizDbContext db, CommerceRepository commerce) : IAiMarketplaceRepository
+public sealed class AiMarketplaceRepository(StreetBizDbContext db, CommerceRepository commerce, TimeProvider? clock = null)
+    : IAiMarketplaceRepository
 {
     private const int MinDishesForReferencePrice = 3;
 
@@ -75,44 +77,48 @@ public sealed class AiMarketplaceRepository(StreetBizDbContext db, CommerceRepos
 
     public async Task<IReadOnlyList<VendorReportContextRow>> ListVendorReportsForWardAsync(
         int wardId,
-        string? status,
+        VendorReportListFilter filter,
         int page,
         int pageSize,
         CancellationToken cancellationToken)
     {
-        // A report belongs to a ward through the slot it names, the slot of the permit that was scanned, or the
-        // ward the reported vendor registered in.
-        var reports = db.VendorReports.AsNoTracking().Where(report =>
-            (report.slot != null && report.slot.zone.ward_unit_id == wardId)
-            || (report.scanned_permit != null && report.scanned_permit.contract.slot.zone.ward_unit_id == wardId)
-            || (report.vendor != null && db.BusinessRegistrations.Any(registration =>
-                registration.vendor_id == report.vendor.vendor_id && registration.ward_unit_id == wardId)));
-        if (status is not null)
+        var reports = VendorReportRecords.InWard(db, wardId);
+        if (filter.Status is not null)
         {
-            reports = reports.Where(report => report.report_status == status);
+            reports = reports.Where(report => report.report_status == filter.Status);
         }
 
+        if (filter.Type is not null)
+        {
+            reports = reports.Where(report => report.report_type == filter.Type);
+        }
+
+        var now = filter.NowUtc;
+        if (filter.Overdue is { } overdue)
+        {
+            reports = overdue
+                ? reports.Where(report => report.report_status == VendorReportStatuses.Pending
+                    && report.due_at != null && report.due_at < now)
+                : reports.Where(report => !(report.report_status == VendorReportStatuses.Pending
+                    && report.due_at != null && report.due_at < now));
+        }
+
+        // Overdue first, then what falls due soonest, then the reports already closed, newest first.
+        var ordered = reports
+            .OrderBy(report => report.report_status == VendorReportStatuses.Pending && report.due_at != null && report.due_at < now
+                ? 0
+                : report.report_status == VendorReportStatuses.Pending ? 1 : 2)
+            .ThenBy(report => report.report_status == VendorReportStatuses.Pending && report.due_at == null ? 1 : 0)
+            .ThenBy(report => report.report_status == VendorReportStatuses.Pending ? report.due_at : null)
+            .ThenByDescending(report => report.created_at)
+            .ThenByDescending(report => report.report_id);
         return await ReportRows(
-            reports.OrderByDescending(report => report.created_at)
-                .ThenByDescending(report => report.report_id)
-                .Skip((page - 1) * pageSize)
-                .Take(pageSize),
+            ordered.Skip((page - 1) * pageSize).Take(pageSize),
             cancellationToken);
     }
 
     public Task<bool> ReportEvidenceBelongsToWardAsync(string evidenceUrl, int wardId, CancellationToken cancellationToken) =>
-        ReportsOfWard(wardId).AnyAsync(report => report.evidence_url == evidenceUrl, cancellationToken);
-
-    /// <summary>
-    /// A report belongs to a ward through the slot it names, the slot of the permit that was scanned, or the
-    /// ward the reported vendor registered in.
-    /// </summary>
-    private IQueryable<VendorReport> ReportsOfWard(int wardId) =>
-        db.VendorReports.AsNoTracking().Where(report =>
-            (report.slot != null && report.slot.zone.ward_unit_id == wardId)
-            || (report.scanned_permit != null && report.scanned_permit.contract.slot.zone.ward_unit_id == wardId)
-            || (report.vendor != null && db.BusinessRegistrations.Any(registration =>
-                registration.vendor_id == report.vendor.vendor_id && registration.ward_unit_id == wardId)));
+        VendorReportRecords.InWard(db, wardId).AnyAsync(report => report.evidence_url == evidenceUrl, cancellationToken);
 
     public async Task SetReportLocationAsync(long reportId, string location, CancellationToken cancellationToken)
     {
@@ -150,6 +156,39 @@ public sealed class AiMarketplaceRepository(StreetBizDbContext db, CommerceRepos
             PermitSlotId = report.scanned_permit != null ? (long?)report.scanned_permit.contract.slot_id : null,
             PermitSlotCode = report.scanned_permit != null ? report.scanned_permit.contract.slot.slot_code : null,
             PermitWard = report.scanned_permit != null ? (int?)report.scanned_permit.contract.slot.zone.ward_unit_id : null,
+            report.report_type,
+            report.due_at,
+            report.resolution,
+            report.resolution_note,
+            report.refund_amount,
+            report.reviewed_at,
+            ReviewerName = report.UserAccount != null ? report.UserAccount.full_name : null,
+            report.menu_item_id,
+            report.quantity,
+            report.posted_amount,
+            report.charged_amount,
+            report.purchased_at,
+            PriceItemName = report.price_history != null ? report.price_history.item_name : null,
+            PriceUnit = report.price_history != null ? report.price_history.price_unit : null,
+            PriceUnitAmount = report.price_history != null ? (decimal?)report.price_history.unit_price : null,
+            PriceChangedAt = report.price_history != null ? (DateTime?)report.price_history.changed_at : null,
+            // "Bản số N" of the board the posted price was read from.
+            PriceVersion = report.price_history != null
+                ? db.MenuItemPriceHistories.Count(row =>
+                    row.storefront_id == report.price_history.storefront_id
+                    && row.price_history_id <= report.price_history.price_history_id)
+                : 0,
+            ViolationId = db.Violations
+                .Where(violation => violation.source_report_id == report.report_id)
+                .Select(violation => (long?)violation.violation_id)
+                .FirstOrDefault(),
+            // Which of the vendor's businesses the report is about, when it says: the stall whose
+            // board priced the dish, else the stall on the scanned permit.
+            SubjectName = report.price_history != null
+                ? report.price_history.storefront.registration.display_name
+                : report.scanned_permit != null
+                    ? report.scanned_permit.contract.application.registration.display_name
+                    : null,
         }).ToListAsync(cancellationToken);
         if (heads.Count == 0)
         {
@@ -166,6 +205,15 @@ public sealed class AiMarketplaceRepository(StreetBizDbContext db, CommerceRepos
             .GroupBy(registration => registration.vendor_id)
             .ToDictionary(group => group.Key, group => group.First());
 
+        // Context for the officer only ("n phản ánh trong 90 ngày"): never a score, never acted on alone.
+        var since = (clock ?? TimeProvider.System).GetUtcNow().UtcDateTime.AddDays(-VendorReportRules.VendorHistoryDays);
+        var recent = (await db.VendorReports.AsNoTracking()
+                .Where(report => report.vendor_id != null && vendorIds.Contains(report.vendor_id.Value) && report.created_at >= since)
+                .Select(report => report.vendor_id!.Value)
+                .ToListAsync(cancellationToken))
+            .GroupBy(vendor => vendor)
+            .ToDictionary(group => group.Key, group => group.Count());
+
         return heads.Select(head =>
         {
             registrations.TryGetValue(head.vendor_id ?? 0, out var registration);
@@ -174,6 +222,12 @@ public sealed class AiMarketplaceRepository(StreetBizDbContext db, CommerceRepos
                 .Select(ward => ward!.Value)
                 .Distinct()
                 .ToArray();
+            var evidence = head.menu_item_id is { } item && head.PriceUnitAmount is { } unitPrice
+                && head.quantity is { } quantity && head.posted_amount is { } posted
+                && head.charged_amount is { } charged && head.purchased_at is { } purchased
+                    ? new VendorReportPriceEvidenceRow(item, head.PriceItemName!, head.PriceUnit!, unitPrice,
+                        head.PriceVersion, head.PriceChangedAt!.Value, quantity, posted, charged, purchased)
+                    : null;
             return new VendorReportContextRow(
                 head.report_id,
                 head.report_reason,
@@ -181,7 +235,8 @@ public sealed class AiMarketplaceRepository(StreetBizDbContext db, CommerceRepos
                 head.report_status,
                 head.created_at,
                 head.ai_extracted_location,
-                registration?.display_name,
+                // A vendor with several businesses: name the one reported, not merely its latest.
+                head.SubjectName ?? registration?.display_name,
                 head.vendor_id,
                 head.slot_id,
                 head.SlotCode,
@@ -192,7 +247,15 @@ public sealed class AiMarketplaceRepository(StreetBizDbContext db, CommerceRepos
                 head.PermitContractStatus,
                 head.PermitSlotCode,
                 head.PermitSlotId,
-                wards);
+                wards,
+                head.report_type,
+                head.due_at,
+                head.resolution is { } resolution
+                    ? new VendorReportOutcomeRow(resolution, head.resolution_note, head.refund_amount, head.reviewed_at, head.ReviewerName)
+                    : null,
+                evidence,
+                head.vendor_id is { } vendor && recent.TryGetValue(vendor, out var count) ? count : 0,
+                head.ViolationId);
         }).ToArray();
     }
 }

@@ -56,6 +56,9 @@ public partial class StreetBizDbContext : DbContext
 
     public virtual DbSet<MenuItem> MenuItems { get; set; }
 
+    // Schema: see db/StreetBiz_SQL_Server.sql. Append-only (TR_MenuItemPriceHistory_AppendOnly).
+    public virtual DbSet<MenuItemPriceHistory> MenuItemPriceHistories { get; set; }
+
     public virtual DbSet<Notification> Notifications { get; set; }
 
     public virtual DbSet<Order> Orders { get; set; }
@@ -567,6 +570,10 @@ public partial class StreetBizDbContext : DbContext
             entity.Property(e => e.description).HasMaxLength(500);
             entity.Property(e => e.image_url).HasMaxLength(500);
             entity.Property(e => e.item_name).HasMaxLength(180);
+            entity.Property(e => e.item_name_en).HasMaxLength(180);
+            entity.Property(e => e.price_unit)
+                .HasMaxLength(30)
+                .HasDefaultValue("phần");
             entity.Property(e => e.unit_price).HasColumnType("decimal(18, 0)");
 
             entity.HasOne(d => d.category).WithMany(p => p.MenuItems)
@@ -578,6 +585,41 @@ public partial class StreetBizDbContext : DbContext
                 .HasForeignKey(d => d.storefront_id)
                 .OnDelete(DeleteBehavior.ClientSetNull)
                 .HasConstraintName("FK_MenuItems_Storefront");
+        });
+
+        modelBuilder.Entity<MenuItemPriceHistory>(entity =>
+        {
+            entity.HasKey(e => e.price_history_id).HasName("PK_MenuItemPriceHistory");
+
+            // INSTEAD OF UPDATE, DELETE: EF only ever inserts here, but a declared trigger also
+            // keeps EF from using a bare OUTPUT clause on the insert.
+            entity.ToTable("MenuItemPriceHistory", tb => tb.HasTrigger("TR_MenuItemPriceHistory_AppendOnly"));
+
+            entity.HasIndex(e => new { e.menu_item_id, e.changed_at }, "IX_MenuItemPriceHistory_Item");
+
+            entity.HasIndex(e => new { e.storefront_id, e.changed_at }, "IX_MenuItemPriceHistory_Storefront");
+
+            entity.Property(e => e.change_kind).HasMaxLength(20);
+            entity.Property(e => e.changed_at).HasDefaultValueSql("(sysutcdatetime())");
+            entity.Property(e => e.item_name).HasMaxLength(180);
+            entity.Property(e => e.item_name_en).HasMaxLength(180);
+            entity.Property(e => e.price_unit).HasMaxLength(30);
+            entity.Property(e => e.unit_price).HasColumnType("decimal(18, 0)");
+
+            entity.HasOne(d => d.menu_item).WithMany(p => p.MenuItemPriceHistories)
+                .HasForeignKey(d => d.menu_item_id)
+                .OnDelete(DeleteBehavior.ClientSetNull)
+                .HasConstraintName("FK_MenuItemPriceHistory_MenuItem");
+
+            entity.HasOne(d => d.storefront).WithMany()
+                .HasForeignKey(d => d.storefront_id)
+                .OnDelete(DeleteBehavior.ClientSetNull)
+                .HasConstraintName("FK_MenuItemPriceHistory_Storefront");
+
+            entity.HasOne(d => d.changed_byNavigation).WithMany()
+                .HasForeignKey(d => d.changed_by)
+                .OnDelete(DeleteBehavior.ClientSetNull)
+                .HasConstraintName("FK_MenuItemPriceHistory_ChangedBy");
         });
 
         modelBuilder.Entity<Notification>(entity =>
@@ -1465,16 +1507,40 @@ public partial class StreetBizDbContext : DbContext
 
             entity.HasIndex(e => e.vendor_id, "IX_VendorReports_Vendor");
 
+            entity.HasIndex(e => new { e.reporter_user_id, e.created_at }, "IX_VendorReports_Reporter");
+
+            entity.HasIndex(e => new { e.report_status, e.due_at }, "IX_VendorReports_StatusDue");
+
+            entity.HasIndex(e => new { e.reporter_user_id, e.vendor_id }, "UQ_VendorReports_OnePendingPerReporter")
+                .IsUnique()
+                .HasFilter("([report_status]='PENDING' AND [vendor_id] IS NOT NULL)");
+
             entity.Property(e => e.ai_extracted_location).HasMaxLength(200);
+            entity.Property(e => e.charged_amount).HasColumnType("decimal(18, 0)");
             entity.Property(e => e.created_at).HasDefaultValueSql("(sysutcdatetime())");
             entity.Property(e => e.evidence_url).HasMaxLength(500);
+            entity.Property(e => e.posted_amount).HasColumnType("decimal(18, 0)");
+            entity.Property(e => e.refund_amount).HasColumnType("decimal(18, 0)");
             entity.Property(e => e.report_reason).HasMaxLength(500);
             entity.Property(e => e.report_status)
                 .HasMaxLength(20)
                 .HasDefaultValue("PENDING");
+            entity.Property(e => e.report_type)
+                .HasMaxLength(20)
+                .HasDefaultValue("GENERAL");
+            entity.Property(e => e.resolution).HasMaxLength(20);
+            entity.Property(e => e.resolution_note).HasMaxLength(500);
             entity.Property(e => e.reviewer_role)
                 .HasMaxLength(30)
                 .HasComputedColumnSql("(CONVERT([nvarchar](30),N'WARD_AUTHORITY'))", true);
+
+            entity.HasOne(d => d.menu_item).WithMany()
+                .HasForeignKey(d => d.menu_item_id)
+                .HasConstraintName("FK_VendorReports_MenuItem");
+
+            entity.HasOne(d => d.price_history).WithMany(p => p.VendorReports)
+                .HasForeignKey(d => d.price_history_id)
+                .HasConstraintName("FK_VendorReports_PriceHistory");
 
             entity.HasOne(d => d.reporter_user).WithMany(p => p.VendorReportreporter_users)
                 .HasForeignKey(d => d.reporter_user_id)
@@ -1508,6 +1574,12 @@ public partial class StreetBizDbContext : DbContext
             entity.HasIndex(e => e.slot_id, "IX_Violations_Slot");
 
             entity.HasIndex(e => e.vendor_id, "IX_Violations_Vendor");
+
+            // One biên bản per report (WARD-19). The relationship below stays one-to-many: the
+            // index is filtered, and the scaffolder would misread it as one-to-one.
+            entity.HasIndex(e => e.source_report_id, "UQ_Violations_OnePerSourceReport")
+                .IsUnique()
+                .HasFilter("([source_report_id] IS NOT NULL)");
 
             entity.Property(e => e.description).HasMaxLength(1000);
             entity.Property(e => e.evidence_url).HasMaxLength(500);

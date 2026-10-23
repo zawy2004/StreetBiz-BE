@@ -117,19 +117,20 @@ public sealed class CommunityVendorUseCaseTests
         customer.Setup(x => x.RequireCustomerUserIdAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync(7);
         var repository = new Mock<ICommunityVendorRepository>();
-        repository.Setup(x => x.GetPublicProfileAsync(2, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Profile(2));
+        repository.Setup(x => x.GetReportTargetAsync(2, null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ReportTargetRow(2, "Vendor", null));
         repository.Setup(x => x.ReportReferencesBelongToVendorAsync(
                 2, 99, null, It.IsAny<CancellationToken>()))
             .ReturnsAsync(false);
 
-        var action = () => new ReportSuspiciousVendorCommandHandler(customer.Object, repository.Object)
+        var action = () => ReportHandler(customer.Object, repository.Object)
             .Handle(new ReportSuspiciousVendorCommand(2, "Wrong location", null, 99, null), CancellationToken.None);
 
         await action.Should().ThrowAsync<DomainRuleException>()
             .WithMessage(CommunityMessages.ReportReferenceMismatch);
         repository.Verify(x => x.AddReportAsync(
-            It.IsAny<long>(), It.IsAny<long>(), It.IsAny<CustomerVendorReport>(), It.IsAny<CancellationToken>()),
+            It.IsAny<long>(), It.IsAny<long>(), It.IsAny<CustomerVendorReport>(), It.IsAny<NewVendorReportNotices>(),
+            It.IsAny<CancellationToken>()),
             Times.Never);
     }
 
@@ -140,8 +141,8 @@ public sealed class CommunityVendorUseCaseTests
         customer.Setup(x => x.RequireCustomerUserIdAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync(7);
         var repository = new Mock<ICommunityVendorRepository>();
-        repository.Setup(x => x.GetPublicProfileAsync(2, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Profile(2));
+        repository.Setup(x => x.GetReportTargetAsync(2, 3, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ReportTargetRow(2, "Vendor", "S-01"));
         repository.Setup(x => x.ReportReferencesBelongToVendorAsync(
                 2, 1, 3, It.IsAny<CancellationToken>()))
             .ReturnsAsync(true);
@@ -152,11 +153,15 @@ public sealed class CommunityVendorUseCaseTests
                     report.Reason == "Wrong location"
                     && report.EvidenceUrl == "/uploads/evidence/photo.jpg"
                     && report.SlotId == 1
-                    && report.ScannedPermitId == 3),
+                    && report.ScannedPermitId == 3
+                    && report.ReportType == VendorReportTypes.General
+                    && report.PostedAmount == null
+                    && report.DueAt != null),
+                It.IsAny<NewVendorReportNotices>(),
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(41);
 
-        var result = await new ReportSuspiciousVendorCommandHandler(customer.Object, repository.Object)
+        var result = await ReportHandler(customer.Object, repository.Object)
             .Handle(new ReportSuspiciousVendorCommand(
                 2,
                 " Wrong location ",
@@ -186,6 +191,10 @@ public sealed class CommunityVendorUseCaseTests
 
         await action.Should().ThrowAsync<ForbiddenException>();
     }
+
+    private static ReportSuspiciousVendorCommandHandler ReportHandler(
+        ICustomerContext customer, ICommunityVendorRepository repository) =>
+        new(customer, repository, new VendorReportSettings(), TimeProvider.System);
 
     private static ActiveVendorLocationRow Location(long vendorId, decimal latitude, decimal longitude) => new(
         vendorId, vendorId, $"Vendor {vendorId}", VendorTypes.Itinerant, null,

@@ -1819,6 +1819,117 @@ public sealed class WardComplianceServiceTests
         Assert.Equal(961, (await verify.PermitScanLogs.SingleAsync()).permit_id);
     }
 
+    [Fact]
+    public async Task The_inspectors_scanner_reads_the_printed_link_as_well_as_the_bare_token()
+    {
+        using var f = await Fixture.Create();
+        var (ownPayload, _) = await SeedPermitsInTwoWards(f);
+        var link = $"http://192.168.1.5:5173/q/{ownPayload}?v=4";
+
+        var result = await f.NewService().InspectPermitAsync(f.Actor, new InspectWardPermitRequest(link, null, null, null), default);
+
+        Assert.True(result.Found);
+        Assert.True(result.IsValid);
+        Assert.Equal(960, result.PermitId);
+        using var verify = f.NewDb();
+        Assert.Equal(link, (await verify.PermitScanLogs.SingleAsync()).qr_payload);
+    }
+
+    [Fact]
+    public async Task A_violation_raised_from_a_report_closes_the_report_in_the_same_transaction()
+    {
+        using var f = await Fixture.Create();
+        var reportId = await SeedCitizenReport(f, vendorId: 10, slotId: 100);
+
+        var detail = await f.NewService().RecordViolationAsync(f.Actor, new RecordWardViolationRequest(
+            ContractId: null, SlotId: 100, VendorId: 10, ViolationType: "UNAUTHORIZED_BUSINESS_USE",
+            Description: "Bày bán lấn vỉa hè theo phản ánh", EvidenceUrl: null, SourceReportId: reportId), default);
+
+        using var verify = f.NewDb();
+        var violation = await verify.Violations.SingleAsync();
+        Assert.Equal(("CUSTOMER_REPORT", reportId), (violation.source, violation.source_report_id!.Value));
+        var report = await verify.VendorReports.SingleAsync();
+        Assert.Equal(("REVIEWED", "VIOLATION_RECORDED", 1L), (report.report_status, report.resolution, report.reviewed_by!.Value));
+        Assert.Contains(detail.BienBanSo!, report.resolution_note);
+        Assert.NotNull(report.reviewed_at);
+        Assert.Equal(1, await verify.AuditLogs.CountAsync(a => a.action == "VENDOR_REPORT_RESOLVED" && a.entity_id == reportId));
+        // The reporter and the vendor are both told; the vendor without the reporter's identity.
+        var notices = await verify.Notifications.Where(n => n.notification_type == "VENDOR_REPORT_RESOLVED").ToListAsync();
+        Assert.Equal([10L, 20L], notices.Select(n => n.user_id).Order());
+        Assert.DoesNotContain("Người phản ánh", notices.Single(n => n.user_id == 10).body);
+    }
+
+    [Fact]
+    public async Task A_report_yields_at_most_one_violation()
+    {
+        using var f = await Fixture.Create();
+        var reportId = await SeedCitizenReport(f, vendorId: 10, slotId: 100);
+        var request = new RecordWardViolationRequest(
+            ContractId: null, SlotId: 100, VendorId: 10, ViolationType: "UNAUTHORIZED_BUSINESS_USE",
+            Description: "Lấn vỉa hè", EvidenceUrl: null, SourceReportId: reportId);
+        await f.NewService().RecordViolationAsync(f.Actor, request, default);
+
+        var second = await Assert.ThrowsAsync<WardException>(() => f.NewService().RecordViolationAsync(f.Actor, request, default));
+
+        Assert.Equal(409, second.StatusCode);
+        using var verify = f.NewDb();
+        Assert.Equal(1, await verify.Violations.CountAsync());
+    }
+
+    [Fact]
+    public async Task A_violation_from_a_report_must_name_the_reports_vendor_or_slot_and_otherwise_saves_nothing()
+    {
+        using var f = await Fixture.Create();
+        var reportId = await SeedCitizenReport(f, vendorId: 11, slotId: null);
+
+        var mismatch = await Assert.ThrowsAsync<WardException>(() => f.NewService().RecordViolationAsync(f.Actor,
+            new RecordWardViolationRequest(null, 100, 10, "UNAUTHORIZED_BUSINESS_USE", "Lấn vỉa hè", null, SourceReportId: reportId),
+            default));
+
+        Assert.Equal(("report_mismatch", 400), (mismatch.Code, mismatch.StatusCode));
+        using var verify = f.NewDb();
+        Assert.Empty(await verify.Violations.ToListAsync());
+        Assert.Equal("PENDING", (await verify.VendorReports.SingleAsync()).report_status);
+    }
+
+    [Fact]
+    public async Task Another_wards_report_cannot_be_turned_into_a_violation()
+    {
+        using var f = await Fixture.Create();
+        var reportId = await SeedCitizenReport(f, vendorId: 10, slotId: 100);
+
+        await Assert.ThrowsAsync<NotFoundException>(() => f.NewService().RecordViolationAsync(
+            new WardActor(2, 2, "Cán bộ 2"),
+            new RecordWardViolationRequest(null, null, 10, "UNAUTHORIZED_BUSINESS_USE", "Lấn vỉa hè", null, SourceReportId: reportId),
+            default));
+        using var verify = f.NewDb();
+        Assert.Empty(await verify.Violations.ToListAsync());
+    }
+
+    /// <summary>A pending citizen report by customer 20 ("Người phản ánh"), in ward 1 through vendor 10's registration.</summary>
+    private static async Task<long> SeedCitizenReport(Fixture f, long vendorId, long? slotId)
+    {
+        using var seed = f.NewDb();
+        if (!await seed.Roles.AnyAsync(r => r.role_code == "CUSTOMER"))
+        {
+            seed.Roles.Add(new Role { role_code = "CUSTOMER", role_name = "Customer" });
+            seed.UserAccounts.Add(new UserAccount
+            {
+                user_id = 20, phone_number = "0905000201", password_hash = "x", full_name = "Người phản ánh",
+                role_code = "CUSTOMER", account_status = "ACTIVE",
+            });
+        }
+
+        var report = new VendorReport
+        {
+            reporter_user_id = 20, vendor_id = vendorId, slot_id = slotId, report_reason = "Bày bán lấn vỉa hè",
+            report_status = "PENDING", report_type = "GENERAL", created_at = DateTime.UtcNow, due_at = DateTime.UtcNow.AddDays(9),
+        };
+        seed.VendorReports.Add(report);
+        await seed.SaveChangesAsync();
+        return report.report_id;
+    }
+
     private sealed class Fixture : IDisposable
     {
         public SqliteConnection Connection { get; } = new("Data Source=:memory:");

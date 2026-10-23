@@ -4,6 +4,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
 using StreetBiz.API.Extensions;
 using StreetBiz.Application.Features.AiMarketplace;
+using StreetBiz.Application.Features.VendorReports;
 
 namespace StreetBiz.API.Controllers;
 
@@ -57,21 +58,25 @@ public sealed class AiAssistController(ISender sender) : ControllerBase
 }
 
 /// <summary>
-/// AIB-01: the ward officer's view of citizen reports about vendors, with the system's notes beside each one
-/// (the signage and place read off the photo, and a check of the scanned permit). The officer decides; the notes
-/// never accept, reject or close a report. Role and ward scoping happen inside the handlers.
+/// AIB-01 / WARD-19: the ward officer's view of citizen reports about vendors, with the system's notes beside
+/// each one (the signage and place read off the photo, and a check of the scanned permit). The officer decides
+/// and closes a report; the notes never accept, reject or close one. Role and ward scoping happen inside the
+/// handlers.
 /// </summary>
 [ApiController]
 [Authorize]
 [Route("api/ward/vendor-reports")]
 public sealed class WardVendorReportsController(ISender sender) : ControllerBase
 {
+    /// <summary>Overdue first, then nearest due time, then the closed ones. Filter by status, type and overdue.</summary>
     [HttpGet]
     public async Task<ActionResult<IReadOnlyList<WardVendorReportSummaryDto>>> List(
         [FromQuery] string? status,
         [FromQuery] int page,
+        [FromQuery] string? type,
+        [FromQuery] bool? overdue,
         CancellationToken cancellationToken) =>
-        Ok(await sender.Send(new ListWardVendorReportsQuery(status, page < 1 ? 1 : page), cancellationToken));
+        Ok(await sender.Send(new ListWardVendorReportsQuery(status, page < 1 ? 1 : page, type, overdue), cancellationToken));
 
     [HttpGet("{reportId:long}")]
     public async Task<ActionResult<WardVendorReportDto>> Get(long reportId, CancellationToken cancellationToken) =>
@@ -82,4 +87,15 @@ public sealed class WardVendorReportsController(ISender sender) : ControllerBase
     [EnableRateLimiting(AiRateLimitSetup.Policy)]
     public async Task<ActionResult<WardVendorReportDto>> Assist(long reportId, CancellationToken cancellationToken) =>
         Ok(await sender.Send(new RunVendorReportAssistCommand(reportId), cancellationToken));
+
+    /// <summary>
+    /// WARD-19: close a pending report as DISMISSED (reason required) or MEDIATED (note required, refund
+    /// optional and at most the amount charged). 409 when the report is no longer in ExpectedStatus.
+    /// </summary>
+    [HttpPost("{reportId:long}/resolve")]
+    public async Task<ActionResult<WardVendorReportDto>> Resolve(
+        long reportId,
+        ResolveVendorReportRequest request,
+        CancellationToken cancellationToken) =>
+        Ok(await sender.Send(new ResolveWardVendorReportCommand(reportId, request), cancellationToken));
 }
