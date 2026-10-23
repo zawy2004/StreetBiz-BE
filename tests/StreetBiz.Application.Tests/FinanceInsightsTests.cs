@@ -27,7 +27,7 @@ public sealed class FinanceInsightsTests
             status == FeeItemStatuses.Paid ? $"HD-2026-{id:000000}" : null);
 
     private static readonly VendorContractRow Contract = new(
-        3, "NVL-01", "Nguyễn Văn Linh", "Phường Hải Châu 1", "45 Nguyễn Văn Linh",
+        3, "NVL-01", "Nguyễn Văn Linh", "Phường Hải Châu", "45 Nguyễn Văn Linh",
         new DateOnly(2026, 8, 1), new DateOnly(2026, 10, 30), ContractStatuses.Active, 3_120_000m);
 
     [Fact]

@@ -17,7 +17,7 @@ public sealed class FinanceDocumentTests
     [Fact]
     public async Task A_receipt_download_is_named_after_the_invoice_number()
     {
-        var receipt = new InvoiceDocumentRow("HD-2026-000004", "FEE", 1_040_000m, Now, "Phường Hải Châu 1",
+        var receipt = new InvoiceDocumentRow("HD-2026-000004", "FEE", 1_040_000m, Now, "Phường Hải Châu",
             "Phạm Thị Lan", null, null, "NVL-01", "Kỳ 3/3 · Tháng 10/2026", null, null, "MOMO", null, Now);
         var finance = new Mock<IFinanceRepository>();
         finance.Setup(x => x.GetInvoiceDocumentAsync(4, 8, It.IsAny<CancellationToken>())).ReturnsAsync(receipt);
@@ -54,7 +54,7 @@ public sealed class FinanceDocumentTests
             .ReturnsAsync(new CollectionReportRow(0m, 0m, 0m, 0m, 0m, 0, []));
         reports.Setup(x => x.ListWardInvoicesAsync(10, september.From, september.To, It.IsAny<CancellationToken>()))
             .ReturnsAsync([]);
-        reports.Setup(x => x.GetWardNameAsync(10, It.IsAny<CancellationToken>())).ReturnsAsync("Phường Hải Châu 1");
+        reports.Setup(x => x.GetWardNameAsync(10, It.IsAny<CancellationToken>())).ReturnsAsync("Phường Hải Châu");
         var collections = new Mock<IWardCollectionRepository>();
         collections.Setup(x => x.ListUnpaidFeeItemsAsync(10, It.IsAny<CancellationToken>())).ReturnsAsync([]);
         collections.Setup(x => x.GetLastDebtRemindersAsync(It.IsAny<IReadOnlyCollection<long>>(), It.IsAny<CancellationToken>()))
@@ -66,7 +66,7 @@ public sealed class FinanceDocumentTests
             .ReturnsAsync([new WardZoneRow(3, "Nguyễn Văn Linh", 12, 8)]);
         var renderer = new Mock<IFinanceDocumentRenderer>();
         renderer.Setup(x => x.RenderCollectionReportXlsx(It.Is<CollectionReportExport>(e =>
-                e.WardName == "Phường Hải Châu 1" && e.From == september.From && e.To == september.To
+                e.WardName == "Phường Hải Châu" && e.From == september.From && e.To == september.To
                 // The workbook carries the same debtors and zones as the screen.
                 && e.Debtors.Count == 0 && e.Performance!.ByZone.Single().ZoneName == "Nguyễn Văn Linh")))
             .Returns([9]);

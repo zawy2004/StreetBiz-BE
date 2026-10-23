@@ -88,6 +88,20 @@ builder.Services.AddRateLimiter(options =>
                 QueueLimit = 0,
             }));
 
+    // X01 voice registration: each turn is one speech-to-text call plus one extraction call. A real
+    // interview is 5-10 turns; this leaves room for retries without letting a loop burn the quota.
+    options.AddPolicy("VendorVoiceAi", context =>
+        System.Threading.RateLimiting.RateLimitPartition.GetFixedWindowLimiter(
+            context.User.FindFirstValue("sub")
+            ?? context.Connection.RemoteIpAddress?.ToString()
+            ?? "anonymous",
+            _ => new System.Threading.RateLimiting.FixedWindowRateLimiterOptions
+            {
+                PermitLimit = 30,
+                Window = TimeSpan.FromMinutes(10),
+                QueueLimit = 0,
+            }));
+
     // ORD-06: the typed fallback is the one pickup path where the caller supplies
     // a short secret rather than a signed one. 40 bits is far too wide to guess,
     // but a cap turns "far too wide" into "not worth attempting".
@@ -174,6 +188,7 @@ app.UseWebSockets(new WebSocketOptions { KeepAliveInterval = TimeSpan.FromSecond
 
 app.MapControllers();
 app.MapChatbotApi();
+app.MapRegistrationVoiceApi();
 app.MapWardApi();
 app.MapFinanceDevApi();
 app.MapHub<OrderHub>("/hubs/orders");

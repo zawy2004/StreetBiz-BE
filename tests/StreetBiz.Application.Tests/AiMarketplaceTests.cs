@@ -66,6 +66,9 @@ internal sealed class FakeAiLogs : IAiAssistanceLogs
 
     public Task<AiSuggestionFeedbackDto> ReviewAsync(WardActor actor, long aiLogId, AiSuggestionFeedbackRequest request, CancellationToken ct) =>
         throw new NotSupportedException();
+
+    public Task<(long AiLogId, DateTime ReviewedAt)> RecordAcceptedByAuthorAsync(string featureCode, string entityType, long entityId, long authorUserId, object output, CancellationToken ct) =>
+        throw new NotSupportedException();
 }
 
 public sealed class AiTextTests

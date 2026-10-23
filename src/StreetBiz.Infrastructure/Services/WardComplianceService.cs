@@ -187,7 +187,12 @@ public sealed class WardComplianceService(
             reg.identity_verified_at,
             reg.identity_verified_by?.ToString(CultureInfo.InvariantCulture),
             reg.identity_verification_note,
-            await kycResults.ListForRegistrationAsync(reg.registration_id, ct));
+            await kycResults.ListForRegistrationAsync(reg.registration_id, ct),
+            await db.AIAssistanceLogs.AsNoTracking().AnyAsync(x =>
+                x.feature_code == StreetBiz.Application.Features.AiAssistance.AiFeatureCodes.VoiceRegistration
+                && x.entity_type == StreetBiz.Application.Features.AiAssistance.AiLogEntities.Registration
+                && x.entity_id == reg.registration_id
+                && x.accepted == true, ct));
     }
 
     public async Task<(byte[] Content, string FileName)> GenerateEnrollmentDocumentAsync(

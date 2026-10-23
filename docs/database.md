@@ -7,11 +7,14 @@ The whole database is built from exactly **two scripts** in `db/`:
 
 | Script | Contains |
 | --- | --- |
-| `db/StreetBiz_SQL_Server.sql` | Schema (tables, triggers, views, every CHECK constraint), reference data (roles, wards, violation catalogue) and the `__EFMigrationsHistory` stamp |
+| `db/StreetBiz_SQL_Server.sql` | Schema (tables, triggers, views, every CHECK constraint), reference data (roles, Đà Nẵng's 94 commune-level units, violation catalogue) and the `__EFMigrationsHistory` stamp |
 | `db/StreetBiz_Demo_Seed.sql` | Demo accounts and a full demo scenario. Development only |
 
 Nothing else creates or alters the database: no delta scripts, no per-feature seed
-files, no SQL under `docs/`.
+files, no SQL under `docs/`. The one exception is the pair of one-off ward upgrades in
+[Upgrading a database built before the 94 wards](#upgrading-a-database-built-before-the-94-wards):
+they only bring an older database to what the two scripts above build, and a build
+never runs them.
 
 ## Build a local database
 
@@ -33,6 +36,34 @@ Both scripts must run on an empty database; the schema file is not an upgrade sc
 
 Point the API at it with `STREETBIZ_DB_CONNECTION` (or `ConnectionStrings:StreetBizDB`).
 Never run the demo seed against a shared or production database.
+
+## Upgrading a database built before the 94 wards
+
+Since October 2026 the schema seeds the 94 commune-level units of Đà Nẵng (Nghị quyết
+1659/NQ-UBTVQH15, from 1/7/2025: 23 phường, 70 xã and Đặc khu Hoàng Sa), all directly
+under the city: there is no district level any more. A database built before that still
+lists 5 wards (Phường Hải Châu 1, Thanh Khê Đông, An Hải Bắc, Nam Dương, Hòa Quý) under
+4 districts. Either rebuild it as above, which drops every row, or keep its rows and run,
+in this order:
+
+~~~powershell
+sqlcmd -S "(localdb)\MSSQLLocalDB" -d StreetBizDB -E -I -f 65001 -i db\StreetBiz_Upgrade_DaNang_94_Wards.sql
+# only on a development database that has the demo seed:
+sqlcmd -S "(localdb)\MSSQLLocalDB" -d StreetBizDB -E -I -f 65001 -i db\StreetBiz_Upgrade_Demo_Ward_Names.sql
+~~~
+
+For Docker use `-S "localhost,1433" -U sa -P <password>` in place of `-S … -E`.
+
+| Script | Does |
+| --- | --- |
+| `db/StreetBiz_Upgrade_DaNang_94_Wards.sql` | Makes `AdministrativeUnits` exactly the schema's 94 units. Wards 10/11/12/14 keep their ids, contacts and every row that points at them, renamed Phường Hải Châu / Thanh Khê / An Hải / Ngũ Hành Sơn; ward 13 (Nam Dương, now part of phường Hải Châu) and the districts are removed. Stops, changing nothing, while ward 13 is still used by an account, registration, pricing zone, penalty rate or compliance policy: moving those is the ward's decision |
+| `db/StreetBiz_Upgrade_Demo_Ward_Names.sql` | Writes the current ward names into the demo rows that spell out the old ones: officers' sanction titles, registration addresses, address-change requests, notifications. Never on a pilot database, where an address stays as the vendor declared it |
+
+Each script runs in one transaction (any error changes nothing), refuses a file not read
+as UTF-8 (`-f 65001`) and a database older than the current schema, and is safe to run
+twice; on a database already built from the current scripts it changes nothing. A
+database upgraded with both matches a fresh build of the current scripts in every table
+(timestamps aside).
 
 ## Changing the database
 
@@ -66,9 +97,9 @@ BR-59). Stored as BCrypt work-factor-12 hashes.
 | # | Phone | Role | Ward | Purpose |
 | --- | --- | --- | --- | --- |
 | 1 | `0900000001` | PLATFORM_ADMIN | none | Platform administration (ADM-xx) |
-| 2 | `0983000001` | WARD_AUTHORITY | 10 Hải Châu 1 | Reviews (REG/WARD-xx). `scripts/e2e-auth-onboarding.sh` signs in as this account |
-| 3 | `0983000002` | WARD_AUTHORITY | 11 Thanh Khê Đông | Ward isolation checks: another ward's records return 404 |
-| 4 | `0983000003` | WARD_AUTHORITY | 12 An Hải Bắc | Third officer |
+| 2 | `0983000001` | WARD_AUTHORITY | 10 Hải Châu | Reviews (REG/WARD-xx). `scripts/e2e-auth-onboarding.sh` signs in as this account |
+| 3 | `0983000002` | WARD_AUTHORITY | 11 Thanh Khê | Ward isolation checks: another ward's records return 404 |
+| 4 | `0983000003` | WARD_AUTHORITY | 12 An Hải | Third officer |
 | 5 | `0905000101` | VENDOR | 10 | Approved: contract, permit, fee schedule and storefront |
 | 6 | `0905000102` | VENDOR | 10 | SUBMITTED with full evidence: ready for the ward to decide |
 | 7 | `0905000103` | VENDOR | 11 | SUBMITTED with no evidence: shows the approval blocker (BR-07) |
@@ -83,7 +114,7 @@ MORE_INFORMATION_REQUIRED; 6 REJECTED; 7 WITHDRAWN; 8 DRAFT; 10 is a second APPR
 registration for vendor `0905000102` with no contract, the natural receiver of a slot
 transfer). BR-09 holds: vendor 4 carries several registrations but only one open one.
 
-Also seeded: 5 wards in 4 districts of Đà Nẵng, 5 pricing zones and 33 slots (30
+Also seeded: 5 pricing zones and 33 slots (30
 ward-defined, of which the 20 `NVL-01..20` sit on the real Nguyễn Văn Linh centreline,
 10 per side; three more are vendor proposals: PENDING, APPROVED and REJECTED), 7
 contracts (5 ACTIVE, 1 CANCELLED, 1 EXPIRED) of which 2 carry digital permits, 2 fee

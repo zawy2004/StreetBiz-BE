@@ -24,7 +24,7 @@ public sealed class FinanceInsightsRepositoryTests
         var items = await new VendorFinanceRepository(f.Db).ListScheduleItemsAsync(101, null, default);
 
         var contract = Assert.Single(contracts);
-        Assert.Equal(("S-01", "Zone 1", "Hải Châu 1", "12 Bạch Đằng", 3_000_000m),
+        Assert.Equal(("S-01", "Zone 1", "Phường Hải Châu", "12 Bạch Đằng", 3_000_000m),
             (contract.SlotCode, contract.ZoneName, contract.WardName, contract.Address, contract.ScheduleTotal));
         // Revision 2 only (the superseded revision 1 is gone), numbered 1..3 by due date.
         Assert.Equal([(1, 3), (2, 3), (3, 3)], items.Select(i => (i.Ordinal, i.OfCount)));
@@ -132,8 +132,8 @@ public sealed class FinanceInsightsRepositoryTests
                 new Role { role_code = "VENDOR", role_name = "Vendor" },
                 new Role { role_code = "CUSTOMER", role_name = "Customer" });
             f.Db.AdministrativeUnits.AddRange(
-                new AdministrativeUnit { unit_id = 1, unit_type = "WARD", unit_name = "Hải Châu 1" },
-                new AdministrativeUnit { unit_id = 2, unit_type = "WARD", unit_name = "Thạch Thang" });
+                new AdministrativeUnit { unit_id = 1, unit_type = "WARD", unit_name = "Phường Hải Châu" },
+                new AdministrativeUnit { unit_id = 2, unit_type = "WARD", unit_name = "Phường Hòa Cường" });
             f.Db.UserAccounts.AddRange(Account(1, "PLATFORM_ADMIN"), Account(50, "CUSTOMER"), Account(51, "CUSTOMER"));
             foreach (var (zone, ward) in new[] { (1, 1), (2, 1), (3, 2) })
                 f.Db.PricingZones.Add(new PricingZone

@@ -24,6 +24,9 @@ public static class AiFeatureCodes
     public const string ProposalSite = "AIC-04";
     public const string GeofenceDrift = "AIC-06";
     public const string ZonePrice = "AIC-07";
+
+    /// <summary>X01 "Kể chuyện là xong": a vendor's voice/typed registration interview.</summary>
+    public const string VoiceRegistration = "AIV-01";
 }
 
 /// <summary>AIAssistanceLogs.entity_type values this codebase writes.</summary>
@@ -35,6 +38,9 @@ public static class AiLogEntities
     public const string Violation = "Violation";
     public const string Permit = "DigitalPermit";
     public const string Zone = "PricingZone";
+
+    /// <summary>A vendor's own account, for AI help given before any registration exists (X01 turns).</summary>
+    public const string UserAccount = "UserAccount";
 
     /// <summary>Used when a suggestion is about the ward as a whole rather than one record
     /// (e.g. an encroachment check with no slot given).</summary>
@@ -74,6 +80,13 @@ public interface IAiAssistanceLogs
     /// AiLogEntities case in AiAssistanceLogs.cs. Throws NotFoundException otherwise.</summary>
     Task<AiSuggestionFeedbackDto> ReviewAsync(
         WardActor actor, long aiLogId, AiSuggestionFeedbackRequest request, CancellationToken ct);
+
+    /// <summary>
+    /// Records that the person the AI helped accepted its draft themselves (X01: the vendor's tap on
+    /// "Đúng, nộp"), with reviewed_by/accepted/reviewed_at filled together plus an audit row (BR-41/46).
+    /// </summary>
+    Task<(long AiLogId, DateTime ReviewedAt)> RecordAcceptedByAuthorAsync(
+        string featureCode, string entityType, long entityId, long authorUserId, object output, CancellationToken ct);
 }
 #endregion
 

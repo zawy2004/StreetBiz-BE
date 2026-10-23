@@ -173,6 +173,8 @@ and the API never creates or changes it.
 
 - `db/StreetBiz_SQL_Server.sql`: schema, reference data and the EF history stamp
 - `db/StreetBiz_Demo_Seed.sql`: demo accounts and scenario (development only)
+- `db/StreetBiz_Upgrade_*.sql`: one-off, only for a database built before the 94 wards of
+  Đà Nẵng; a build never runs them (see [docs/database.md](docs/database.md#upgrading-a-database-built-before-the-94-wards))
 
 First-time setup on an empty database (stop the API first):
 

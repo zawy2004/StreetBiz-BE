@@ -232,6 +232,29 @@ public sealed class AiAssistanceLogsTests
     }
     #endregion
 
+    #region X01: the author accepts the AI draft
+    [Fact]
+    public async Task An_author_acceptance_fills_the_review_trio_and_writes_an_audit_row()
+    {
+        using var f = await Fixture.Create();
+        var registrationId = f.OwnWardEntityId(AiLogEntities.Registration);
+
+        var (aiLogId, reviewedAt) = await f.NewLogs().RecordAcceptedByAuthorAsync(
+            AiFeatureCodes.VoiceRegistration, AiLogEntities.Registration, registrationId, 10, new { turns = 6 }, default);
+
+        using var db = f.NewDb();
+        var row = await db.AIAssistanceLogs.SingleAsync(x => x.ai_log_id == aiLogId);
+        Assert.Equal(10, row.reviewed_by);
+        Assert.True(row.accepted);
+        Assert.Equal(reviewedAt, row.reviewed_at);
+        Assert.Equal(registrationId, (await db.AuditLogs.SingleAsync(a => a.action == "AI_DRAFT_ACCEPTED_BY_AUTHOR")).entity_id);
+
+        var found = await f.NewLogs().FindLatestAsync<object>(
+            AiFeatureCodes.VoiceRegistration, AiLogEntities.Registration, registrationId, null, default);
+        Assert.True(found!.Accepted);
+    }
+    #endregion
+
     private sealed class Fixture : IDisposable
     {
         public SqliteConnection Connection { get; } = new("Data Source=:memory:");

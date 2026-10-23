@@ -33,8 +33,29 @@ public sealed class GeminiVisionClient(
 {
     private const string DefaultModel = "gemini-3.6-flash";
 
-    public async Task<(bool Success, string? Content)> CallAsync(
-        string prompt, IReadOnlyList<(byte[] Bytes, string MimeType)> images, CancellationToken ct)
+    public Task<(bool Success, string? Content)> CallAsync(
+        string prompt, IReadOnlyList<(byte[] Bytes, string MimeType)> images, CancellationToken ct) =>
+        RunAsync(Models(), thinking => PayloadJson(prompt, images, thinking), ct);
+
+    /// <summary>
+    /// A structured call: a system instruction, one user turn (text and/or one media part, e.g. an
+    /// audio clip) and a response schema the model must follow. Same key rotation, fallback and
+    /// cooldown as <see cref="CallAsync"/>, over the caller's own model list.
+    /// </summary>
+    public Task<(bool Success, string? Content)> CallStructuredAsync(
+        string systemInstruction,
+        string? userText,
+        (byte[] Bytes, string MimeType)? media,
+        JsonNode responseSchema,
+        IReadOnlyList<string> models,
+        CancellationToken ct) =>
+        RunAsync(
+            OrderByCooldown(models.Where(m => !string.IsNullOrWhiteSpace(m)).Select(m => m.Trim()).Distinct(StringComparer.OrdinalIgnoreCase).ToArray()),
+            thinking => StructuredPayloadJson(systemInstruction, userText, media, responseSchema, thinking),
+            ct);
+
+    private async Task<(bool Success, string? Content)> RunAsync(
+        IReadOnlyList<string> models, Func<bool, string> payloadFor, CancellationToken ct)
     {
         var keys = keyPools.Gemini.GetAllKeysInOrder();
         if (keys.Length == 0)
@@ -43,10 +64,9 @@ public sealed class GeminiVisionClient(
             return (false, null);
         }
 
-        var models = Models();
         var attemptTimeout = TimeSpan.FromSeconds(PositiveInt("AiCompliance:Gemini:AttemptTimeoutSeconds", 10));
         var cooldown = TimeSpan.FromSeconds(PositiveInt("AiCompliance:Gemini:ModelCooldownSeconds", 120));
-        var withThinking = PayloadJson(prompt, images, includeThinkingConfig: true);
+        var withThinking = payloadFor(true);
 
         foreach (var model in models)
         {
@@ -64,10 +84,11 @@ public sealed class GeminiVisionClient(
                     var body = await response.Content.ReadAsStringAsync(attempt.Token);
 
                     // A model that does not take a thinking setting answers 400; ask again without it.
-                    if (response.StatusCode == HttpStatusCode.BadRequest && payload == withThinking
-                        && body.Contains("thinking", StringComparison.OrdinalIgnoreCase))
+                    // Not every model says why: gemini-3.5-flash-lite answers a bare "Request contains
+                    // an invalid argument." (Gate 0, 22/10/2026), so any 400 with thinking gets one retry.
+                    if (response.StatusCode == HttpStatusCode.BadRequest && payload == withThinking)
                     {
-                        payload = PayloadJson(prompt, images, includeThinkingConfig: false);
+                        payload = payloadFor(false);
                         i--;
                         continue;
                     }
@@ -141,6 +162,11 @@ public sealed class GeminiVisionClient(
             .Concat(fallbacks.Where(m => !string.IsNullOrWhiteSpace(m)).Select(m => m.Trim()))
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
+        return OrderByCooldown(all);
+    }
+
+    private IReadOnlyList<string> OrderByCooldown(IReadOnlyList<string> all)
+    {
         var now = DateTime.UtcNow;
         bool CoolingDown(string model) =>
             keyPools.GeminiModelCooldowns.TryGetValue(model, out var until) && until > now;
@@ -180,6 +206,43 @@ public sealed class GeminiVisionClient(
             contents = new[] { new { parts = parts.ToArray() } },
             generationConfig,
         });
+    }
+
+    private string StructuredPayloadJson(
+        string systemInstruction, string? userText, (byte[] Bytes, string MimeType)? media, JsonNode responseSchema, bool includeThinkingConfig)
+    {
+        var parts = new JsonArray();
+        if (!string.IsNullOrWhiteSpace(userText))
+        {
+            parts.Add(new JsonObject { ["text"] = userText });
+        }
+
+        if (media is { } m)
+        {
+            parts.Add(new JsonObject
+            {
+                ["inline_data"] = new JsonObject { ["mime_type"] = m.MimeType, ["data"] = Convert.ToBase64String(m.Bytes) },
+            });
+        }
+
+        var generationConfig = new JsonObject
+        {
+            ["temperature"] = 0,
+            ["maxOutputTokens"] = PositiveInt("AiCompliance:Gemini:MaxOutputTokens", 4096),
+            ["responseMimeType"] = "application/json",
+            ["responseSchema"] = responseSchema.DeepClone(),
+        };
+        if (includeThinkingConfig)
+        {
+            generationConfig["thinkingConfig"] = new JsonObject { ["thinkingBudget"] = 0 };
+        }
+
+        return new JsonObject
+        {
+            ["systemInstruction"] = new JsonObject { ["parts"] = new JsonArray(new JsonObject { ["text"] = systemInstruction }) },
+            ["contents"] = new JsonArray(new JsonObject { ["role"] = "user", ["parts"] = parts }),
+            ["generationConfig"] = generationConfig,
+        }.ToJsonString();
     }
 
     private int PositiveInt(string key, int fallback) =>

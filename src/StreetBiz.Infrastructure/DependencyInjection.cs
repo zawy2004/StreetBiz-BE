@@ -167,13 +167,21 @@ public static class DependencyInjection
 
         services.Configure<NominatimSettings>(configuration.GetSection(NominatimSettings.SectionName));
         services.AddMemoryCache();
-        services.AddHttpClient<IGeocodingService, NominatimGeocodingService>((sp, client) =>
+        services.AddHttpClient<NominatimGeocodingService>((sp, client) =>
         {
             var settings = sp.GetRequiredService<IOptions<NominatimSettings>>().Value;
             client.BaseAddress = new Uri(settings.BaseUrl.TrimEnd('/') + "/");
             client.Timeout = TimeSpan.FromSeconds(settings.TimeoutSeconds);
             client.DefaultRequestHeaders.UserAgent.ParseAdd(settings.UserAgent);
         });
+        services.AddHttpClient<EsriGeocodingService>(client =>
+        {
+            client.BaseAddress = new Uri(EsriGeocodingService.BaseUrl);
+            client.Timeout = TimeSpan.FromSeconds(8);
+        });
+        // Interactive search: Esri first (Nominatim is unreachable from the team's network), then
+        // Nominatim; stored forward lookups keep Nominatim first. See FallbackGeocodingService.
+        services.AddTransient<IGeocodingService, FallbackGeocodingService>();
 
         // Key comes from configuration (dotnet user-secrets / env var) only --
         // never hardcode AiCompliance:Gemini:ApiKey/FptAi:ApiKey/Groq:ApiKeys in
@@ -203,6 +211,28 @@ public static class DependencyInjection
         {
             client.Timeout = TimeSpan.FromSeconds(30);
         });
+
+        // X01 "Kể chuyện là xong": speech to text + extraction for the voice registration interview.
+        // Same keys and rotation as the services above (AiKeyPools).
+        services.AddHttpClient<StreetBiz.Application.Features.VendorRegistration.AssistTurn.ISpeechToText,
+            Services.Voice.GroqWhisperSpeechToText>(client => client.Timeout = TimeSpan.FromSeconds(20));
+        services.AddHttpClient<Services.Voice.GroqRegistrationExtractor>(client => client.Timeout = TimeSpan.FromSeconds(20));
+        services.AddTransient<Services.Voice.GeminiRegistrationExtractor>();
+        services.AddTransient<StreetBiz.Application.Features.VendorRegistration.AssistTurn.IRegistrationExtractor,
+            Services.Voice.CompositeRegistrationExtractor>();
+
+        // X01 v2: the same interview as a live conversation, over the chatbot's Gemini Live relay.
+        var registrationVoice = new StreetBiz.Application.Features.VendorRegistration.AssistTurn.RegistrationVoiceSettings();
+        configuration.GetSection("AiCompliance:VoiceRegistration:Live").Bind(registrationVoice);
+        if (registrationVoice.MaxSessionSeconds is < 60 or > 900 || registrationVoice.IdleSeconds is < 20 or > 300
+            || registrationVoice.MaxToolCalls is < 5 or > 100 || registrationVoice.EvidenceWaitMs is < 0 or > 3000)
+        {
+            throw new InvalidOperationException("AiCompliance:VoiceRegistration:Live settings exceed supported limits.");
+        }
+
+        services.AddSingleton(registrationVoice);
+        services.AddSingleton<StreetBiz.Application.Features.VendorRegistration.AssistTurn.RegistrationVoiceTickets>();
+        services.AddScoped<StreetBiz.Application.Features.VendorRegistration.AssistTurn.RegistrationVoiceService>();
 
         return services;
     }

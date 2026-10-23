@@ -53,7 +53,10 @@ public sealed record WardEnrollmentDetailDto(
     string? IdentityVerificationNote,
     /// <summary>Server-recorded eKYC scores (CCCD OCR, face match) for this registration.
     /// Evidence for the officer's own decision -- never a substitute for it.</summary>
-    IReadOnlyList<KycCheckRecord> KycChecks);
+    IReadOnlyList<KycCheckRecord> KycChecks,
+    /// <summary>X01: the vendor filled this in with the voice assistant and accepted its draft
+    /// themselves before filing. Shown as "[AI] soạn từ lời kể — người bán đã xác nhận".</summary>
+    bool AssistedByAi = false);
 
 public sealed record WardOwnerProfileDto(
     DateOnly? DateOfBirth,
