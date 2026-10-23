@@ -149,7 +149,24 @@ public sealed class VoiceRegistrationLiveTests
         assist.GetProperty("cause").GetString().Should().Be("screen");
         Confirmed(assist.GetProperty("result").GetProperty("draft")).Should().Equal(AssistFields.CapitalAmount);
         f.Upstream.Texts[1].Should().Be(
-            "[Màn hình] Người bán vừa bấm \"Đúng rồi\" cho vốn. Câu hỏi tiếp theo (next_input: VOICE): \"Có mấy người cùng bán, tính cả cô ạ?\"");
+            "[Màn hình] Người bán vừa bấm \"Đúng rồi\" cho vốn. Câu hỏi tiếp theo (next_input: VOICE): \"Có mấy người cùng bán, tính cả cô ạ?\" Không gọi propose_fields cho tin này.");
+    }
+
+    [Fact]
+    public async Task A_call_with_no_new_words_from_the_vendor_is_not_a_misheard_try()
+    {
+        using var f = new Fixture(BeforeMoney);
+        // The model reacts to a screen message by calling the tool, though the vendor said nothing.
+        f.Upstream.Script(Call("c1", ("capitalAmount", "30000000", "ba chục triệu")));
+        f.Client.EndAfter(() => f.Upstream.Replies.Count > 0);
+
+        await f.Run();
+
+        f.Client.Count("assist").Should().Be(1); // only the opening screen
+        using var reply = JsonDocument.Parse(f.Upstream.Replies.Single().Json);
+        reply.RootElement.GetProperty("next_question").GetString().Should().Be("Vốn bỏ ra ban đầu khoảng bao nhiêu ạ?");
+        f.Logs.Verify(l => l.RecordAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<long>(), It.IsAny<string?>(),
+            It.IsAny<object>(), It.IsAny<decimal?>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
     [Fact]
@@ -197,6 +214,32 @@ public sealed class VoiceRegistrationLiveTests
         f.Client.Last("error").GetProperty("code").GetString().Should().Be("voice_unavailable");
         f.Client.Last("ended").GetProperty("reason").GetString().Should().Be("voice_unavailable");
         using var again = f.Sessions.Enter(Vendor);
+    }
+
+    [Fact]
+    public async Task A_silent_session_ends_by_itself_and_says_why_before_the_line_is_dropped()
+    {
+        using var f = new Fixture(new AssistDraft(), new RegistrationVoiceSettings { IdleSeconds = 2 });
+
+        await f.Run();
+
+        f.Client.Last("ended").GetProperty("reason").GetString().Should().Be("idle");
+        // Cancelling a pending read aborts a real WebSocket: it must not happen before "ended" went out.
+        f.Client.ReadCancelledBeforeEnded.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task A_backlog_of_microphone_audio_is_dropped_not_the_interview()
+    {
+        using var f = new Fixture(new AssistDraft());
+        // 10 s of audio handed over at once, as a phone does after its app stalled.
+        f.Client.Push(Enumerable.Range(0, 10).Select(_ => (ChatbotVoiceClientFrame)new ChatbotVoiceClientAudio(new byte[32_000])).ToArray());
+        f.Client.EndAfter(() => f.Upstream.AudioBytes > 0);
+
+        await f.Run();
+
+        f.Client.Last("ended").GetProperty("reason").GetString().Should().Be("ended");
+        f.Upstream.AudioBytes.Should().BeLessOrEqualTo(96_000);
     }
 
     [Fact]
@@ -350,7 +393,14 @@ public sealed class VoiceRegistrationLiveTests
             foreach (var item in items) events.Writer.TryWrite(item);
         }
 
-        public Task SendAudioAsync(ReadOnlyMemory<byte> pcm16k, CancellationToken ct) => Task.CompletedTask;
+        public int AudioBytes;
+
+        public Task SendAudioAsync(ReadOnlyMemory<byte> pcm16k, CancellationToken ct)
+        {
+            Interlocked.Add(ref AudioBytes, pcm16k.Length);
+            return Task.CompletedTask;
+        }
+
         public Task SendAudioEndAsync(CancellationToken ct) => Task.CompletedTask;
 
         public Task SendToolResponsesAsync(IReadOnlyList<ChatbotToolReply> replies, CancellationToken ct)
@@ -387,12 +437,17 @@ public sealed class VoiceRegistrationLiveTests
         }
 
         public void EndAfter(Func<bool> condition) => endWhen = condition;
+        public bool ReadCancelledBeforeEnded;
         public int Count(string type) { lock (sent) return sent.Count(m => m.GetProperty("type").GetString() == type); }
         public JsonElement First(string type) { lock (sent) return sent.First(m => m.GetProperty("type").GetString() == type); }
         public JsonElement Last(string type) { lock (sent) return sent.Last(m => m.GetProperty("type").GetString() == type); }
 
         public async Task<ChatbotVoiceClientFrame?> ReceiveAsync(CancellationToken ct)
         {
+            using var watch = ct.Register(() =>
+            {
+                lock (sent) ReadCancelledBeforeEnded |= !sent.Any(m => m.GetProperty("type").GetString() == "ended");
+            });
             using var limit = CancellationTokenSource.CreateLinkedTokenSource(ct);
             limit.CancelAfter(TimeSpan.FromSeconds(10));
             while (true)
@@ -426,7 +481,7 @@ public sealed class VoiceRegistrationLiveTests
         public readonly RegistrationVoiceTicket Ticket;
         private readonly RegistrationVoiceService service;
 
-        public Fixture(AssistDraft draft)
+        public Fixture(AssistDraft draft, RegistrationVoiceSettings? settings = null)
         {
             Provider = new(Upstream);
             var voice = new ChatbotVoiceSettings { Enabled = true, Model = "fake-live" };
@@ -437,7 +492,7 @@ public sealed class VoiceRegistrationLiveTests
             Sender.Setup(s => s.Send(It.IsAny<SearchSlotsQuery>(), It.IsAny<CancellationToken>()))
                 .ReturnsAsync([Slot(21, "LD-07", 10, 120), Slot(22, "LD-08", 10, 180)]);
             Geocoding.Setup(g => g.SearchAsync(It.IsAny<string>(), 3, It.IsAny<CancellationToken>())).ReturnsAsync([]);
-            service = new(Actors.Object, Store.Object, [Provider], Sessions, voice, new RegistrationVoiceSettings(),
+            service = new(Actors.Object, Store.Object, [Provider], Sessions, voice, settings ?? new RegistrationVoiceSettings(),
                 Geocoding.Object, Sender.Object, Logs.Object, TimeProvider.System);
         }
 

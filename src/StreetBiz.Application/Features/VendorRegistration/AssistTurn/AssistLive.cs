@@ -179,6 +179,9 @@ public sealed class RegistrationVoiceService(
     public const string ToolName = "propose_fields";
     public const int MaxClientFrameBytes = ChatbotVoiceService.MaxClientFrameBytes;
 
+    /// <summary>Seconds of over-rate microphone audio tolerated (dropped) before the session ends.</summary>
+    public const int MaxFloodedSeconds = 5;
+
     private static readonly JsonSerializerOptions DraftJson = new(JsonSerializerDefaults.Web);
     private static readonly AssistDraftValidator DraftValidator = new();
     private readonly AssistTurnEngine engine = new(geocoding, sender);
@@ -280,6 +283,10 @@ public sealed class RegistrationVoiceService(
         var startedAt = clock.GetUtcNow();
         var reason = "ended";
         var connected = false;
+        // The client's socket keeps being read until "ended" has been sent: cancelling a pending
+        // read aborts a .NET WebSocket, and the vendor would see a dropped line instead of the reason.
+        using var receiving = CancellationTokenSource.CreateLinkedTokenSource(aborted);
+        Task? listening = null;
         try
         {
             slot = sessions.Enter(actor);
@@ -312,7 +319,7 @@ public sealed class RegistrationVoiceService(
             await client.SendAsync(new { type = "ready", sessionId = ticket.SessionId, maxSeconds = budget }, aborted);
             startedAt = clock.GetUtcNow();
             connected = true;
-            reason = await RelayAsync(ticket, client, upstream, provider, setup, budget, aborted);
+            reason = await RelayAsync(ticket, client, upstream, provider, setup, budget, receiving.Token, task => listening = task, aborted);
         }
         catch (ChatbotException ex)
         {
@@ -341,6 +348,17 @@ public sealed class RegistrationVoiceService(
             }
 
             await TrySend(client, new { type = "ended", reason });
+            receiving.Cancel();
+            if (listening is not null)
+            {
+                try
+                {
+                    await listening;
+                }
+                catch (Exception ex) when (ex is not OutOfMemoryException)
+                {
+                }
+            }
         }
     }
 
@@ -350,7 +368,8 @@ public sealed class RegistrationVoiceService(
     private sealed record TextWork(string Text) : Work;
 
     private async Task<string> RelayAsync(RegistrationVoiceTicket ticket, IChatbotVoiceClient client, IChatbotVoiceUpstream upstream,
-        IChatbotVoiceProvider provider, ChatbotVoiceSetup setup, int budget, CancellationToken aborted)
+        IChatbotVoiceProvider provider, ChatbotVoiceSetup setup, int budget, CancellationToken receiveToken, Action<Task> keepListening,
+        CancellationToken aborted)
     {
         var actor = ticket.Actor;
         using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(aborted);
@@ -458,6 +477,22 @@ public sealed class RegistrationVoiceService(
                 }
 
                 var fields = proposed[i];
+                if (string.IsNullOrWhiteSpace(said))
+                {
+                    // Nothing the vendor said or typed since the last tap: there is no answer to
+                    // check, and it must not count as a misheard try (two would force typing).
+                    replies.Add(new(call.Id, call.Name, ChatbotJson.Serialize(new
+                    {
+                        accepted = Array.Empty<object>(),
+                        notAccepted = fields.Select(f => FieldLabels.GetValueOrDefault(f.Field, f.Field)).Distinct(),
+                        warnings = new[] { "Người bán chưa nói thêm gì; chỉ ghi điều người bán nói ra." },
+                        next_question = question?.Text,
+                        next_input = question?.Input,
+                        done = question is null,
+                    })));
+                    continue;
+                }
+
                 var started = clock.GetUtcNow();
                 var questionKey = AnswerKey(question);
                 var warnings = new List<string>();
@@ -583,9 +618,16 @@ public sealed class RegistrationVoiceService(
         {
             var window = clock.GetUtcNow();
             var bytes = 0;
+            var flooded = false;
+            var floodedWindows = 0;
             while (!ct.IsCancellationRequested)
             {
-                var frame = await client.ReceiveAsync(ct);
+                var frame = await client.ReceiveAsync(receiveToken);
+                if (ct.IsCancellationRequested)
+                {
+                    return;
+                }
+
                 switch (frame)
                 {
                     case null:
@@ -630,18 +672,27 @@ public sealed class RegistrationVoiceService(
                             return;
                         }
 
-                        // 16 kHz PCM16 is 32 KB/s; allow bursts after brief stalls but not a flood.
+                        // 16 kHz PCM16 is 32 KB/s. A phone hands over a backlog at once after a
+                        // stall (keyboard opening, app busy): that stale audio is dropped, not the
+                        // interview. Only a flood that keeps coming ends the session.
                         if (clock.GetUtcNow() - window > TimeSpan.FromSeconds(1))
                         {
                             window = clock.GetUtcNow();
                             bytes = 0;
+                            flooded = false;
                         }
 
                         bytes += audio.Pcm.Length;
                         if (bytes > 96_000)
                         {
-                            Stop("audio_rate");
-                            return;
+                            if (!flooded && ++floodedWindows > MaxFloodedSeconds)
+                            {
+                                Stop("audio_rate");
+                                return;
+                            }
+
+                            flooded = true;
+                            break;
                         }
 
                         // While the upstream reconnects, speech is dropped rather than buffered.
@@ -821,8 +872,10 @@ public sealed class RegistrationVoiceService(
             await client.SendAsync(new { type = "assist", version, cause = "screen", result = opening }, ct);
             await Say(OpeningMessage(draft, question));
             await client.SendAsync(new { type = "state", state = "listening" }, ct);
-            var loops = new[] { Guarded(FromClient), Guarded(FromUpstream), Guarded(Worker), Guarded(Watch) };
-            await Task.WhenAny(loops);
+            var listening = Guarded(FromClient);
+            keepListening(listening);
+            var loops = new[] { Guarded(FromUpstream), Guarded(Worker), Guarded(Watch) };
+            await Task.WhenAny([.. loops, listening]);
             lifetime.Cancel();
             try
             {
@@ -975,14 +1028,14 @@ public sealed class RegistrationVoiceService(
     public static string ScreenMessage(IReadOnlyList<string> changes, AssistTurnResult result)
     {
         var did = changes.Count == 0 ? "Người bán vừa thao tác trên màn hình." : $"Người bán vừa {string.Join("; ", changes)}.";
-        return $"[Màn hình] {did} {Next(result.NextQuestion)}";
+        return $"[Màn hình] {did} {Next(result.NextQuestion)} Không gọi {ToolName} cho tin này.";
     }
 
     public static string OpeningMessage(AssistDraft draft, AssistQuestion? question)
     {
         var known = Filled(draft);
         var already = known.Count == 0 ? string.Empty : $" Hồ sơ đã có: {string.Join(", ", known)} (không hỏi lại).";
-        return $"[Màn hình] Bắt đầu phiên trò chuyện. Hãy chào người bán thật ngắn rồi hỏi.{already} {Next(question)}";
+        return $"[Màn hình] Bắt đầu phiên trò chuyện. Hãy chào người bán thật ngắn rồi hỏi.{already} {Next(question)} Không gọi {ToolName} cho tin này.";
     }
 
     private static string Next(AssistQuestion? question)
