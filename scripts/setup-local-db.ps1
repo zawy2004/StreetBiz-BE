@@ -4,7 +4,7 @@
 
 .DESCRIPTION
   StreetBizDB is database-first: the API never migrates or creates it
-  (docs/database.md). This script applies, in order, the only two database scripts:
+  (docs/database.md). This script applies, in order, the only two build scripts:
 
     1. db/StreetBiz_SQL_Server.sql  schema (tables, triggers, views, every CHECK
                                     constraint), reference data (roles, wards,
