@@ -18,7 +18,7 @@
    - Forward references (PaymentTransactions -> Orders) are added via
      ALTER TABLE at the end of the script to keep CREATE TABLE order
      dependency-clean top to bottom.
-   - This script creates structural/simple constraints only, plus five
+   - This script creates structural/simple constraints only, plus six
      triggers and two views for rules that no CHECK constraint can express
      because they span rows, tables or time:
        TR_RentalContracts_NoOverlap          — one slot, one tenant at a time
@@ -26,6 +26,8 @@
        TR_Penalties_RequireIdentifiedOffender — cannot bill an unknown person
        TR_Storefronts_Phase2Gate             — BR-48 marketplace entry gate
        TR_RefundTransactions_NotMoreThanPaid — never refund more than came in
+       TR_MenuItemPriceHistory_AppendOnly    — a posted price, once recorded, is
+                                               never rewritten or removed
        vw_PermitValidity                     — the only correct answer to
                                                "is this QR good right now",
                                                derived from permit AND contract
@@ -964,7 +966,14 @@ CREATE TABLE VendorComments (
         FOREIGN KEY (customer_user_id) REFERENCES UserAccounts(user_id)
 );
 
--- BUY-05, AIB-01
+-- BUY-05, BUY-07, WARD-19, AIB-01
+-- report_type OVERCHARGE ("bán cao hơn giá niêm yết") carries its own price evidence: the server
+-- finds the MenuItemPriceHistory row in force at purchased_at and freezes posted_amount = that
+-- price x quantity on the report. Nothing the customer types is ever taken as the posted price.
+-- due_at is the ward's internal handling target (VendorReports:DueWorkingDays working days), not a
+-- statutory deadline. Closing a report is the officer's act (BR-41/43): DISMISSED with a reason
+-- written for the reporter, or REVIEWED as MEDIATED (with the refund the vendor paid back, if
+-- any) or VIOLATION_RECORDED (a biên bản raised from it: Violations.source_report_id).
 CREATE TABLE VendorReports (
     report_id                BIGINT IDENTITY(1,1)  PRIMARY KEY,
     reporter_user_id         BIGINT                NOT NULL,
@@ -979,11 +988,54 @@ CREATE TABLE VendorReports (
     reviewer_role         AS CAST(N'WARD_AUTHORITY' AS NVARCHAR(30)) PERSISTED,
     reviewed_at                  DATETIME2             NULL,
     created_at                   DATETIME2             NOT NULL DEFAULT SYSUTCDATETIME(),
+    report_type                  NVARCHAR(20)          NOT NULL DEFAULT 'GENERAL',
+    -- OVERCHARGE price evidence. The two foreign keys are added in section 8: MenuItems and
+    -- MenuItemPriceHistory are created further down.
+    menu_item_id                 BIGINT                NULL,
+    price_history_id             BIGINT                NULL,
+    quantity                     INT                   NULL,
+    posted_amount                DECIMAL(18,0)         NULL,
+    charged_amount               DECIMAL(18,0)         NULL,
+    purchased_at                 DATETIME2             NULL,
+    due_at                       DATETIME2             NULL,
+    resolution                   NVARCHAR(20)          NULL,
+    resolution_note              NVARCHAR(500)         NULL,
+    refund_amount                DECIMAL(18,0)         NULL,
     CONSTRAINT CK_VendorReports_Status
         CHECK (report_status IN ('PENDING','REVIEWED','DISMISSED')),
     -- BR-40: a report must reference at least one of vendor / slot / scanned permit.
     CONSTRAINT CK_VendorReports_HasReference
         CHECK (vendor_id IS NOT NULL OR slot_id IS NOT NULL OR scanned_permit_id IS NOT NULL),
+    CONSTRAINT CK_VendorReports_Type
+        CHECK (report_type IN ('GENERAL','OVERCHARGE','PRICE_NOT_POSTED')),
+    -- An overcharge complaint is actionable only with its whole price evidence and a real difference.
+    CONSTRAINT CK_VendorReports_OverchargeEvidence
+        CHECK (report_type <> 'OVERCHARGE'
+               OR (menu_item_id IS NOT NULL AND price_history_id IS NOT NULL AND quantity IS NOT NULL
+                   AND posted_amount IS NOT NULL AND charged_amount IS NOT NULL AND purchased_at IS NOT NULL
+                   AND quantity > 0 AND charged_amount > posted_amount)),
+    CONSTRAINT CK_VendorReports_Amounts
+        CHECK ((posted_amount IS NULL OR posted_amount >= 0) AND (charged_amount IS NULL OR charged_amount >= 0)),
+    CONSTRAINT CK_VendorReports_Resolution
+        CHECK (resolution IS NULL OR resolution IN ('DISMISSED','MEDIATED','VIOLATION_RECORDED')),
+    -- The status and the outcome say the same thing, so neither can drift from the other. Each
+    -- branch tests resolution IS NOT NULL first: a CHECK that evaluates to UNKNOWN passes.
+    CONSTRAINT CK_VendorReports_StatusOutcome
+        CHECK ((report_status = 'PENDING' AND resolution IS NULL)
+            OR (report_status = 'DISMISSED' AND resolution IS NOT NULL AND resolution = 'DISMISSED'
+                AND resolution_note IS NOT NULL)
+            OR (report_status = 'REVIEWED' AND resolution IS NOT NULL
+                AND resolution IN ('MEDIATED','VIOLATION_RECORDED'))),
+    CONSTRAINT CK_VendorReports_MediatedNote
+        CHECK (resolution IS NULL OR resolution <> 'MEDIATED' OR resolution_note IS NOT NULL),
+    -- BR-46: a closed report names who closed it and when.
+    CONSTRAINT CK_VendorReports_ReviewEvidence
+        CHECK (report_status = 'PENDING' OR (reviewed_by IS NOT NULL AND reviewed_at IS NOT NULL)),
+    -- A refund is the vendor paying back part of what was charged, only ever on a mediated case.
+    CONSTRAINT CK_VendorReports_Refund
+        CHECK (refund_amount IS NULL
+               OR (resolution IS NOT NULL AND resolution = 'MEDIATED' AND charged_amount IS NOT NULL
+                   AND refund_amount >= 0 AND refund_amount <= charged_amount)),
     CONSTRAINT FK_VendorReports_Reporter
         FOREIGN KEY (reporter_user_id) REFERENCES UserAccounts(user_id),
     CONSTRAINT FK_VendorReports_Vendor
@@ -997,6 +1049,14 @@ CREATE TABLE VendorReports (
         REFERENCES UserAccounts(user_id, role_code)
 );
 CREATE INDEX IX_VendorReports_Vendor ON VendorReports(vendor_id);
+-- "Phản ánh của tôi" and the ward inbox's overdue-first order.
+CREATE INDEX IX_VendorReports_Reporter ON VendorReports(reporter_user_id, created_at);
+CREATE INDEX IX_VendorReports_StatusDue ON VendorReports(report_status, due_at);
+-- One open report per person per vendor: a second one while the first waits adds noise, not
+-- evidence. vendor_id IS NOT NULL keeps slot-only reports out (a unique index treats NULLs as equal).
+CREATE UNIQUE INDEX UQ_VendorReports_OnePendingPerReporter
+    ON VendorReports(reporter_user_id, vendor_id)
+    WHERE report_status = 'PENDING' AND vendor_id IS NOT NULL;
 
 
 /* ============================================================
@@ -1139,6 +1199,10 @@ CREATE TABLE Violations (
     delivery_refusal_reason   NVARCHAR(500)   NULL,
     CONSTRAINT CK_Violations_Source
         CHECK (source IN ('ON_SITE','CUSTOMER_REPORT')),
+    -- A record raised from a citizen's report is a customer-report record. The reverse does not
+    -- hold: a report taken outside the app (phone, 1022) is CUSTOMER_REPORT with no report row.
+    CONSTRAINT CK_Violations_SourceReport
+        CHECK (source_report_id IS NULL OR source = 'CUSTOMER_REPORT'),
     -- must be pinned to something, or the record is not actionable
     CONSTRAINT CK_Violations_HasTarget
         CHECK (contract_id IS NOT NULL OR slot_id IS NOT NULL OR vendor_id IS NOT NULL),
@@ -1169,6 +1233,10 @@ CREATE TABLE Violations (
 CREATE INDEX IX_Violations_Contract ON Violations(contract_id);
 CREATE INDEX IX_Violations_Slot     ON Violations(slot_id);
 CREATE INDEX IX_Violations_Vendor   ON Violations(vendor_id);
+-- WARD-19: at most one biên bản per report, even when two officers press "Lập biên bản" at once.
+CREATE UNIQUE INDEX UQ_Violations_OnePerSourceReport
+    ON Violations(source_report_id)
+    WHERE source_report_id IS NOT NULL;
 
 -- BR-33: amount always looked up from PenaltyFeeSchedules, never entered ad hoc,
 -- then frozen here — a later rate change must not rewrite an issued penalty.
@@ -1601,19 +1669,27 @@ CREATE TABLE StorefrontBusinessHours (
 );
 CREATE INDEX IX_StorefrontBusinessHours_Storefront ON StorefrontBusinessHours(storefront_id);
 
+-- The menu is also the stall's price board (BUY-06). Luật Giá 2023 Điều 29 ties a posted price
+-- to its unit of sale ("ổ", "ly", "kg"), so price_unit is mandatory. A dish is on the price board
+-- while it is AVAILABLE or SOLD_OUT; HIDDEN and ARCHIVED take it off. This is a legal duty, not a
+-- marketplace feature: the public board shows even while the storefront is PAUSED or CLOSED.
 CREATE TABLE MenuItems (
     menu_item_id         BIGINT IDENTITY(1,1)  PRIMARY KEY,
     storefront_id         BIGINT                NOT NULL,
     category_id           INT                   NOT NULL,
     item_name             NVARCHAR(180)         NOT NULL,
+    item_name_en          NVARCHAR(180)         NULL,  -- optional, typed by the vendor (D8)
     description            NVARCHAR(500)         NULL,
     image_url               NVARCHAR(500)         NULL,
     unit_price             DECIMAL(18,0)         NOT NULL,
+    price_unit             NVARCHAR(30)          NOT NULL DEFAULT N'phần',
     availability_status    NVARCHAR(20)          NOT NULL DEFAULT 'AVAILABLE',
     created_at               DATETIME2             NOT NULL DEFAULT SYSUTCDATETIME(),
     updated_at               DATETIME2             NULL,
     CONSTRAINT CK_MenuItems_Price
         CHECK (unit_price >= 0),
+    CONSTRAINT CK_MenuItems_PriceUnit
+        CHECK (LEN(LTRIM(price_unit)) > 0),
     CONSTRAINT CK_MenuItems_Availability
         CHECK (availability_status IN ('AVAILABLE','SOLD_OUT','HIDDEN','ARCHIVED')),
     CONSTRAINT FK_MenuItems_Storefront
@@ -1623,6 +1699,50 @@ CREATE TABLE MenuItems (
 );
 CREATE INDEX IX_MenuItems_Storefront ON MenuItems(storefront_id);
 CREATE INDEX IX_MenuItems_Category ON MenuItems(category_id);
+
+-- BUY-06 / BUY-07: every change to what a dish's posted price says -- created, renamed, repriced,
+-- unit changed, taken off or put back on the board -- appends one row that snapshots the whole
+-- dish, written in the same transaction as the change, by whoever made it (the vendor, or a
+-- moderator hiding/restoring the dish). A customer's overcharge complaint is judged against the
+-- row in force at purchased_at, so a later price change cannot rewrite the evidence: the trigger
+-- below refuses UPDATE and DELETE. The storefront's "bản số N" is its count of rows here, which
+-- only ever grows and says nothing about the prices themselves. storefront_id is copied from the
+-- dish (it never changes) so a board's history is one index seek.
+CREATE TABLE MenuItemPriceHistory (
+    price_history_id   BIGINT IDENTITY(1,1)  PRIMARY KEY,
+    menu_item_id       BIGINT                NOT NULL,
+    storefront_id      BIGINT                NOT NULL,
+    item_name          NVARCHAR(180)         NOT NULL,
+    item_name_en       NVARCHAR(180)         NULL,
+    price_unit         NVARCHAR(30)          NOT NULL,
+    unit_price         DECIMAL(18,0)         NOT NULL,
+    is_listed          BIT                   NOT NULL,
+    change_kind        NVARCHAR(20)          NOT NULL,
+    changed_by         BIGINT                NOT NULL,
+    changed_at         DATETIME2             NOT NULL DEFAULT SYSUTCDATETIME(),
+    CONSTRAINT CK_MenuItemPriceHistory_Price
+        CHECK (unit_price >= 0),
+    CONSTRAINT CK_MenuItemPriceHistory_ChangeKind
+        CHECK (change_kind IN ('CREATED','UPDATED','ARCHIVED','RESTORED')),
+    CONSTRAINT FK_MenuItemPriceHistory_MenuItem
+        FOREIGN KEY (menu_item_id) REFERENCES MenuItems(menu_item_id),
+    CONSTRAINT FK_MenuItemPriceHistory_Storefront
+        FOREIGN KEY (storefront_id) REFERENCES Storefronts(storefront_id),
+    CONSTRAINT FK_MenuItemPriceHistory_ChangedBy
+        FOREIGN KEY (changed_by) REFERENCES UserAccounts(user_id)
+);
+CREATE INDEX IX_MenuItemPriceHistory_Item       ON MenuItemPriceHistory(menu_item_id, changed_at);
+CREATE INDEX IX_MenuItemPriceHistory_Storefront ON MenuItemPriceHistory(storefront_id, changed_at);
+GO
+CREATE TRIGGER TR_MenuItemPriceHistory_AppendOnly
+ON MenuItemPriceHistory
+INSTEAD OF UPDATE, DELETE
+AS
+BEGIN
+    SET NOCOUNT ON;
+    THROW 51010, N'MenuItemPriceHistory is append-only: a posted price, once recorded, is never rewritten or removed.', 1;
+END;
+GO
 
 -- Food-safety (ATTP) certificate for some dishes of one storefront. Workflow:
 --   SUBMITTED -> (ward) MORE_INFORMATION_REQUIRED -> SUBMITTED again
@@ -2010,6 +2130,15 @@ ALTER TABLE PaymentTransactions
     ADD CONSTRAINT FK_PaymentTransactions_Order
     FOREIGN KEY (order_id) REFERENCES Orders(order_id);
 
+-- VendorReports (section 4) points at the dish and the price row an overcharge complaint names.
+ALTER TABLE VendorReports
+    ADD CONSTRAINT FK_VendorReports_MenuItem
+    FOREIGN KEY (menu_item_id) REFERENCES MenuItems(menu_item_id);
+
+ALTER TABLE VendorReports
+    ADD CONSTRAINT FK_VendorReports_PriceHistory
+    FOREIGN KEY (price_history_id) REFERENCES MenuItemPriceHistory(price_history_id);
+
 
 /* ============================================================
    9. VIEWS
@@ -2223,8 +2352,9 @@ GO
 
 -- ViolationTypes (WARD-12 catalogue). Natural key: the code is what an officer picks on
 -- the spot and what PenaltyFeeSchedules prices. The first ten are the operational
--- catalogue; the last five are the legal-citation set the ward compliance module and its
--- AI classifier (AiComplianceService) map onto.
+-- catalogue; the next five are the legal-citation set the ward compliance module and its
+-- AI classifier (AiComplianceService) map onto; the last two are the price-posting pair
+-- (Nghị định 87/2024/NĐ-CP Điều 13) a customer's price complaint (BUY-07) leads to.
 -- NO_PERMIT and WASTE_DISPOSAL are retired from the start (is_active = 0): they duplicate
 -- UNAUTHORIZED_BUSINESS_USE (NĐ 168/2024 Đ12 k5) and HYGIENE_LITTERING (NĐ 45/2022 Đ25), which
 -- carry a legal citation. They stay in the catalogue so records that name them still resolve,
@@ -2244,7 +2374,9 @@ INSERT INTO ViolationTypes (violation_type_code, description, is_active) VALUES
     ('EXPIRED_OR_INVALID_PERMIT', N'Giấy phép sử dụng tạm thời vỉa hè hết hiệu lực hoặc sử dụng sai nội dung giấy phép', 1),
     ('STREET_VENDING_RESTRICTED', N'Bán hàng rong tại tuyến phố cấm',                           1),
     ('HYGIENE_LITTERING',         N'Vứt, thải, để rác thải sinh hoạt trên vỉa hè, lòng đường',  1),
-    ('OBSTRUCT_PUBLIC_ORDER',     N'Đổ rác, vật cản gây mất an ninh trật tự công cộng',         1);
+    ('OBSTRUCT_PUBLIC_ORDER',     N'Đổ rác, vật cản gây mất an ninh trật tự công cộng',         1),
+    ('PRICE_NOT_POSTED',          N'Không niêm yết giá hàng hóa, dịch vụ bằng hình thức theo quy định', 1),
+    ('PRICE_ABOVE_POSTED',        N'Bán cao hơn giá niêm yết',                                  1);
 GO
 
 
@@ -2363,8 +2495,9 @@ GO
                                       AuditLogs, AIAssistanceLogs,
                                       ReportExports)
                                       -- FoodCategories is shared with Phase 2 menus/search
-   7  Phase 2 Marketplace ........ 17 (Storefronts, StorefrontBusinessHours,
-                                      MenuItems, FoodSafetyApplications,
+   7  Phase 2 Marketplace ........ 18 (Storefronts, StorefrontBusinessHours,
+                                      MenuItems, MenuItemPriceHistory,
+                                      FoodSafetyApplications,
                                       FoodSafetyApplicationItems,
                                       FoodSafetyEvidence, ShoppingCarts,
                                       ShoppingCartItems, Orders, OrderItems,
@@ -2374,7 +2507,7 @@ GO
    11 Assistant Persistence ...... 3  (ChatbotConversations, ChatbotMessages,
                                       ChatbotAudits)
    ------------------------------------------------------------
-   TOTAL: 62 tables (plus __EFMigrationsHistory), 5 triggers, 2 views
+   TOTAL: 63 tables (plus __EFMigrationsHistory), 6 triggers, 2 views
 
    Use-case coverage: the 70 Core and 31 Phase 2 use cases of the actor
    specification. AIAssistanceLogs backs AIC-01 (document check), AIC-02

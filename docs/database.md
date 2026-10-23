@@ -119,9 +119,12 @@ ward-defined, of which the 20 `NVL-01..20` sit on the real Nguyễn Văn Linh ce
 10 per side; three more are vendor proposals: PENDING, APPROVED and REJECTED), 7
 contracts (5 ACTIVE, 1 CANCELLED, 1 EXPIRED) of which 2 carry digital permits, 2 fee
 schedules with 9 instalments (2 PAID, 1 OVERDUE, 6 PENDING) and 3 invoices, 2
-storefronts with 12 menu items, 5 orders across COMPLETED / READY_FOR_PICKUP / PREPARING / PENDING_PAYMENT /
-REJECTED, 15 violation types and penalty rates for the three wards that have an officer
-(the five legal-citation types carry `legal_basis`). Officers get a
+storefronts with 12 menu items (each with its unit of sale, and a price history of one CREATED
+row per dish plus the archival of the two archived ones: both boards are at "bản số 7"), 5 orders
+across COMPLETED / READY_FOR_PICKUP / PREPARING / PENDING_PAYMENT /
+REJECTED, 17 violation types and penalty rates for the three wards that have an officer
+(the seven legal-citation types carry `legal_basis`, among them the price-posting pair of
+Nghị định 87/2024/NĐ-CP Điều 13). Officers get a
 `sanction_authority_title` for their own ward.
 
 Every queue and list has something in it:
@@ -133,8 +136,10 @@ Every queue and list has something in it:
 - **Ward compliance:** 11 permit scans (one about 95 m from its slot, one forged code, and
   repeated off-tolerance scans on permits 1 and 2 for the AIC-06 drift check), 4 violations
   (paid penalty, unpaid penalty, a penalty waived on a customer-report violation, and an
-  unidentified occupier with no penalty because the offender cannot be billed) and 3
-  vendor reports.
+  unidentified occupier with no penalty because the offender cannot be billed, raised from
+  report 2) and 5 vendor reports: an overdue PENDING one, a PENDING overcharge with its price
+  evidence (2 x 45.000đ posted, 120.000đ charged), one DISMISSED, one MEDIATED with a 20.000đ
+  refund, and one closed by violation 4, with the notices each sent.
 - **Mẫu số 01 and eKYC:** registrations 1, 2, 4, 9 and 10 carry the owner-identity fields
   with fictional ID numbers. Approved ones were confirmed by an officer; 2 and 4 were not,
   so the ward must confirm identity before approving them. Registration 1 has household
@@ -148,7 +153,8 @@ Things to know:
 
 - **Permit QR codes are fake.** `qr_payload` is `SEED-PERMIT-CONTRACT-n-DO-NOT-SCAN`,
   not a token signed by `IPermitTokenService`. Re-issue a permit through the API to
-  test WARD-11 or BUY-02 scans.
+  test WARD-11 or BUY-02 scans. A printed price board's QR is `{Permit:PublicScanBaseUrl}/q/{token}`
+  (for a phone on the LAN, e.g. `http://<LAN IP>:5173`); with the setting empty no link is built.
 - **Evidence files are empty images/PDFs.** The setup script writes a 1x1 JPEG and a
   one-page PDF so the reviewer's document preview works. File names must be exactly 32
   hex characters (`EvidenceFiles.IsValidFileName`) or the API rejects the URL.
