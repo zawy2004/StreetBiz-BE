@@ -24,8 +24,8 @@ public sealed class VoiceRegistrationLiveTests
 
     private static readonly IReadOnlyList<WardDto> Wards =
     [
-        new(10, "Phường Hải Châu 1", "Quận Hải Châu"),
-        new(11, "Phường Thanh Khê Đông", "Quận Thanh Khê"),
+        new(10, "Phường Hải Châu", "Thành phố Đà Nẵng"),
+        new(11, "Phường Thanh Khê", "Thành phố Đà Nẵng"),
     ];
 
     /// <summary>Everything asked before the amounts: the next question is about money.</summary>
@@ -269,6 +269,17 @@ public sealed class VoiceRegistrationLiveTests
         typed.Confirmed.Should().Equal(AssistFields.LaborCount);
         typed.Salutation.Should().Be("cô");
         typed.Attempts![AssistQuestionKeys.Labor].Should().Be(1);
+    }
+
+    [Fact]
+    public void Only_the_guessed_wards_are_read_out_never_the_whole_list()
+    {
+        var all = Enumerable.Range(0, 94).Select(i => new AssistChoice($"{i}", $"Phường {i}")).ToList();
+        RegistrationVoiceService.SpokenChoices(new(AssistQuestionKeys.Ward, "Phường, xã nào?", AssistInputs.Choice, all, SuggestedCount: 2))
+            .Should().Equal("Phường 0", "Phường 1");
+        RegistrationVoiceService.SpokenChoices(new(AssistQuestionKeys.Ward, "Phường, xã nào?", AssistInputs.Choice, all)).Should().BeEmpty();
+        RegistrationVoiceService.SpokenChoices(new(AssistQuestionKeys.VendorType, "Bán thế nào?", AssistInputs.Choice,
+            [new("ITINERANT", "Xe đẩy"), new("FIXED_STOREFRONT", "Cửa hàng")])).Should().Equal("Xe đẩy", "Cửa hàng");
     }
 
     [Fact]

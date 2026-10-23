@@ -12,7 +12,9 @@ public sealed class AdministrativeUnitRepository(StreetBizDbContext dbContext)
     {
         var wards = await dbContext.AdministrativeUnits.AsNoTracking()
             .Where(u => u.unit_type == AdministrativeUnitTypes.Ward)
-            .OrderBy(u => u.unit_name)
+            // Phường first (where sidewalks are), then xã, then đặc khu; A-Z within each.
+            .OrderBy(u => u.unit_name.StartsWith("Phường") ? 0 : u.unit_name.StartsWith("Xã") ? 1 : 2)
+            .ThenBy(u => u.unit_name)
             .Select(u => new WardDto(
                 u.unit_id,
                 u.unit_name,

@@ -162,8 +162,10 @@ public sealed class AssistTurnEngine(IGeocodingService geocoding, ISender sender
 
     /// <summary>
     /// Wards to offer, best guess first: the wards that own the nearby slots (a slot always
-    /// belongs to exactly one ward), then wards whose name or district appears in the map label.
-    /// The vendor still picks one -- this only orders the buttons.
+    /// belongs to exactly one ward), then wards whose name appears in the map label -- the earlier
+    /// in the label, the more specific the place, so the better the guess. Labels may still use
+    /// the pre-2025 names ("Hòa Cường Bắc, Hải Châu"): matching whole words keeps "Hòa Cường" ahead
+    /// of the old district name. The vendor still picks one -- this only orders the buttons.
     /// </summary>
     public static IReadOnlyList<AssistWardOption> WardOptions(
         IReadOnlyList<SidewalkSlotDto> nearbySlots, string? mapLabel, IReadOnlyList<WardDto> wards)
@@ -179,7 +181,8 @@ public sealed class AssistTurnEngine(IGeocodingService geocoding, ISender sender
 
         if (!string.IsNullOrWhiteSpace(mapLabel))
         {
-            var label = AssistGuards.Fold(mapLabel);
+            var label = $" {AssistGuards.Fold(mapLabel)} ";
+            var named = new List<(int At, AssistWardOption Option)>();
             foreach (var w in wards)
             {
                 if (options.Any(o => o.UnitId == w.UnitId))
@@ -187,14 +190,17 @@ public sealed class AssistTurnEngine(IGeocodingService geocoding, ISender sender
                     continue;
                 }
 
-                var name = AssistGuards.Fold(Regex.Replace(w.UnitName, @"^(phường|xã)\s+", string.Empty, RegexOptions.IgnoreCase));
-                var district = w.ParentName is null ? null
-                    : AssistGuards.Fold(Regex.Replace(w.ParentName, @"^(quận|huyện|thành phố)\s+", string.Empty, RegexOptions.IgnoreCase));
-                if (label.Contains(name, StringComparison.Ordinal) || (district is not null && label.Contains(district, StringComparison.Ordinal)))
+                // Only the ward's own name: its parent is the city now (no districts since
+                // 1/7/2025), and "Đà Nẵng" is in every label.
+                var name = AssistGuards.Fold(Regex.Replace(w.UnitName, @"^(phường|xã|đặc khu)\s+", string.Empty, RegexOptions.IgnoreCase));
+                var at = name.Length == 0 ? -1 : label.IndexOf($" {name} ", StringComparison.Ordinal);
+                if (at >= 0)
                 {
-                    options.Add(new AssistWardOption(w.UnitId, w.UnitName, AssistWardReasons.NameMatch));
+                    named.Add((at, new AssistWardOption(w.UnitId, w.UnitName, AssistWardReasons.NameMatch)));
                 }
             }
+
+            options.AddRange(named.OrderBy(n => n.At).Select(n => n.Option));
         }
 
         return options.Take(4).ToList();

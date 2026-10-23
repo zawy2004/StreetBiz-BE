@@ -105,8 +105,8 @@ public sealed class InterviewPlannerTests
 {
     private static readonly IReadOnlyList<WardDto> Wards =
     [
-        new(10, "Phường Hải Châu 1", "Quận Hải Châu"),
-        new(11, "Phường Thanh Khê Đông", "Quận Thanh Khê"),
+        new(10, "Phường Hải Châu", "Thành phố Đà Nẵng"),
+        new(11, "Phường Thanh Khê", "Thành phố Đà Nẵng"),
     ];
 
     private static AssistDraft Complete(AssistDraft? draft = null) => (draft ?? new AssistDraft()) with
@@ -167,14 +167,17 @@ public sealed class InterviewPlannerTests
     }
 
     [Fact]
-    public void Ward_buttons_put_the_best_guess_first_and_fall_back_to_every_ward()
+    public void The_ward_question_puts_the_guesses_first_and_keeps_every_ward_choosable()
     {
         var draft = Complete() with { WardUnitId = null };
-        var guessed = InterviewPlanner.Next(draft, [new AssistWardOption(11, "Phường Thanh Khê Đông", AssistWardReasons.SlotsNearby)], Wards)!;
-        guessed.Choices.Select(c => c.Value).Should().Equal("11");
+        var guessed = InterviewPlanner.Next(draft, [new AssistWardOption(11, "Phường Thanh Khê", AssistWardReasons.SlotsNearby)], Wards)!;
+        guessed.Choices.Select(c => c.Value).Should().Equal("11", "10");
+        guessed.SuggestedCount.Should().Be(1);
+        guessed.Text.Should().Be("Chỗ đó thuộc phường, xã nào ạ? Trợ lý đoán là:");
 
         var all = InterviewPlanner.Next(draft, [], Wards)!;
         all.Choices.Select(c => c.Value).Should().Equal("10", "11");
+        all.SuggestedCount.Should().Be(0);
     }
 
     [Fact]
@@ -372,8 +375,8 @@ public sealed class AssistRegistrationTurnHandlerTests
 
     private static readonly IReadOnlyList<WardDto> Wards =
     [
-        new(10, "Phường Hải Châu 1", "Quận Hải Châu"),
-        new(11, "Phường Thanh Khê Đông", "Quận Thanh Khê"),
+        new(10, "Phường Hải Châu", "Thành phố Đà Nẵng"),
+        new(11, "Phường Thanh Khê", "Thành phố Đà Nẵng"),
     ];
 
     public AssistRegistrationTurnHandlerTests()
@@ -458,7 +461,8 @@ public sealed class AssistRegistrationTurnHandlerTests
             new AssistRegistrationTurnCommand(AssistQuestionKeys.Location, pinned, null, null, null, false), CancellationToken.None);
 
         result.NextQuestion!.Key.Should().Be(AssistQuestionKeys.Ward);
-        result.NextQuestion.Choices.Select(c => c.Label).Should().Equal("Phường Hải Châu 1");
+        result.NextQuestion.Choices.Select(c => c.Label).Should().Equal("Phường Hải Châu", "Phường Thanh Khê");
+        result.NextQuestion.SuggestedCount.Should().Be(1);
         result.Location.Should().BeNull("nothing new was looked up for the client to show");
         extractor.VerifyNoOtherCalls();
     }
@@ -565,6 +569,28 @@ public sealed class AssistRegistrationTurnHandlerTests
             [Slot(31, "TK-02", 11, 400)], "Chợ Cồn, Hải Châu, Đà Nẵng", Wards);
 
         options.Select(o => (o.UnitId, o.Reason)).Should().Equal((11, AssistWardReasons.SlotsNearby), (10, AssistWardReasons.NameMatch));
+    }
+
+    [Fact]
+    public void A_label_with_pre_2025_names_puts_the_most_specific_ward_first_and_the_city_matches_nothing()
+    {
+        IReadOnlyList<WardDto> wards =
+        [
+            new(10, "Phường Hải Châu", "Thành phố Đà Nẵng"),
+            new(101, "Phường Hòa Cường", "Thành phố Đà Nẵng"),
+            new(117, "Phường Hội An", "Thành phố Đà Nẵng"),
+            new(118, "Phường Hội An Đông", "Thành phố Đà Nẵng"),
+            new(190, "Đặc khu Hoàng Sa", "Thành phố Đà Nẵng"),
+        ];
+
+        // Hòa Cường Bắc (old district Hải Châu) is now part of phường Hòa Cường.
+        AssistTurnEngine.WardOptions([], "Kiệt 12 Núi Thành, Hòa Cường Bắc, Hải Châu, Đà Nẵng", wards)
+            .Select(o => o.UnitId).Should().Equal(101, 10);
+        // Whole words only: "Hội An" does not also suggest "Hội An Đông".
+        AssistTurnEngine.WardOptions([], "Cẩm Phô, Hội An, Quảng Nam", wards)
+            .Select(o => o.UnitId).Should().Equal(117);
+        // Every ward's parent is the city: naming the city must not suggest all of them.
+        AssistTurnEngine.WardOptions([], "Đường 2/9, Đà Nẵng", wards).Should().BeEmpty();
     }
 
     [Fact]

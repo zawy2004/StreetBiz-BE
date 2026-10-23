@@ -64,14 +64,18 @@ public static class InterviewPlanner
 
         if (draft.WardUnitId is null)
         {
-            var options = wardOptions.Count > 0
-                ? wardOptions.Select(o => new AssistChoice(o.UnitId.ToString(CultureInfo.InvariantCulture), o.UnitName))
-                : wards.Select(w => new AssistChoice(w.UnitId.ToString(CultureInfo.InvariantCulture), w.UnitName));
+            // Every ward stays choosable (a guess can be wrong); the guesses come first.
+            var guessed = wardOptions.Select(o => o.UnitId).ToHashSet();
+            var options = wardOptions
+                .Select(o => new AssistChoice(o.UnitId.ToString(CultureInfo.InvariantCulture), o.UnitName))
+                .Concat(wards.Where(w => !guessed.Contains(w.UnitId))
+                    .Select(w => new AssistChoice(w.UnitId.ToString(CultureInfo.InvariantCulture), w.UnitName)));
             return new AssistQuestion(
                 AssistQuestionKeys.Ward,
-                wardOptions.Count > 0 ? "Chỗ đó thuộc phường nào ạ? Trợ lý đoán là:" : "Chỗ đó thuộc phường nào ạ?",
+                wardOptions.Count > 0 ? "Chỗ đó thuộc phường, xã nào ạ? Trợ lý đoán là:" : "Chỗ đó thuộc phường, xã nào ạ?",
                 AssistInputs.Choice,
-                options.ToList());
+                options.ToList(),
+                SuggestedCount: wardOptions.Count);
         }
 
         if (draft.VendorType == VendorTypes.FixedStorefront && string.IsNullOrWhiteSpace(draft.DeclaredAddress))

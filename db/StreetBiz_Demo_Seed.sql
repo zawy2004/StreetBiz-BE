@@ -66,13 +66,13 @@ BEGIN
         -- Ward officers (WARD-xx, REG-06). scripts/e2e-auth-onboarding.sh signs in as the first.
         ( 2, '0983000001', '$2a$12$Zi2yzfahgQFN8mvwwJyNr.wud3D8giLWQA7E7qXWeuILXQ0K2qvTm',
              N'Nguyễn Thị Hồng Vân', 'WARD_AUTHORITY', 10, 'ACTIVE', SYSUTCDATETIME(),
-             N'Chủ tịch UBND Phường Hải Châu 1'),
+             N'Chủ tịch UBND Phường Hải Châu'),
         ( 3, '0983000002', '$2a$12$vY2IB4IXX7MGXwtZ1H0AkuJpjTTo6AUZJuLtPdBzVmQHu89gqdjMO',
              N'Trần Quốc Bảo',       'WARD_AUTHORITY', 11, 'ACTIVE', SYSUTCDATETIME(),
-             N'Chủ tịch UBND Phường Thanh Khê Đông'),
+             N'Chủ tịch UBND Phường Thanh Khê'),
         ( 4, '0983000003', '$2a$12$kZXarpH37Bj0GR.rPlbvneEH0wrgAlJ/wZkClm.eF3eMmH2GwL0Fq',
              N'Lê Thị Minh Thu',     'WARD_AUTHORITY', 12, 'ACTIVE', SYSUTCDATETIME(),
-             N'Chủ tịch UBND Phường An Hải Bắc'),
+             N'Chủ tịch UBND Phường An Hải'),
 
         -- Vendors (REG-xx, SIDE-xx). Each carries a different registration scenario.
         ( 5, '0905000101', '$2a$12$mUw/sNqNV5nanEk0.nVzeuXkFfbMefF568bBRklyTeaUoBCrBeVt.',
@@ -191,8 +191,8 @@ GO
 /* ============================================================
    3. PRICING ZONES, SLOTS AND STREET CONTEXT
    The Nguyễn Văn Linh pilot corridor:
-   NVL-01..10 walk a 15 m pitch starting at 50 Nguyễn Văn Linh (Nam Dương,
-   Hải Châu -- geocoded), matching the zone's own segment_from "Nút giao
+   NVL-01..10 walk a 15 m pitch starting at 50 Nguyễn Văn Linh (phường Hải
+   Châu, formerly Nam Dương -- geocoded), matching the zone's own segment_from "Nút giao
    Hoàng Diệu"; NVL-11..20 mirror them 38 m across to the far carriageway.
    Keeping the geometry means the street-strip diagram and its straightness
    check still work. The other three zones' 1-2 slots each anchor at a
@@ -347,7 +347,7 @@ BEGIN
     VALUES
         -- APPROVED, with a contract, permit, fees and a storefront underneath it.
         (1, 1, 'FIXED_STOREFRONT', N'Bánh mì & Xôi Cô Lan',
-            N'123 Nguyễn Văn Linh, Phường Hải Châu 1, Đà Nẵng', 16.060935, 108.217760, 10,
+            N'123 Nguyễn Văn Linh, Phường Hải Châu, Đà Nẵng', 16.060935, 108.217760, 10,
             'APPROVED', 0, 2, N'Hồ sơ đầy đủ, vị trí phù hợp quy hoạch vỉa hè.',
             DATEADD(DAY, -28, SYSUTCDATETIME()), DATEADD(DAY, -32, SYSUTCDATETIME())),
 
@@ -358,7 +358,7 @@ BEGIN
         -- SUBMITTED with NO evidence: BR-07 blocks approval, so the ward sees the
         -- blocker banner and only REVIEW/REJECT/REQUEST_INFO.
         (3, 3, 'FIXED_STOREFRONT', N'Quán chè Đỗ Mai',
-            N'88 Điện Biên Phủ, Phường Thanh Khê Đông, Đà Nẵng', 16.066229, 108.205945, 11,
+            N'88 Điện Biên Phủ, Phường Thanh Khê, Đà Nẵng', 16.066229, 108.205945, 11,
             'SUBMITTED', 1, NULL, NULL, NULL, DATEADD(DAY, -1, SYSUTCDATETIME())),
 
         -- UNDER_REVIEW: an officer has claimed the case.
@@ -374,7 +374,7 @@ BEGIN
 
         -- REJECTED.
         (6, 4, 'FIXED_STOREFRONT', N'Quầy cà phê vỉa hè',
-            N'12 Bạch Đằng, Phường Hải Châu 1, Đà Nẵng', 16.070200, 108.224100, 10,
+            N'12 Bạch Đằng, Phường Hải Châu, Đà Nẵng', 16.070200, 108.224100, 10,
             'REJECTED', 0, 2,
             N'Vị trí đăng ký nằm trong hành lang an toàn giao thông, không thuộc khu vực được phép kinh doanh.',
             DATEADD(DAY, -14, SYSUTCDATETIME()), DATEADD(DAY, -18, SYSUTCDATETIME())),
@@ -389,7 +389,7 @@ BEGIN
 
         -- A second APPROVED registration for vendor 1 (BR-06 allows several).
         (9, 1, 'FIXED_STOREFRONT', N'Bún chả Hải Châu',
-            N'45 Nguyễn Văn Linh, Phường Hải Châu 1, Đà Nẵng', 16.061026, 108.218740, 10,
+            N'45 Nguyễn Văn Linh, Phường Hải Châu, Đà Nẵng', 16.061026, 108.218740, 10,
             'APPROVED', 0, 2, N'Đủ điều kiện kinh doanh cố định trên vỉa hè.',
             DATEADD(DAY, -11, SYSUTCDATETIME()), DATEADD(DAY, -15, SYSUTCDATETIME()));
 
@@ -901,9 +901,9 @@ BEGIN
          released_contract_id, requested_new_slot_id, change_status, conflict_resolution_note,
          reviewed_by, reviewed_at, created_at)
     VALUES
-        (1, 1, N'200 Hoàng Diệu, Phường Hải Châu 1, Đà Nẵng', 16.059417, 108.217017,
+        (1, 1, N'200 Hoàng Diệu, Phường Hải Châu, Đà Nẵng', 16.059417, 108.217017,
             1, 21, 'PENDING', NULL, NULL, NULL, DATEADD(DAY, -2, SYSUTCDATETIME())),
-        (2, 9, N'204 Hoàng Diệu, Phường Hải Châu 1, Đà Nẵng', 16.059437, 108.217047,
+        (2, 9, N'204 Hoàng Diệu, Phường Hải Châu, Đà Nẵng', 16.059437, 108.217047,
             2, 21, 'UNDER_REVIEW', N'Xếp hàng chờ theo thứ tự nộp hồ sơ, ưu tiên hồ sơ nộp trước.',
             2, DATEADD(DAY, -1, SYSUTCDATETIME()), DATEADD(DAY, -1, SYSUTCDATETIME()));
     SET IDENTITY_INSERT AddressChangeRequests OFF;
@@ -1087,8 +1087,8 @@ UPDATE BusinessRegistrations SET
     id_type = 'CCCD', id_number = '048185000001', id_issued_date = '2021-05-20',
     id_issued_place = N'Cục Cảnh sát QLHC về TTXH', owner_date_of_birth = '1985-03-12',
     owner_gender = N'Nữ', owner_ethnicity = N'Kinh',
-    permanent_address = N'123 Nguyễn Văn Linh, Phường Hải Châu 1, Đà Nẵng',
-    contact_address = N'123 Nguyễn Văn Linh, Phường Hải Châu 1, Đà Nẵng',
+    permanent_address = N'123 Nguyễn Văn Linh, Phường Hải Châu, Đà Nẵng',
+    contact_address = N'123 Nguyễn Văn Linh, Phường Hải Châu, Đà Nẵng',
     business_line = N'Bán lẻ bánh mì, xôi ăn sáng', business_line_code = '5610',
     capital_amount = 20000000, labor_count = 2, planned_start_date = '2026-08-01',
     biometric_consent_at = DATEADD(DAY, -32, SYSUTCDATETIME()),
@@ -1101,8 +1101,8 @@ UPDATE BusinessRegistrations SET
     id_type = 'CCCD', id_number = '048185000001', id_issued_date = '2021-05-20',
     id_issued_place = N'Cục Cảnh sát QLHC về TTXH', owner_date_of_birth = '1985-03-12',
     owner_gender = N'Nữ', owner_ethnicity = N'Kinh',
-    permanent_address = N'123 Nguyễn Văn Linh, Phường Hải Châu 1, Đà Nẵng',
-    contact_address = N'45 Nguyễn Văn Linh, Phường Hải Châu 1, Đà Nẵng',
+    permanent_address = N'123 Nguyễn Văn Linh, Phường Hải Châu, Đà Nẵng',
+    contact_address = N'45 Nguyễn Văn Linh, Phường Hải Châu, Đà Nẵng',
     business_line = N'Bún chả, nem cua bể', business_line_code = '5610',
     capital_amount = 35000000, labor_count = 3, planned_start_date = '2026-09-05',
     biometric_consent_at = DATEADD(DAY, -15, SYSUTCDATETIME()),
@@ -1115,8 +1115,8 @@ UPDATE BusinessRegistrations SET
     id_type = 'CCCD', id_number = '048079000002', id_issued_date = '2022-01-15',
     id_issued_place = N'Cục Cảnh sát QLHC về TTXH', owner_date_of_birth = '1979-11-02',
     owner_gender = N'Nam', owner_ethnicity = N'Kinh',
-    permanent_address = N'56 Lê Duẩn, Phường Hải Châu 1, Đà Nẵng',
-    contact_address = N'56 Lê Duẩn, Phường Hải Châu 1, Đà Nẵng',
+    permanent_address = N'56 Lê Duẩn, Phường Hải Châu, Đà Nẵng',
+    contact_address = N'56 Lê Duẩn, Phường Hải Châu, Đà Nẵng',
     business_line = N'Bán nước mía, nước ép trái cây', business_line_code = '5630',
     capital_amount = 8000000, labor_count = 1, planned_start_date = '2026-10-01',
     biometric_consent_at = DATEADD(DAY, -3, SYSUTCDATETIME()),
@@ -1127,8 +1127,8 @@ UPDATE BusinessRegistrations SET
     id_type = 'CCCD', id_number = '048079000002', id_issued_date = '2022-01-15',
     id_issued_place = N'Cục Cảnh sát QLHC về TTXH', owner_date_of_birth = '1979-11-02',
     owner_gender = N'Nam', owner_ethnicity = N'Kinh',
-    permanent_address = N'56 Lê Duẩn, Phường Hải Châu 1, Đà Nẵng',
-    contact_address = N'56 Lê Duẩn, Phường Hải Châu 1, Đà Nẵng',
+    permanent_address = N'56 Lê Duẩn, Phường Hải Châu, Đà Nẵng',
+    contact_address = N'56 Lê Duẩn, Phường Hải Châu, Đà Nẵng',
     business_line = N'Bán nước ép trái cây lưu động', business_line_code = '5630',
     capital_amount = 6000000, labor_count = 1, planned_start_date = '2026-09-15',
     biometric_consent_at = DATEADD(DAY, -12, SYSUTCDATETIME()),
@@ -1141,8 +1141,8 @@ UPDATE BusinessRegistrations SET
     id_type = 'CCCD', id_number = '048079000002', id_issued_date = '2021-09-09',
     id_issued_place = N'Cục Cảnh sát QLHC về TTXH', owner_date_of_birth = '1990-07-25',
     owner_gender = N'Nam', owner_ethnicity = N'Kinh',
-    permanent_address = N'9 Trần Phú, Phường Hải Châu 1, Đà Nẵng',
-    contact_address = N'9 Trần Phú, Phường Hải Châu 1, Đà Nẵng',
+    permanent_address = N'9 Trần Phú, Phường Hải Châu, Đà Nẵng',
+    contact_address = N'9 Trần Phú, Phường Hải Châu, Đà Nẵng',
     business_line = N'Bán bún, phở gánh', business_line_code = '5610',
     capital_amount = 5000000, labor_count = 1, planned_start_date = '2026-10-10',
     biometric_consent_at = DATEADD(DAY, -5, SYSUTCDATETIME()),
@@ -1299,7 +1299,7 @@ IF NOT EXISTS (SELECT 1 FROM Notifications)
         (5,  'ORDER',                    N'Có đơn hàng mới',
             N'Đơn DH-2026-0004 đang chờ khách thanh toán.',                                 'ORDER', 4, 0, DATEADD(MINUTE, -5, SYSUTCDATETIME())),
         (6,  'ENROLLMENT_STATUS_UPDATE', N'Hồ sơ đang chờ duyệt',
-            N'Hồ sơ "Xe nước mía Tám Ù" đã được gửi tới Phường Hải Châu 1.',                'REGISTRATION', 2, 0, DATEADD(DAY, -3, SYSUTCDATETIME())),
+            N'Hồ sơ "Xe nước mía Tám Ù" đã được gửi tới Phường Hải Châu.',                'REGISTRATION', 2, 0, DATEADD(DAY, -3, SYSUTCDATETIME())),
         (9,  'ORDER',                    N'Đơn hàng đã hoàn tất',
             N'Đơn DH-2026-0001 đã được nhận. Bạn có thể đánh giá cửa hàng.',                'ORDER', 1, 1, DATEADD(DAY, -6, SYSUTCDATETIME())),
         (10, 'ORDER',                    N'Đơn hàng sẵn sàng lấy',

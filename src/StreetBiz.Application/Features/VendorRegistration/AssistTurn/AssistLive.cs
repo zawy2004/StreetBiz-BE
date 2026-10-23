@@ -1045,11 +1045,23 @@ public sealed class RegistrationVoiceService(
             return "Hồ sơ đã đủ thông tin (done: true): mời người bán xem lại thẻ trên màn hình và bấm \"Đúng, nộp\".";
         }
 
-        var choices = question.Input == AssistInputs.Choice && question.Choices.Count > 0
-            ? $" Các nút trên màn hình: {string.Join("; ", question.Choices.Select(c => c.Label))}."
-            : string.Empty;
+        var spoken = SpokenChoices(question);
+        var choices = question.Input != AssistInputs.Choice ? string.Empty
+            : spoken.Count > 0 ? $" Các nút trên màn hình: {string.Join("; ", spoken)}."
+            : " Người bán tìm và chọn trên màn hình.";
         return $"Câu hỏi tiếp theo (next_input: {question.Input}): \"{question.Text}\"{choices}";
     }
+
+    /// <summary>
+    /// The choices worth saying aloud: the guesses when there are some (the ward question lists all
+    /// 94 wards behind them), otherwise a short list as it is, never a long one.
+    /// </summary>
+    public static IReadOnlyList<string> SpokenChoices(AssistQuestion question) =>
+        (question.SuggestedCount > 0 ? question.Choices.Take(Math.Min(question.SuggestedCount, 4))
+            : question.Choices.Count <= 4 ? question.Choices
+            : [])
+        .Select(c => c.Label)
+        .ToList();
 
     private static List<string> Filled(AssistDraft d)
     {
@@ -1120,7 +1132,7 @@ public sealed class RegistrationVoiceService(
             warnings = result.Warnings,
             next_question = result.NextQuestion?.Text,
             next_input = result.NextQuestion?.Input,
-            choices = result.NextQuestion?.Input == AssistInputs.Choice ? result.NextQuestion.Choices.Select(c => c.Label) : null,
+            choices = result.NextQuestion?.Input == AssistInputs.Choice ? SpokenChoices(result.NextQuestion) : null,
             done = result.Done,
         });
     }

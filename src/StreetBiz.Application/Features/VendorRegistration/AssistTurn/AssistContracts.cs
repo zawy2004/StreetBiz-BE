@@ -113,13 +113,17 @@ public static class AssistInputs
 
 /// <param name="Key">An <see cref="AssistQuestionKeys"/> value, or "CONFIRM:{field}" for a read-back.</param>
 /// <param name="Input">An <see cref="AssistInputs"/> value: how the client should take the answer.</param>
+/// <param name="SuggestedCount">How many of the first <paramref name="Choices"/> are the assistant's
+/// guesses (the ward question lists every ward, guesses first; the client shows those as buttons
+/// and lets the vendor search the rest).</param>
 public sealed record AssistQuestion(
     string Key,
     string Text,
     string Input,
     IReadOnlyList<AssistChoice> Choices,
     string? Field = null,
-    bool Skippable = false);
+    bool Skippable = false,
+    int SuggestedCount = 0);
 
 public sealed record AssistWardOption(int UnitId, string UnitName, string Reason);
 
