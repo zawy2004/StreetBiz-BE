@@ -31,7 +31,11 @@ powershell -ExecutionPolicy Bypass -File scripts/setup-local-db.ps1 `
 
 The script creates the database, applies the schema, then the demo seed (skip it with
 `-SkipDemoSeed`), and writes the placeholder evidence files the seeded registrations
-point at. Without `-Recreate` it refuses to touch a database that already has tables.
+point at. Last, it signs the seed's placeholder permits with this machine's
+`Permit:SigningKey` (`dotnet run -- --sign-demo-permits`, Development only), so their QR codes
+verify as soon as the database is built: a real permit token cannot be checked in, because the
+key differs on every machine. Without a key it warns and the permits stay unscannable; set
+`Permit:SigningKey` with `dotnet user-secrets` and run that command again with the API stopped. Without `-Recreate` it refuses to touch a database that already has tables.
 Both scripts must run on an empty database; the schema file is not an upgrade script.
 
 Point the API at it with `STREETBIZ_DB_CONNECTION` (or `ConnectionStrings:StreetBizDB`).

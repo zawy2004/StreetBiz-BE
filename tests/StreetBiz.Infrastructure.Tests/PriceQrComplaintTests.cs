@@ -165,6 +165,31 @@ public sealed class PriceQrComplaintTests
     }
 
     [Fact]
+    public async Task Demo_permit_placeholders_are_signed_with_this_machines_key_and_real_tokens_are_left_alone()
+    {
+        using var f = await Fixture.Create();
+        await f.AddSlot(300, "A-02", contractId: 3, permitId: 3, payload: "SEED-PERMIT-CONTRACT-3-DO-NOT-SCAN");
+        await f.AddSlot(400, "A-03", contractId: 4, permitId: 4, payload: "SEED-PERMIT-CONTRACT-4-DO-NOT-SCAN");
+
+        var signed = await DemoPermits.SignPlaceholdersAsync(f.Db, f.Tokens, default);
+        f.Db.ChangeTracker.Clear();
+        var payloads = await f.Db.DigitalPermits.AsNoTracking().OrderBy(p => p.permit_id)
+            .ToDictionaryAsync(p => p.permit_id, p => p.qr_payload);
+
+        Assert.Equal(2, signed);
+        Assert.Equal(f.Token1, payloads[1]);
+        foreach (var (permitId, contractId) in new[] { (3L, 3L), (4L, 4L) })
+        {
+            Assert.True(f.Tokens.TryParse(payloads[permitId], out var claims));
+            Assert.Equal(contractId, claims.ContractId);
+        }
+
+        Assert.StartsWith("SBP1.", payloads[3]);
+        Assert.NotEqual(payloads[3], payloads[4]);
+        Assert.Equal(0, await DemoPermits.SignPlaceholdersAsync(f.Db, f.Tokens, default));
+    }
+
+    [Fact]
     public async Task Every_slot_of_a_business_shows_its_one_board_and_gets_its_own_paper_board_with_its_own_qr()
     {
         using var f = await Fixture.Create();
@@ -548,6 +573,7 @@ public sealed class PriceQrComplaintTests
         public TestContext Db { get; private set; } = null!;
         public TestClock Clock { get; } = new(T0);
         public string Token1 { get; private set; } = null!;
+        public PermitTokenService Tokens => tokens;
         public WardActor Officer1 { get; } = new(3, 1, "Cán bộ Một");
 
         public static async Task<Fixture> Create()

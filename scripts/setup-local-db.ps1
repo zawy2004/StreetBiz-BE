@@ -16,7 +16,9 @@
   see the maintenance rules at the top of db/StreetBiz_SQL_Server.sql.
 
   It also writes the placeholder evidence files the seeded RegistrationEvidence
-  rows point at, so the ward reviewer's document preview works.
+  rows point at, so the ward reviewer's document preview works, and signs the
+  seed's placeholder permits with this machine's Permit:SigningKey, so their QR
+  codes verify (dotnet run -- --sign-demo-permits, Development only).
 
   Earlier versions generated the schema from the EF model with
   `dotnet ef dbcontext script`. That output silently omitted all CHECK constraints,
@@ -191,6 +193,34 @@ trailer<</Root 1 0 R>>
         } else {
             [System.IO.File]::WriteAllText($path, $pdfText, (New-Object System.Text.ASCIIEncoding))
         }
+    }
+}
+
+# ---------------------------------------------------------------------------
+# Scannable demo permits.
+#
+# The seed's permits carry placeholders (SEED-PERMIT-...): a real permit QR is signed with
+# Permit:SigningKey, which differs on every machine, so no checked-in file can hold one. The API
+# signs them with this machine's key (its own IPermitTokenService, Development only) against the
+# database just built -- STREETBIZ_DB_CONNECTION wins over the user-secrets connection.
+# Without a signing key the permits stay placeholders and setup still finishes.
+# ---------------------------------------------------------------------------
+if (-not $SkipDemoSeed) {
+    Write-Host "Signing the demo permits with this machine's Permit:SigningKey..."
+    $previousConnection = $env:STREETBIZ_DB_CONNECTION
+    $previousEnvironment = $env:ASPNETCORE_ENVIRONMENT
+    $env:STREETBIZ_DB_CONNECTION = $target
+    $env:ASPNETCORE_ENVIRONMENT = 'Development'
+    try {
+        & dotnet run --project (Join-Path $root 'src\StreetBiz.API') --no-launch-profile -v q -- --sign-demo-permits
+        if ($LASTEXITCODE -ne 0) {
+            Write-Warning ("The demo permits were not signed, so their QR codes will not verify. Set a key with " +
+                "dotnet user-secrets --project src/StreetBiz.API set Permit:SigningKey <random 32+ chars>, stop the API, " +
+                "then run: dotnet run --project src/StreetBiz.API -- --sign-demo-permits")
+        }
+    } finally {
+        $env:STREETBIZ_DB_CONNECTION = $previousConnection
+        $env:ASPNETCORE_ENVIRONMENT = $previousEnvironment
     }
 }
 

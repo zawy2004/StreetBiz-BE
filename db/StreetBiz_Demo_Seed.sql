@@ -507,8 +507,10 @@ END;
 GO
 
 /* SIDE-08 permits. qr_payload is a placeholder, NOT a real IPermitTokenService
-   token -- scanning one of these will not verify. Re-issue through the API when
-   testing WARD-11 / BUY-02 scan flows. */
+   token: a real one is signed with Permit:SigningKey, which differs per machine.
+   scripts/setup-local-db.ps1 signs these with the local key right after the seed
+   (dotnet run -- --sign-demo-permits); run on its own, the seed leaves them
+   unscannable. */
 IF NOT EXISTS (SELECT 1 FROM DigitalPermits)
 BEGIN
     SET IDENTITY_INSERT DigitalPermits ON;
