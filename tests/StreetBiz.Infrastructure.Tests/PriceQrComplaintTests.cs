@@ -164,6 +164,30 @@ public sealed class PriceQrComplaintTests
         Assert.Null(await f.Community().GetPriceBoardByContractAsync(404, default));
     }
 
+    [Fact]
+    public async Task Every_slot_of_a_business_shows_its_one_board_and_gets_its_own_paper_board_with_its_own_qr()
+    {
+        using var f = await Fixture.Create();
+        await f.AddDish("Bún chả", 45_000, "suất");
+        // The same business rents a second slot: same storefront (one per registration), new permit.
+        var token3 = await f.AddSlot(300, "A-02", contractId: 3, permitId: 3);
+        // A slot whose permit was revoked, and the demo seed's placeholder that can never verify.
+        await f.AddSlot(400, "A-03", contractId: 4, permitId: 4, permitStatus: PermitStatuses.Revoked);
+        await f.AddSlot(500, "A-04", contractId: 5, permitId: 5, payload: "SEED-PERMIT-CONTRACT-5-DO-NOT-SCAN");
+
+        var publicBoard = await f.Community().GetPriceBoardByContractAsync(3, default);
+        Assert.Equal(1, publicBoard!.StorefrontId);
+        Assert.Equal(["Bún chả"], publicBoard.Items.Select(i => i.Name));
+
+        var board = await f.Menu("http://192.168.1.5:5173", tokens: true).PriceBoard(1, default);
+        Assert.Equal(["A-01", "A-02"], board.Boards.Select(b => b.SlotCode));
+        Assert.Equal($"http://192.168.1.5:5173/q/{token3}?v=1", board.Boards[1].QrUrl);
+        Assert.Equal($"http://192.168.1.5:5173/q/{token3}/print", board.Boards[1].PrintUrl);
+        // The top-level links stay those of the storefront's own slot.
+        Assert.Equal(board.Boards[0].QrUrl, board.QrUrl);
+        Assert.Equal($"http://192.168.1.5:5173/q/{f.Token1}?v=1", board.QrUrl);
+    }
+
     #endregion
 
     #region Complaints (BUY-05 / BUY-07)
@@ -560,14 +584,30 @@ public sealed class PriceQrComplaintTests
             return f;
         }
 
-        public CommerceManagement Menu(string? publicScanBaseUrl = null, long vendorId = 10)
+        public CommerceManagement Menu(string? publicScanBaseUrl = null, long vendorId = 10, bool tokens = false)
         {
             var vendor = new Mock<IVendorContext>();
             vendor.Setup(x => x.RequireVendorIdAsync(It.IsAny<CancellationToken>())).ReturnsAsync(vendorId);
             var storage = new Mock<IFileStorage>();
             storage.Setup(x => x.ExistsAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(true);
             return new CommerceManagement(Db, vendor.Object, Mock.Of<ICustomerContext>(), storage.Object, Clock,
-                new PermitLinks(Options.Create(new PermitSettings { PublicScanBaseUrl = publicScanBaseUrl })));
+                new PermitLinks(Options.Create(new PermitSettings { PublicScanBaseUrl = publicScanBaseUrl })),
+                tokens ? this.tokens : null);
+        }
+
+        /// <summary>Business A (registration 1) rents one more slot; returns that slot's permit payload.</summary>
+        public async Task<string> AddSlot(
+            long slotId, string slotCode, long contractId, long permitId,
+            string permitStatus = PermitStatuses.Active, string? payload = null)
+        {
+            payload ??= tokens.Create(contractId, T0);
+            Db.SidewalkSlots.Add(new SidewalkSlot { slot_id = slotId, zone_id = 1, slot_code = slotCode, source = "WARD_DEFINED", slot_status = "ACTIVE", latitude = 16.06m, longitude = 108.21m });
+            Db.RentalApplications.Add(new RentalApplication { application_id = contractId, registration_id = 1, slot_id = slotId, application_method = "MANUAL_SELECTED", application_status = "APPROVED" });
+            Db.RentalContracts.Add(new RentalContract { contract_id = contractId, application_id = contractId, slot_id = slotId, vendor_id = 10, start_date = new DateOnly(2026, 10, 1), end_date = new DateOnly(2026, 12, 31), contract_status = "ACTIVE" });
+            Db.DigitalPermits.Add(new DigitalPermit { permit_id = permitId, contract_id = contractId, qr_payload = payload, permit_status = permitStatus, issued_at = T0 });
+            await Db.SaveChangesAsync();
+            Db.ChangeTracker.Clear();
+            return payload;
         }
 
         public CommunityVendorRepository Community() => new(Db, Clock);

@@ -390,13 +390,23 @@ public sealed class CommunityVendorRepository(
                 && report.report_status == VendorReportStatuses.Pending,
             cancellationToken);
 
+    /// <summary>
+    /// The board of the household business holding <paramref name="contractId"/>. A business has one
+    /// storefront (one per registration) however many slots it rents, so the permit of every one of
+    /// its slots shows that same board, not only the slot the storefront was opened on.
+    /// </summary>
     public Task<PriceBoardRow?> GetPriceBoardByContractAsync(
         long contractId,
-        CancellationToken cancellationToken) =>
-        PriceBoards.ReadAsync(
+        CancellationToken cancellationToken)
+    {
+        var registrationIds = dbContext.RentalContracts
+            .Where(contract => contract.contract_id == contractId)
+            .Select(contract => contract.application.registration_id);
+        return PriceBoards.ReadAsync(
             dbContext,
-            dbContext.Storefronts.Where(storefront => storefront.contract_id == contractId),
+            dbContext.Storefronts.Where(storefront => registrationIds.Contains(storefront.registration_id)),
             cancellationToken);
+    }
 
     public async Task<IReadOnlyList<MyVendorReportRow>> ListMyReportsAsync(
         long reporterUserId,

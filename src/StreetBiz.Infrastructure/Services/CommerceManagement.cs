@@ -13,7 +13,8 @@ using StreetBiz.Infrastructure.Persistence.ScaffoldedModels;
 namespace StreetBiz.Infrastructure.Services;
 
 public sealed class CommerceManagement(StreetBizDbContext db, IVendorContext vendors,
-    ICustomerContext customers, IFileStorage storage, TimeProvider clock, IPermitLinks? permitLinks = null) : ICommerceManagement
+    ICustomerContext customers, IFileStorage storage, TimeProvider clock, IPermitLinks? permitLinks = null,
+    IPermitTokenService? permitTokens = null) : ICommerceManagement
 {
     private DateTime Now => clock.GetUtcNow().UtcDateTime;
     private DateOnly Today => DateOnly.FromDateTime(Now.AddHours(7));
@@ -270,8 +271,9 @@ public sealed class CommerceManagement(StreetBizDbContext db, IVendorContext ven
 
     /// <summary>
     /// BUY-06: the board as it stands, its version, the 50 latest changes with the price before each,
-    /// and the public links for the paper board. The links wrap the storefront contract's live
-    /// permit token (never a new code); without one, or without Permit:PublicScanBaseUrl, they are null.
+    /// and the public links for one paper board per slot the business holds. Each link wraps that
+    /// slot's live permit token (never a new code); without one, or without Permit:PublicScanBaseUrl,
+    /// they are null.
     /// </summary>
     public async Task<SellerPriceBoardDto> PriceBoard(long storeId, CancellationToken ct)
     {
@@ -296,24 +298,39 @@ public sealed class CommerceManagement(StreetBizDbContext db, IVendorContext ven
                     .FirstOrDefault(),
             })
             .ToListAsync(ct);
-        var token = await db.DigitalPermits.AsNoTracking()
-            .Where(x => x.contract_id == board.ContractId && x.permit_status != PermitStatuses.Revoked)
-            .OrderByDescending(x => x.permit_id)
-            .Select(x => x.qr_payload)
-            .FirstOrDefaultAsync(ct);
+        // Every slot of this business with a permit that is live (or about to be): one paper board each.
+        // A token that does not parse (the demo seed's DO-NOT-SCAN placeholders) would print a QR that
+        // can only ever fail, so it is left out.
+        var registrationId = await db.Storefronts.AsNoTracking()
+            .Where(x => x.storefront_id == board.StorefrontId).Select(x => x.registration_id).SingleAsync(ct);
+        var today = Today;
+        var permits = await db.DigitalPermits.AsNoTracking()
+            .Where(x => x.permit_status == PermitStatuses.Active
+                && x.contract.contract_status == ContractStatuses.Active
+                && x.contract.end_date >= today
+                && x.contract.application.registration_id == registrationId)
+            .OrderBy(x => x.contract_id == board.ContractId ? 0 : 1).ThenBy(x => x.contract.slot.slot_code)
+            .Select(x => new { x.permit_id, x.contract_id, SlotCode = x.contract.slot.slot_code, x.qr_payload })
+            .ToListAsync(ct);
+        var boards = permits
+            .Where(x => permitTokens is null || permitTokens.TryParse(x.qr_payload, out _))
+            .Select(x => new PriceBoardPermitDto(x.permit_id, x.contract_id, x.SlotCode,
+                permitLinks?.ScanUrl(x.qr_payload, board.Version), permitLinks?.PrintUrl(x.qr_payload)))
+            .ToList();
         return new SellerPriceBoardDto(
             board.StorefrontId,
             board.StorefrontName,
             board.SlotCode,
             board.Version,
             board.UpdatedAt is { } updated ? DateTime.SpecifyKind(updated, DateTimeKind.Utc) : null,
-            token is null ? null : permitLinks?.ScanUrl(token, board.Version),
-            token is null ? null : permitLinks?.PrintUrl(token),
+            boards.FirstOrDefault()?.QrUrl,
+            boards.FirstOrDefault()?.PrintUrl,
             board.Items.Select(x => new PriceBoardItemDto(x.MenuItemId, x.Name, x.NameEn, x.PriceUnit, x.UnitPrice)).ToList(),
             history.Select(x => new PriceHistoryEntryDto(
                 x.price_history_id, x.menu_item_id, x.item_name, x.item_name_en, x.price_unit, x.unit_price,
                 x.PreviousUnitPrice, x.is_listed, x.change_kind, DateTime.SpecifyKind(x.changed_at, DateTimeKind.Utc),
-                x.ChangedByRole == RoleCodes.Vendor ? x.ChangedByName ?? "Người bán" : "Quản trị viên")).ToList());
+                x.ChangedByRole == RoleCodes.Vendor ? x.ChangedByName ?? "Người bán" : "Quản trị viên")).ToList(),
+            boards);
     }
 
     private Task<long> OwnerUserId(long vendor, CancellationToken ct) =>

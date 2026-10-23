@@ -29,7 +29,16 @@ public sealed record SellerMenuInput(int CategoryId, string Name, string? Descri
 /// </summary>
 public sealed record SellerPriceBoardDto(long StorefrontId, string StorefrontName, string? SlotCode,
     int Version, DateTime? UpdatedAt, string? QrUrl, string? PrintUrl,
-    IReadOnlyList<PriceBoardItemDto> Items, IReadOnlyList<PriceHistoryEntryDto> History);
+    IReadOnlyList<PriceBoardItemDto> Items, IReadOnlyList<PriceHistoryEntryDto> History,
+    IReadOnlyList<PriceBoardPermitDto> Boards);
+
+/// <summary>
+/// One paper board to hang: a slot the business holds with a live permit, and the links its QR and
+/// A5 page use. A business renting two slots prints two boards with the same prices and different
+/// QR codes, because each QR is that slot's own signed permit. <see cref="SellerPriceBoardDto.QrUrl"/>
+/// and <see cref="SellerPriceBoardDto.PrintUrl"/> are the first of these (the storefront's own slot).
+/// </summary>
+public sealed record PriceBoardPermitDto(long PermitId, long ContractId, string SlotCode, string? QrUrl, string? PrintUrl);
 /// <param name="PreviousUnitPrice">The dish's price on its previous row; null for its first row.</param>
 /// <param name="ChangedByName">The vendor's own name, or "Quản trị viên" for a moderator's hide/restore.</param>
 public sealed record PriceHistoryEntryDto(long PriceHistoryId, long MenuItemId, string Name, string? NameEn,
