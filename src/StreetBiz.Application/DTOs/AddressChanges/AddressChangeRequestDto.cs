@@ -13,7 +13,11 @@ public sealed record AddressChangeRequestDto(
     string ChangeStatus,
     string? ConflictResolutionNote,
     DateTime? ReviewedAt,
-    DateTime CreatedAt);
+    DateTime CreatedAt,
+    string? ReleasedSlotCode = null,
+    string? ReleaseState = null,
+    DateOnly? ReleaseGraceEndsOn = null,
+    bool ReleaseBlockedByDebt = false);
 
 /// <summary>Maps domain records to DTOs for the Address Change API.</summary>
 public static class AddressChangeRequestMapper
@@ -21,5 +25,6 @@ public static class AddressChangeRequestMapper
     public static AddressChangeRequestDto ToDto(this AddressChangeRequestRow r) => new(
         r.AddressChangeId, r.RegistrationId, r.NewAddress, r.NewLatitude, r.NewLongitude,
         r.ReleasedContractId, r.RequestedNewSlotId, r.ChangeStatus,
-        r.ConflictResolutionNote, r.ReviewedAt, r.CreatedAt);
+        r.ConflictResolutionNote, r.ReviewedAt, r.CreatedAt,
+        r.ReleasedSlotCode, r.ReleaseState, r.ReleaseGraceEndsOn, r.ReleaseBlockedByDebt);
 }

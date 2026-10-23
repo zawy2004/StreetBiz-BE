@@ -242,7 +242,7 @@ public sealed class AiComplianceService : IAiComplianceService
 
     public Task<AiDocumentCheckResult> CompareDeclaredProfileAsync(
         string declaredName,
-        string? extractedIdNumber,
+        string? declaredIdNumber,
         string declaredAddress,
         AiIdExtractionResult extraction,
         CancellationToken ct)
@@ -276,6 +276,15 @@ public sealed class AiComplianceService : IAiComplianceService
             points -= 30;
         }
 
+        // The number the vendor typed must be the number on the card. Spaces and dashes are typing habits,
+        // not differences, so only the digits are compared; a declaration left empty is nothing to compare.
+        var declaredDigits = DigitsOnly(declaredIdNumber);
+        if (declaredDigits.Length > 0 && declaredDigits != DigitsOnly(extraction.IdNumber))
+        {
+            discrepancies.Add($"Số CCCD khai báo ('{declaredIdNumber}') khác số CCCD trên ảnh ('{extraction.IdNumber}').");
+            points -= 40;
+        }
+
         if (!string.IsNullOrWhiteSpace(extraction.TamperingAlert))
         {
             discrepancies.Add($"Cảnh báo thị giác: {extraction.TamperingAlert}");
@@ -304,6 +313,9 @@ public sealed class AiComplianceService : IAiComplianceService
         return Task.FromResult(new AiDocumentCheckResult(
             matchScore, matchScore >= LowConfidenceThreshold && string.IsNullOrWhiteSpace(extraction.TamperingAlert), needsManual, summary, discrepancies, IsAiGenerated: true));
     }
+
+    private static string DigitsOnly(string? value) =>
+        new((value ?? string.Empty).Where(char.IsDigit).ToArray());
     #endregion
 
     #region Gemini Vision: Encroachment Analysis

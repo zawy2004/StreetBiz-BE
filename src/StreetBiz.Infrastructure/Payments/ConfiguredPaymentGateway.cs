@@ -11,17 +11,24 @@ namespace StreetBiz.Infrastructure.Payments;
 
 public sealed class ConfiguredPaymentGateway(
     IOptions<PaymentGatewaySettings> options,
-    IHttpClientFactory? httpClientFactory = null) : IPaymentGateway
+    IHttpClientFactory? httpClientFactory = null,
+    TimeProvider? clock = null) : IPaymentGateway
 {
     private readonly PaymentGatewaySettings settings = options.Value;
+    private readonly TimeProvider time = clock ?? TimeProvider.System;
 
     /// <summary>Real MoMo v2 is used for MOMO whenever its credentials are configured.</summary>
     private bool UsesMomo(string provider) =>
         provider == "MOMO" && settings.Momo.IsMomoConfigured && httpClientFactory is not null;
 
+    /// <summary>Real ZaloPay is used for ZALOPAY only when it is switched on and fully configured.</summary>
+    private bool UsesZaloPay(string provider) =>
+        provider == "ZALOPAY" && settings.ZaloPay.IsZaloPayConfigured && httpClientFactory is not null;
+
     public bool IsProviderAvailable(string provider) =>
         !string.IsNullOrWhiteSpace(settings.For(provider).CheckoutUrlTemplate)
         || UsesMomo(provider)
+        || UsesZaloPay(provider)
         || settings.SandboxEnabled;
 
     public Task<PaymentGatewayCheckoutResult> CreateCheckoutAsync(
@@ -34,6 +41,16 @@ public sealed class ConfiguredPaymentGateway(
                 httpClientFactory!.CreateClient(MomoGateway.HttpClientName),
                 settings.Momo,
                 request,
+                cancellationToken);
+        }
+
+        if (UsesZaloPay(request.Provider))
+        {
+            return ZaloPayGateway.CreateAsync(
+                httpClientFactory!.CreateClient(ZaloPayGateway.HttpClientName),
+                settings.ZaloPay,
+                request,
+                time.GetUtcNow(),
                 cancellationToken);
         }
 
@@ -70,6 +87,12 @@ public sealed class ConfiguredPaymentGateway(
         if (UsesMomo(provider) && MomoGateway.IsIpn(rawPayload))
         {
             return Task.FromResult(MomoGateway.VerifyIpn(settings.Momo, rawPayload));
+        }
+
+        // ZaloPay signs the "data" string of its callback with key2 (no signature header).
+        if (UsesZaloPay(provider) && ZaloPayGateway.IsCallback(rawPayload))
+        {
+            return Task.FromResult(ZaloPayGateway.VerifyCallback(settings.ZaloPay, rawPayload));
         }
 
         string? providerReference = null;
@@ -112,14 +135,25 @@ public sealed class ConfiguredPaymentGateway(
     public async Task<PaymentGatewayCallback?> QueryPaymentAsync(
         string provider,
         string providerReference,
-        CancellationToken cancellationToken) =>
-        UsesMomo(provider)
-            ? await MomoGateway.QueryAsync(
+        CancellationToken cancellationToken)
+    {
+        if (UsesMomo(provider))
+        {
+            return await MomoGateway.QueryAsync(
                 httpClientFactory!.CreateClient(MomoGateway.HttpClientName),
                 settings.Momo,
                 providerReference,
+                cancellationToken);
+        }
+
+        return UsesZaloPay(provider)
+            ? await ZaloPayGateway.QueryAsync(
+                httpClientFactory!.CreateClient(ZaloPayGateway.HttpClientName),
+                settings.ZaloPay,
+                providerReference,
                 cancellationToken)
             : null;
+    }
 
     private static string? Text(JsonElement root, string name) =>
         root.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String

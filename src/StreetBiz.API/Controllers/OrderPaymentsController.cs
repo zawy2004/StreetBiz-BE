@@ -19,20 +19,32 @@ public sealed class OrderPaymentsController(IHostEnvironment environment, IConfi
         !string.IsNullOrWhiteSpace(configuration["Payments:Momo:PartnerCode"])
         && !string.IsNullOrWhiteSpace(configuration["Payments:Momo:SecretKey"]);
 
+    /// <summary>ZaloPay's gateway is offered only when it is switched on and has the credentials to sign a request.</summary>
+    private bool ZaloPayLive =>
+        configuration.GetValue<bool>("Payments:ZaloPay:Enabled")
+        && !string.IsNullOrWhiteSpace(configuration["Payments:ZaloPay:AppId"])
+        && !string.IsNullOrWhiteSpace(configuration["Payments:ZaloPay:Key1"])
+        && !string.IsNullOrWhiteSpace(configuration["Payments:ZaloPay:Key2"]);
+
     [HttpGet("payment-options")]
     public IActionResult Options()
     {
-        // The simulator is only ever offered in Development; MoMo is offered wherever it is configured.
-        var providers = (SandboxEnabled ? new[] { "MOMO", "ZALOPAY" } : MomoLive ? ["MOMO"] : []);
+        // The simulator is only ever offered in Development; a real gateway is offered wherever it is configured.
         var momoLive = MomoLive;
+        var zaloLive = ZaloPayLive;
+        var providers = SandboxEnabled
+            ? new[] { "MOMO", "ZALOPAY" }
+            : new[] { momoLive ? "MOMO" : null, zaloLive ? "ZALOPAY" : null }.OfType<string>().ToArray();
+        var live = momoLive || zaloLive;
         return Ok(new
         {
-            mode = providers.Length == 0 ? "UNAVAILABLE" : momoLive ? "LIVE" : "SANDBOX",
+            mode = providers.Length == 0 ? "UNAVAILABLE" : live ? "LIVE" : "SANDBOX",
             providers,
             message = providers.Length == 0
                 ? "Thanh toán trực tuyến chưa sẵn sàng. Vui lòng thử lại sau."
-                : momoLive
-                    ? "Thanh toán qua cổng MoMo (môi trường test của MoMo, không trừ tiền thật)."
+                : live
+                    ? "Thanh toán qua cổng " + string.Join(" / ", providers.Select(p => p == "MOMO" ? "MoMo" : "ZaloPay"))
+                        + " (môi trường test, không trừ tiền thật)."
                     : "Thanh toán thử nghiệm, không trừ tiền thật."
         });
     }

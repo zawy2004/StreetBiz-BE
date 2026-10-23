@@ -7,6 +7,14 @@ namespace StreetBiz.Application.Features.AiAssistance;
 /// AIAssistanceLogs.feature_code values this codebase writes. The column itself accepts any
 /// "AI[A-Z]-NN" shape (db/StreetBiz_SQL_Server.sql), so a new AI feature needs no schema change --
 /// just a new constant here.
+///
+/// These are the codes already written into AIAssistanceLogs, and they do not all follow the numbering of
+/// SRS Report 3 §3 (kept as they are so old log rows keep their meaning):
+///   AIC-01 here covers SRS AIC-01 (read the ID document) AND SRS AIC-02 (cross-check it against what was declared);
+///   AIC-02 here is the on-site inspection photo, which is SRS AIC-05;
+///   AIC-03 here is the legal-document draft; SRS AIC-03 (duplicate / fraudulent applications) is not logged and is
+///   served by WardIntegrityController;
+///   AIC-04, AIC-06 and AIC-07 match the SRS.
 /// </summary>
 public static class AiFeatureCodes
 {

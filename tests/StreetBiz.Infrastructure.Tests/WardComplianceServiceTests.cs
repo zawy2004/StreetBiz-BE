@@ -803,6 +803,83 @@ public sealed class WardComplianceServiceTests
         Assert.Equal("REJECTED", decided.Status);
     }
 
+    // ---- WARD-06: request additional registration evidence ---------------------------------------
+
+    [Fact]
+    public async Task Asking_for_more_information_records_the_reason_notifies_the_vendor_and_is_audited()
+    {
+        using var f = await Fixture.Create();
+
+        var result = await f.NewService().DecideEnrollmentAsync(f.Actor, 2,
+            new WardEnrollmentDecision("MORE_INFO", "Bổ sung ảnh CCCD mặt sau rõ nét", "SUBMITTED"), default);
+
+        Assert.Equal("MORE_INFORMATION_REQUIRED", result.Status);
+        using var verify = f.NewDb();
+        var reg = await verify.BusinessRegistrations.Include(r => r.vendor).SingleAsync(r => r.registration_id == 2);
+        Assert.Equal("Bổ sung ảnh CCCD mặt sau rõ nét", reg.review_decision_reason);
+        Assert.NotNull(reg.reviewed_at);
+        var notice = await verify.Notifications.SingleAsync(n => n.related_entity_type == "BusinessRegistration" && n.related_entity_id == 2);
+        Assert.Equal(reg.vendor.user_id, notice.user_id);
+        Assert.Equal("Hồ sơ điểm bán cần bổ sung", notice.title);
+        Assert.Contains("Bổ sung ảnh CCCD mặt sau rõ nét", notice.body);
+        Assert.Contains("nộp lại", notice.body);
+        Assert.Single(verify.AuditLogs.Where(a => a.action == "ENROLLMENT_MORE_INFORMATION_REQUIRED" && a.entity_id == 2));
+    }
+
+    [Fact]
+    public async Task A_file_waiting_for_more_information_cannot_be_approved_until_the_vendor_resubmits()
+    {
+        using var f = await Fixture.Create();
+        await f.NewService().DecideEnrollmentAsync(f.Actor, 2,
+            new WardEnrollmentDecision("MORE_INFO", "Thiếu giấy tờ", "SUBMITTED"), default);
+
+        await Assert.ThrowsAsync<DomainRuleException>(() => f.NewService().DecideEnrollmentAsync(f.Actor, 2,
+            new WardEnrollmentDecision("APPROVE", "Duyệt luôn", "MORE_INFORMATION_REQUIRED"), default));
+        // A second request for the same file is refused too: it is already with the vendor.
+        await Assert.ThrowsAsync<DomainRuleException>(() => f.NewService().DecideEnrollmentAsync(f.Actor, 2,
+            new WardEnrollmentDecision("MORE_INFO", "Lại thiếu", "MORE_INFORMATION_REQUIRED"), default));
+    }
+
+    [Fact]
+    public async Task The_vendor_can_fix_and_resubmit_and_the_file_returns_to_the_wards_queue_with_a_clean_slate()
+    {
+        using var f = await Fixture.Create();
+        await f.NewService().ConfirmIdentityAsync(f.Actor, 2, new ConfirmEnrollmentIdentity("Đã đối chiếu CCCD"), default);
+        await f.NewService().DecideEnrollmentAsync(f.Actor, 2,
+            new WardEnrollmentDecision("MORE_INFO", "Thiếu giấy tờ", "SUBMITTED"), default);
+        var waiting = await f.NewService().ListEnrollmentsAsync(f.Actor, "SUBMITTED", 1, default);
+        Assert.DoesNotContain(waiting, r => r.Id == "2");
+
+        using (var db = f.NewDb())
+        {
+            var repository = new BusinessRegistrationRepository(db, new DateTimeProvider());
+            await repository.UpdateAndResubmitAsync(2, new StreetBiz.Application.Common.Models.NewBizRegistration(
+                "ITINERANT", "Hộ B (đã bổ sung)", null, null, null, 1), default);
+        }
+
+        var queue = await f.NewService().ListEnrollmentsAsync(f.Actor, "SUBMITTED", 1, default);
+        Assert.Contains(queue, r => r.Id == "2");
+        using var verify = f.NewDb();
+        var reg = await verify.BusinessRegistrations.SingleAsync(r => r.registration_id == 2);
+        Assert.Equal("SUBMITTED", reg.registration_status);
+        // The previous request and the identity check described the old file; both are cleared.
+        Assert.Null(reg.review_decision_reason);
+        Assert.Null(reg.reviewed_at);
+        Assert.Null(reg.identity_verified_at);
+        // The officer can now pick it up again.
+        Assert.Equal("UNDER_REVIEW", (await f.NewService().ClaimEnrollmentAsync(f.Actor, 2, default)).Status);
+    }
+
+    [Fact]
+    public async Task While_waiting_for_the_vendor_the_officer_cannot_take_the_file_into_review()
+    {
+        using var f = await Fixture.Create();
+        await f.NewService().DecideEnrollmentAsync(f.Actor, 2,
+            new WardEnrollmentDecision("MORE_INFO", "Thiếu giấy tờ", "SUBMITTED"), default);
+
+        await Assert.ThrowsAsync<DomainRuleException>(() => f.NewService().ClaimEnrollmentAsync(f.Actor, 2, default));
+    }
+
     [Fact]
     public async Task A_vendor_edit_clears_the_officers_identity_confirmation()
     {

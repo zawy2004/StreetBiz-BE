@@ -11,6 +11,20 @@ using StreetBiz.API.Hubs;
 
 namespace StreetBiz.API.Controllers;
 
+public sealed record ContentReportRequest(string ReasonCode, string? Detail);
+
+/// <summary>ZaloPay's callback reply ({"return_code": ..., "return_message": ...}) for the outcome the shared handler reported.</summary>
+internal static class ZaloPayAcknowledgement
+{
+    public static object For(string result) => result switch
+    {
+        "APPLIED" => new { return_code = 1, return_message = "success" },
+        "DUPLICATE" => new { return_code = 2, return_message = "order already processed" },
+        "REJECTED" => new { return_code = -1, return_message = "invalid callback" },
+        _ => new { return_code = -1, return_message = "order not found" },
+    };
+}
+
 [ApiController]
 [Route("api/marketplace")]
 public sealed class MarketplaceController(ISender sender) : ControllerBase
@@ -25,9 +39,10 @@ public sealed class MarketplaceController(ISender sender) : ControllerBase
         [FromQuery] bool? openNow,
         [FromQuery] string? sort,
         [FromQuery] int take = 50,
+        [FromQuery] decimal? minRating = null,
         CancellationToken cancellationToken = default) =>
         Ok(await sender.Send(
-            new SearchMarketplaceMenuQuery(query, take, wardId, categoryId, minPrice, maxPrice, openNow, sort),
+            new SearchMarketplaceMenuQuery(query, take, wardId, categoryId, minPrice, maxPrice, openNow, sort, minRating),
             cancellationToken));
 
     [HttpGet("menu-items/{menuItemId:long}")]
@@ -42,6 +57,28 @@ public sealed class MarketplaceController(ISender sender) : ControllerBase
         [FromQuery] decimal? longitude,
         CancellationToken cancellationToken) =>
         Ok(await sender.Send(new ListServiceAreasQuery(latitude, longitude), cancellationToken));
+
+    /// <summary>REV-03: report a storefront to the moderators (sign-in required).</summary>
+    [Authorize]
+    [HttpPost("storefronts/{storefrontId:long}/reports")]
+    public async Task<ActionResult<ContentReportReceiptDto>> ReportStorefront(
+        long storefrontId,
+        ContentReportRequest request,
+        CancellationToken cancellationToken) =>
+        Ok(await sender.Send(
+            new ReportContentCommand(ReportedContentTypes.Storefront, storefrontId, request.ReasonCode, request.Detail),
+            cancellationToken));
+
+    /// <summary>REV-03: report a dish to the moderators (sign-in required).</summary>
+    [Authorize]
+    [HttpPost("menu-items/{menuItemId:long}/reports")]
+    public async Task<ActionResult<ContentReportReceiptDto>> ReportMenuItem(
+        long menuItemId,
+        ContentReportRequest request,
+        CancellationToken cancellationToken) =>
+        Ok(await sender.Send(
+            new ReportContentCommand(ReportedContentTypes.MenuItem, menuItemId, request.ReasonCode, request.Detail),
+            cancellationToken));
 
     [HttpGet("categories")]
     public async Task<ActionResult<IReadOnlyList<MarketplaceCategoryDto>>> Categories(
@@ -59,9 +96,11 @@ public sealed class MarketplaceController(ISender sender) : ControllerBase
         [FromQuery] double? radiusMeters,
         [FromQuery] string? sort,
         [FromQuery] int take = 50,
+        [FromQuery] decimal? minRating = null,
+        [FromQuery] decimal? maxPrice = null,
         CancellationToken cancellationToken = default) =>
         Ok(await sender.Send(
-            new ListStorefrontsQuery(query, wardId, categoryId, openNow, latitude, longitude, radiusMeters, sort, take),
+            new ListStorefrontsQuery(query, wardId, categoryId, openNow, latitude, longitude, radiusMeters, sort, take, minRating, maxPrice),
             cancellationToken));
 
     [HttpGet("storefronts/{storefrontId:long}")]
@@ -249,6 +288,13 @@ public sealed class PaymentCallbacksController(
         if (string.Equals(provider, "momo", StringComparison.OrdinalIgnoreCase))
         {
             return NoContent();
+        }
+
+        // ZaloPay's contract: a JSON body with return_code 1 (done), 2 (already processed) or anything
+        // else (it calls again). Returned as-is, outside the ActionResult<PaymentCallbackReceiptDto> shape.
+        if (string.Equals(provider, "zalopay", StringComparison.OrdinalIgnoreCase))
+        {
+            return new ObjectResult(StreetBiz.API.Controllers.ZaloPayAcknowledgement.For(result.Result));
         }
 
         return Ok(result);

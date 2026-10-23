@@ -13,6 +13,8 @@ public static class PermitScanResults
 public static class VendorReportStatuses
 {
     public const string Pending = "PENDING";
+    public const string Reviewed = "REVIEWED";
+    public const string Dismissed = "DISMISSED";
 }
 
 public static class CommunityMessages

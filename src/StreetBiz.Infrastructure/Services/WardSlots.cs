@@ -6,6 +6,7 @@ using StreetBiz.Application.Common.Interfaces;
 using StreetBiz.Application.Common.Security;
 using StreetBiz.Application.Features.WardSlots;
 using StreetBiz.Infrastructure.Persistence;
+using StreetBiz.Infrastructure.Persistence.Repositories;
 using StreetBiz.Infrastructure.Persistence.ScaffoldedModels;
 
 namespace StreetBiz.Infrastructure.Services;
@@ -71,7 +72,7 @@ public sealed class WardSlots(
         {
             "proposals" => await Proposals(actor).OrderByDescending(x => x.created_at).ThenByDescending(x => x.slot_id)
                 .Skip(offset).Take(21).Select(x => x.slot_id).ToListAsync(ct),
-            "conflicts" => await Conflicts(actor).Where(x => x.requested_new_slot_id != null)
+            "conflicts" => await Conflicts(actor).Where(x => x.requested_new_slot_id != null || x.released_contract_id != null)
                 .OrderByDescending(x => x.created_at).ThenByDescending(x => x.address_change_id)
                 .Skip(offset).Take(21).Select(x => x.address_change_id).ToListAsync(ct),
             "transfers" => await Transfers(actor).OrderByDescending(x => x.initiated_at).ThenByDescending(x => x.transfer_id)
@@ -126,24 +127,46 @@ public sealed class WardSlots(
             var row = await Conflicts(actor).SingleOrDefaultAsync(x => x.address_change_id == id, ct);
             if (row is null) { WardRules.NotFound(); return null!; }
             var blockers = new List<string>();
-            if (row.requested_new_slot is null || row.requested_new_slot.zone.ward_unit_id != actor.WardId)
-                blockers.Add("Ô mới không thuộc phường hoặc chưa được chọn.");
-            else if (!await Occupied(row.requested_new_slot.slot_id, ct))
-                blockers.Add("Ô hiện không có xung đột thuê; cần xử lý qua luồng đổi địa chỉ.");
+            // The new-slot checks only make sense when the vendor asked for a new slot; a request that
+            // only gives the old one back has nothing to queue.
+            if (row.requested_new_slot_id is not null)
+            {
+                if (row.requested_new_slot is null || row.requested_new_slot.zone.ward_unit_id != actor.WardId)
+                    blockers.Add("Ô mới không thuộc phường hoặc chưa được chọn.");
+                else if (!await Occupied(row.requested_new_slot.slot_id, ct))
+                    blockers.Add("Ô hiện không có xung đột thuê; cần xử lý qua luồng đổi địa chỉ.");
+            }
             int? position = null;
             if (row.change_status == AddressChangeStatuses.UnderReview && row.reviewed_at.HasValue)
                 position = 1 + await db.AddressChangeRequests.CountAsync(x =>
                     x.requested_new_slot_id == row.requested_new_slot_id
                     && x.change_status == AddressChangeStatuses.UnderReview &&
                     (x.reviewed_at < row.reviewed_at || x.reviewed_at == row.reviewed_at && x.address_change_id < id), ct);
-            return new(Id(id), kind, "Xung đột đổi địa chỉ", row.change_status, row.requested_new_slot?.slot_code ?? "",
-                row.registration.display_name, row.new_address,
+
+            var release = await ReleaseViewAsync(row, ct);
+            var actions = new List<string>();
+            if (row.change_status == AddressChangeStatuses.Pending)
+            {
+                if (row.requested_new_slot_id is not null && blockers.Count == 0) actions.Add("QUEUE");
+                actions.Add("REJECT");
+            }
+            else if (row.change_status == AddressChangeStatuses.UnderReview) actions.Add("REJECT");
+            // SIDE-10: while the old slot waits out its grace period the ward can give more time or let the vendor keep it.
+            if (release is not null)
+            {
+                actions.Add(AdjacentSlotRelease.ExtendGrace);
+                actions.Add(AdjacentSlotRelease.CancelRelease);
+            }
+            var summary = release is null
+                ? row.new_address
+                : $"{row.new_address} · Ô cũ {release.SlotCode} chờ trả, ân hạn đến {release.GraceEndsOn:dd/MM/yyyy}" +
+                    (release.Debt > 0 ? $", còn nợ {release.Debt:N0}₫ nên chưa thể trả" : "");
+            return new(Id(id), kind, "Xung đột đổi địa chỉ", row.change_status,
+                row.requested_new_slot?.slot_code ?? release?.SlotCode ?? "",
+                row.registration.display_name, summary,
                 row.new_latitude.HasValue && row.new_longitude.HasValue ? new((double)row.new_latitude, (double)row.new_longitude) : null,
-                null, row.created_at, row.conflict_resolution_note, blockers.ToArray(),
-                row.change_status == AddressChangeStatuses.Pending
-                    ? blockers.Count == 0 ? ["QUEUE", "REJECT"] : ["REJECT"]
-                    : row.change_status == AddressChangeStatuses.UnderReview ? ["REJECT"] : [],
-                position);
+                null, row.created_at, row.conflict_resolution_note, blockers.ToArray(), actions.ToArray(),
+                position, Outstanding: release?.Debt);
         }
         if (kind == "transfers")
         {
@@ -159,6 +182,23 @@ public sealed class WardSlots(
                 ContractTerm: $"{row.contract.start_date:dd/MM/yyyy} – {row.contract.end_date:dd/MM/yyyy}", Outstanding: debt);
         }
         throw new WardException(400, "invalid_kind", "Loại hồ sơ không hợp lệ.");
+    }
+
+    /// <summary>The old slot of an open address change while it still waits to be given back (SIDE-10), or null.</summary>
+    private sealed record ReleaseView(string SlotCode, DateOnly GraceEndsOn, decimal Debt);
+
+    private async Task<ReleaseView?> ReleaseViewAsync(AddressChangeRequest row, CancellationToken ct)
+    {
+        if (row.released_contract_id is not { } contractId || !AddressChangeStatuses.Open.Contains(row.change_status))
+            return null;
+        var contract = await db.RentalContracts.AsNoTracking().Where(c => c.contract_id == contractId)
+            .Select(c => new { c.contract_status, c.slot.slot_code }).SingleOrDefaultAsync(ct);
+        if (contract is null || contract.contract_status != ContractStatuses.Active) return null;
+        var extensions = await AddressChangeReleaseQueries.ExtensionDaysAsync(db, [row.address_change_id], ct);
+        var debt = await AddressChangeReleaseQueries.DebtByContractAsync(db, [contractId], ct);
+        return new(contract.slot_code,
+            AdjacentSlotRelease.GraceEndsOn(row.created_at, extensions.GetValueOrDefault(row.address_change_id)),
+            debt.GetValueOrDefault(contractId));
     }
 
     private Task<bool> Occupied(long slotId, CancellationToken ct) => db.RentalContracts.AnyAsync(x =>
@@ -246,14 +286,34 @@ public sealed class WardSlots(
             else if (kind == WardCaseKinds.Conflicts)
             {
                 var row = await Conflicts(actor).SingleAsync(x => x.address_change_id == id, ct);
-                row.change_status = decision.Decision == "QUEUE"
-                    ? AddressChangeStatuses.UnderReview
-                    : AddressChangeStatuses.Rejected;
-                row.conflict_resolution_note = reason;
-                row.reviewed_by = actor.UserId;
-                row.reviewed_at = Now;
-                // Queuing does not displace the current tenant or release the old contract.
-                await NotifyVendor(row.registration.vendor_id, kind, id, reason, ct);
+                if (decision.Decision == AdjacentSlotRelease.ExtendGrace)
+                {
+                    // SIDE-10: more time before the old slot goes back. Kept in the audit trail, which is
+                    // what the release sweep and the vendor's tracking screen read it back from.
+                    var slot = (await ReleaseViewAsync(row, ct))?.SlotCode ?? "cũ";
+                    await NotifyVendor(row.registration.vendor_id, kind, id,
+                        $"Phường gia hạn thêm {AdjacentSlotRelease.ExtensionDays} ngày trước khi trả ô {slot}. {reason}", ct,
+                        "Gia hạn thời gian trả ô cũ");
+                }
+                else if (decision.Decision == AdjacentSlotRelease.CancelRelease)
+                {
+                    // The vendor keeps the old slot: the request no longer names a slot to give back.
+                    var slot = (await ReleaseViewAsync(row, ct))?.SlotCode ?? "cũ";
+                    row.released_contract_id = null;
+                    await NotifyVendor(row.registration.vendor_id, kind, id,
+                        $"Phường giữ nguyên ô {slot} của bạn, không trả ô. {reason}", ct, "Giữ nguyên ô cũ");
+                }
+                else
+                {
+                    row.change_status = decision.Decision == "QUEUE"
+                        ? AddressChangeStatuses.UnderReview
+                        : AddressChangeStatuses.Rejected;
+                    row.conflict_resolution_note = reason;
+                    row.reviewed_by = actor.UserId;
+                    row.reviewed_at = Now;
+                    // Queuing does not displace the current tenant or release the old contract.
+                    await NotifyVendor(row.registration.vendor_id, kind, id, reason, ct);
+                }
             }
             else
             {
@@ -273,7 +333,9 @@ public sealed class WardSlots(
                 await NotifyVendor(row.from_vendor_id, kind, id, reason, ct);
                 await NotifyVendor(row.to_vendor_id, kind, id, reason, ct);
             }
-            Audit(actor, kind, id, decision.Decision, new { PreviousStatus = current.Status, Reason = reason });
+            Audit(actor, kind, id, decision.Decision, decision.Decision == AdjacentSlotRelease.ExtendGrace
+                ? new { PreviousStatus = current.Status, Reason = reason, Days = AdjacentSlotRelease.ExtensionDays }
+                : new { PreviousStatus = current.Status, Reason = reason, Days = 0 });
         }, ct);
         return await GetAsync(actor, kind, id, ct);
     }
