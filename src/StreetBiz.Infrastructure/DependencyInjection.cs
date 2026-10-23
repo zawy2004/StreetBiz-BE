@@ -206,6 +206,19 @@ public static class DependencyInjection
         services.AddTransient<StreetBiz.Application.Features.VendorRegistration.AssistTurn.IRegistrationExtractor,
             Services.Voice.CompositeRegistrationExtractor>();
 
+        // X01 v2: the same interview as a live conversation, over the chatbot's Gemini Live relay.
+        var registrationVoice = new StreetBiz.Application.Features.VendorRegistration.AssistTurn.RegistrationVoiceSettings();
+        configuration.GetSection("AiCompliance:VoiceRegistration:Live").Bind(registrationVoice);
+        if (registrationVoice.MaxSessionSeconds is < 60 or > 900 || registrationVoice.IdleSeconds is < 20 or > 300
+            || registrationVoice.MaxToolCalls is < 5 or > 100 || registrationVoice.EvidenceWaitMs is < 0 or > 3000)
+        {
+            throw new InvalidOperationException("AiCompliance:VoiceRegistration:Live settings exceed supported limits.");
+        }
+
+        services.AddSingleton(registrationVoice);
+        services.AddSingleton<StreetBiz.Application.Features.VendorRegistration.AssistTurn.RegistrationVoiceTickets>();
+        services.AddScoped<StreetBiz.Application.Features.VendorRegistration.AssistTurn.RegistrationVoiceService>();
+
         return services;
     }
 

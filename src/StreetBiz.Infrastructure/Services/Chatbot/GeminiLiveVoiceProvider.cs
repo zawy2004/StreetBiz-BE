@@ -23,12 +23,16 @@ public sealed class GeminiLiveVoiceProvider(AiKeyPools keys, ChatbotVoiceSetting
     {
         var declarations = new JsonArray();
         foreach (var tool in setup.Tools)
-            declarations.Add(new JsonObject
+        {
+            var declaration = new JsonObject
             {
                 ["name"] = tool.Name.Replace(".", "__"),
                 ["description"] = tool.Description,
                 ["parametersJsonSchema"] = JsonNode.Parse(tool.Parameters.GetRawText()),
-            });
+            };
+            if (setup.BlockingTools) declaration["behavior"] = "BLOCKING";
+            declarations.Add(declaration);
+        }
         var body = new JsonObject
         {
             ["model"] = "models/" + settings.Model,
@@ -137,6 +141,15 @@ public sealed class GeminiLiveUpstream(WebSocket socket, string model) : IChatbo
             });
         return SendJsonAsync(new JsonObject { ["toolResponse"] = new JsonObject { ["functionResponses"] = responses } }, ct);
     }
+
+    public Task SendTextAsync(string text, CancellationToken ct) => SendJsonAsync(new JsonObject
+    {
+        ["clientContent"] = new JsonObject
+        {
+            ["turns"] = new JsonArray(new JsonObject { ["role"] = "user", ["parts"] = new JsonArray(new JsonObject { ["text"] = text }) }),
+            ["turnComplete"] = true,
+        },
+    }, ct);
 
     public async Task WaitForSetupAsync(CancellationToken ct)
     {

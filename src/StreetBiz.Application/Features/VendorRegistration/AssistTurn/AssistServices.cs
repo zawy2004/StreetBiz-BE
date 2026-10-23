@@ -2,7 +2,7 @@ using StreetBiz.Application.Common.Exceptions;
 
 namespace StreetBiz.Application.Features.VendorRegistration.AssistTurn;
 
-/// <summary>Speech to text for one short clip (≤ 35 s). The clip is never stored.</summary>
+/// <summary>Speech to text for one short clip (≤ 60 s). The clip is never stored.</summary>
 public interface ISpeechToText
 {
     /// <exception cref="AiUnavailableException">Every configured provider failed.</exception>

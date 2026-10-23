@@ -561,7 +561,7 @@ public sealed class AssistRegistrationTurnHandlerTests
     [Fact]
     public void Wards_with_nearby_slots_come_before_name_matches()
     {
-        var options = AssistRegistrationTurnCommandHandler.WardOptions(
+        var options = AssistTurnEngine.WardOptions(
             [Slot(31, "TK-02", 11, 400)], "Chợ Cồn, Hải Châu, Đà Nẵng", Wards);
 
         options.Select(o => (o.UnitId, o.Reason)).Should().Equal((11, AssistWardReasons.SlotsNearby), (10, AssistWardReasons.NameMatch));
@@ -571,7 +571,7 @@ public sealed class AssistRegistrationTurnHandlerTests
     public void A_changed_amount_loses_its_earlier_confirmation()
     {
         var draft = Ready();
-        var merged = AssistRegistrationTurnCommandHandler.Merge(draft,
+        var merged = AssistTurnEngine.Merge(draft,
             [new AssistFieldProposal(AssistFields.CapitalAmount, "15000000", 1, "15 triệu", "Mười lăm triệu đồng", true, AssistProposalSources.Parser)],
             AssistQuestionKeys.Capital);
 

@@ -187,6 +187,7 @@ app.UseWebSockets(new WebSocketOptions { KeepAliveInterval = TimeSpan.FromSecond
 
 app.MapControllers();
 app.MapChatbotApi();
+app.MapRegistrationVoiceApi();
 app.MapWardApi();
 app.MapFinanceDevApi();
 app.MapHub<OrderHub>("/hubs/orders");

@@ -26,7 +26,7 @@ public sealed class VendorRegistrationAssistController(ISender sender, IConfigur
     /// <summary>One interview turn: an audio clip or typed text answering <c>questionKey</c>, or
     /// neither to just get the next question. <c>draft</c> is the client's AssistDraft as JSON.</summary>
     [HttpPost("assist/turn")]
-    [RequestSizeLimit(3 * 1024 * 1024)]
+    [RequestSizeLimit(5 * 1024 * 1024)]
     public async Task<ActionResult<AssistTurnResult>> Turn(
         [FromForm] string questionKey,
         [FromForm] string? draft,
@@ -55,7 +55,7 @@ public sealed class VendorRegistrationAssistController(ISender sender, IConfigur
         {
             if (audio.Length > AssistRegistrationTurnCommandValidator.MaxAudioBytes)
             {
-                throw new ValidationAppException(new Dictionary<string, string[]> { ["audio"] = ["Đoạn ghi âm quá dài. Hãy nói ngắn hơn 30 giây."] });
+                throw new ValidationAppException(new Dictionary<string, string[]> { ["audio"] = ["Đoạn ghi âm quá dài. Hãy nói ngắn hơn 60 giây."] });
             }
 
             using var buffer = new MemoryStream((int)audio.Length);
@@ -65,6 +65,22 @@ public sealed class VendorRegistrationAssistController(ISender sender, IConfigur
 
         return Ok(await sender.Send(
             new AssistRegistrationTurnCommand(questionKey, parsed, text, bytes, audio?.ContentType, voiceConsent), ct));
+    }
+
+    /// <summary>
+    /// X01 v2: a single-use ticket for the live conversation (Gemini Live) streamed over
+    /// <c>/hubs/registration-voice/{sessionId}</c>. 503/429/409 mean "use tap-to-talk instead".
+    /// </summary>
+    [HttpPost("assist/live")]
+    public async Task<ActionResult<AssistLiveTicketDto>> Live([FromBody] StartAssistLiveRequest request, CancellationToken ct)
+    {
+        if (!Enabled())
+        {
+            return NotFound();
+        }
+
+        var ticket = await sender.Send(new StartAssistLiveCommand(request.Draft ?? new AssistDraft(), request.VoiceConsent), ct);
+        return StatusCode(StatusCodes.Status201Created, ticket);
     }
 
     /// <summary>After filing: the vendor accepted the assistant's draft (idempotent per registration).</summary>

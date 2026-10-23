@@ -183,6 +183,7 @@ public sealed class ControllerEndpointContractTests
         "POST /api/vendor/kyc/id-card",
         "POST /api/vendor/kyc/face-match",
         "POST /api/vendor/registrations/assist/turn",
+        "POST /api/vendor/registrations/assist/live",
         "POST /api/vendor/registrations/{registrationId}/assist/confirm",
         "GET /api/ward/me",
         "GET /api/ward/cases/{kind}",
