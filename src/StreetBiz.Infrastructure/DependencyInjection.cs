@@ -131,6 +131,12 @@ public static class DependencyInjection
         services.AddSingleton<IFinanceDocumentRenderer, Documents.FinanceDocumentRenderer>();
         services.Configure<FeeReminderOptions>(configuration.GetSection(FeeReminderOptions.SectionName));
         services.AddHostedService<FeeReminderHostedService>();
+
+        // Household tax (db/StreetBiz_SQL_Server.sql, section 12).
+        services.AddScoped<ITaxRepository, TaxRepository>();
+        services.AddSingleton<ITaxDocumentRenderer, Documents.TaxDocumentRenderer>();
+        services.Configure<TaxSweepOptions>(configuration.GetSection(TaxSweepOptions.SectionName));
+        services.AddHostedService<TaxSweepHostedService>();
         services.AddScoped<ICommerceRepository, CommerceRepository>();
         services.AddScoped<IOrderTrackingRepository, OrderTrackingRepository>();
         services.AddScoped<IVendorFinanceRepository, VendorFinanceRepository>();

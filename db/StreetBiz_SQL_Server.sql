@@ -2224,7 +2224,233 @@ GO
 
 
 /* ============================================================
-   12. EF MIGRATION HISTORY
+   12. HOUSEHOLD TAX SUPPORT (TAX)
+   From 1/1/2026 the lump-sum tax (thuế khoán) is gone: a household keeps its own revenue
+   record and declares what it earned. StreetBiz does not file or collect tax. It
+     - keeps the household's revenue book from its own orders plus the sales the household
+       records (RevenueEntries), and shows where that stands against the no-tax threshold;
+     - tracks the notices the household says it has filed (TaxDeclarations);
+     - gives the ward the list of households it is asked to keep current for the tax office,
+       and the cases it should pass on to it (TaxReferrals), without revealing any household's
+       revenue unless that household agreed (VendorTaxProfiles.share_revenue_with_ward).
+   Thresholds and rates are NOT constants: the law changed twice in 2026 alone, so they live in
+   versioned TaxPolicies rows that a platform administrator publishes. A published version is
+   never edited; a correction is a new version, and the highest version of a year is the one
+   in force.
+   ============================================================ */
+
+CREATE TABLE TaxPolicies (
+    policy_id              INT IDENTITY(1,1)  PRIMARY KEY,
+    tax_year               INT                NOT NULL,
+    version_no             INT                NOT NULL,
+    legal_basis            NVARCHAR(500)      NOT NULL,  -- the Nghị định / Luật behind these numbers
+    -- At or below this yearly revenue a household owes no VAT and no PIT; it only reports revenue.
+    revenue_threshold      DECIMAL(18,0)      NOT NULL,
+    -- Above this a household must issue e-invoices (coded, or from a connected cash register).
+    einvoice_threshold     DECIMAL(18,0)      NOT NULL,
+    -- Upper bounds of the revenue groups above the threshold (group 2 and group 3).
+    group2_ceiling         DECIMAL(18,0)      NOT NULL,
+    group3_ceiling         DECIMAL(18,0)      NOT NULL,
+    -- PIT on revenue is charged on the part above the threshold (1) or on all of it (0).
+    pit_deducts_threshold  BIT                NOT NULL DEFAULT 1,
+    -- PIT on profit (revenue minus costs), by group.
+    pit_profit_rate_g2     DECIMAL(5,4)       NOT NULL,
+    pit_profit_rate_g3     DECIMAL(5,4)       NOT NULL,
+    pit_profit_rate_g4     DECIMAL(5,4)       NOT NULL,
+    -- The yearly revenue notice is due on this day of the FOLLOWING year.
+    annual_notice_month    TINYINT            NOT NULL DEFAULT 1,
+    annual_notice_day      TINYINT            NOT NULL DEFAULT 31,
+    -- Share of the threshold at which a household is warned that it is getting close.
+    warn_ratio             DECIMAL(5,4)       NOT NULL DEFAULT 0.8000,
+    note                   NVARCHAR(1000)     NULL,
+    created_by             BIGINT             NOT NULL,
+    creator_role           AS CAST(N'PLATFORM_ADMIN' AS NVARCHAR(30)) PERSISTED,
+    created_at             DATETIME2          NOT NULL DEFAULT SYSUTCDATETIME(),
+    CONSTRAINT UQ_TaxPolicies_YearVersion UNIQUE (tax_year, version_no),
+    CONSTRAINT CK_TaxPolicies_Year
+        CHECK (tax_year BETWEEN 2026 AND 2100 AND version_no >= 1),
+    CONSTRAINT CK_TaxPolicies_Thresholds
+        CHECK (revenue_threshold > 0 AND einvoice_threshold > 0
+           AND group2_ceiling > revenue_threshold AND group3_ceiling > group2_ceiling),
+    CONSTRAINT CK_TaxPolicies_Rates
+        CHECK (pit_profit_rate_g2 BETWEEN 0 AND 1 AND pit_profit_rate_g3 BETWEEN 0 AND 1
+           AND pit_profit_rate_g4 BETWEEN 0 AND 1),
+    CONSTRAINT CK_TaxPolicies_WarnRatio
+        CHECK (warn_ratio > 0 AND warn_ratio < 1),
+    CONSTRAINT CK_TaxPolicies_NoticeDate
+        CHECK ((annual_notice_month IN (1,3,5,7,8,10,12) AND annual_notice_day BETWEEN 1 AND 31)
+            OR (annual_notice_month IN (4,6,9,11)        AND annual_notice_day BETWEEN 1 AND 30)
+            OR (annual_notice_month = 2                  AND annual_notice_day BETWEEN 1 AND 28)),
+    CONSTRAINT FK_TaxPolicies_CreatedBy
+        FOREIGN KEY (created_by, creator_role)
+        REFERENCES UserAccounts(user_id, role_code)
+);
+
+-- Rates on revenue by kind of business, one set per policy version. industry_code is a stable
+-- code (the household's profile stores it), the rates change with the policy.
+CREATE TABLE TaxIndustryRates (
+    rate_id         INT IDENTITY(1,1)  PRIMARY KEY,
+    policy_id       INT                NOT NULL,
+    industry_code   NVARCHAR(30)       NOT NULL,
+    industry_name   NVARCHAR(200)      NOT NULL,
+    vat_rate        DECIMAL(5,4)       NOT NULL,
+    pit_rate        DECIMAL(5,4)       NOT NULL,
+    note            NVARCHAR(300)      NULL,
+    CONSTRAINT UQ_TaxIndustryRates_Code UNIQUE (policy_id, industry_code),
+    CONSTRAINT CK_TaxIndustryRates_Rates
+        CHECK (vat_rate BETWEEN 0 AND 1 AND pit_rate BETWEEN 0 AND 1),
+    CONSTRAINT FK_TaxIndustryRates_Policy
+        FOREIGN KEY (policy_id) REFERENCES TaxPolicies(policy_id) ON DELETE CASCADE
+);
+
+-- One row per household (vendor), created the first time it opens the tax screens.
+CREATE TABLE VendorTaxProfiles (
+    vendor_id               BIGINT         NOT NULL PRIMARY KEY,
+    tax_code                NVARCHAR(14)   NULL,   -- mã số thuế: 10 digits, 10-3, or the 12-digit personal id
+    industry_code           NVARCHAR(30)   NOT NULL DEFAULT 'FOOD_SERVICE',
+    einvoice_registered     BIT            NOT NULL DEFAULT 0,
+    -- Whether the ward officer may see this household's revenue figures and revenue group.
+    -- Off by default: the ward always sees whether the notice was filed, never the amounts.
+    share_revenue_with_ward BIT            NOT NULL DEFAULT 0,
+    consent_updated_at      DATETIME2      NULL,
+    created_at              DATETIME2      NOT NULL DEFAULT SYSUTCDATETIME(),
+    updated_at              DATETIME2      NULL,
+    CONSTRAINT CK_VendorTaxProfiles_TaxCode
+        CHECK (tax_code IS NULL
+            OR (LEN(tax_code) IN (10, 12, 13, 14) AND tax_code NOT LIKE '%[^0-9-]%')),
+    CONSTRAINT FK_VendorTaxProfiles_Vendor
+        FOREIGN KEY (vendor_id) REFERENCES Vendors(vendor_id)
+);
+
+-- Sales the household records by hand (cash at the stall, a transfer to its own account). Sales
+-- through StreetBiz orders are NOT stored here: they are read from Orders, so the book can never
+-- count one sale twice. A wrong entry is voided, never edited or deleted, so the book keeps its
+-- history.
+CREATE TABLE RevenueEntries (
+    entry_id     BIGINT IDENTITY(1,1)  PRIMARY KEY,
+    vendor_id    BIGINT                NOT NULL,
+    entry_date   DATE                  NOT NULL,  -- the Vietnamese calendar day of the sales
+    amount       DECIMAL(18,0)         NOT NULL,
+    channel      NVARCHAR(20)          NOT NULL,
+    note         NVARCHAR(300)         NULL,
+    created_at   DATETIME2             NOT NULL DEFAULT SYSUTCDATETIME(),
+    voided_at    DATETIME2             NULL,
+    void_reason  NVARCHAR(300)         NULL,
+    CONSTRAINT CK_RevenueEntries_Amount
+        CHECK (amount > 0 AND amount <= 10000000000),
+    CONSTRAINT CK_RevenueEntries_Channel
+        CHECK (channel IN ('CASH','BANK_TRANSFER','EWALLET','OTHER')),
+    CONSTRAINT CK_RevenueEntries_Void
+        CHECK (voided_at IS NOT NULL OR void_reason IS NULL),
+    CONSTRAINT FK_RevenueEntries_Vendor
+        FOREIGN KEY (vendor_id) REFERENCES Vendors(vendor_id)
+);
+CREATE INDEX IX_RevenueEntries_Vendor_Date
+    ON RevenueEntries(vendor_id, entry_date) INCLUDE (amount, channel)
+    WHERE voided_at IS NULL;
+
+-- A notice or declaration the household confirms it has filed with the tax authority (through
+-- the tax portal / eTax Mobile: StreetBiz files nothing). period_type YEAR is the yearly revenue
+-- notice (period_no 0); QUARTER is the quarterly declaration a household above the threshold
+-- makes (period_no 1-4). revenue_system is StreetBiz's own figure when the household confirmed,
+-- kept beside what it declared so a difference stays visible.
+CREATE TABLE TaxDeclarations (
+    declaration_id       BIGINT IDENTITY(1,1)  PRIMARY KEY,
+    vendor_id            BIGINT                NOT NULL,
+    tax_year             INT                   NOT NULL,
+    period_type          NVARCHAR(10)          NOT NULL,
+    period_no            TINYINT               NOT NULL DEFAULT 0,
+    revenue_declared     DECIMAL(18,0)         NOT NULL,
+    revenue_system       DECIMAL(18,0)         NOT NULL,
+    filed_on             DATE                  NOT NULL,  -- the day it was filed with the authority
+    authority_reference  NVARCHAR(100)         NULL,      -- the portal's receipt / transaction number
+    receipt_url          NVARCHAR(500)         NULL,      -- an uploaded proof (evidence file URL)
+    note                 NVARCHAR(500)         NULL,
+    created_at           DATETIME2             NOT NULL DEFAULT SYSUTCDATETIME(),
+    updated_at           DATETIME2             NULL,
+    CONSTRAINT UQ_TaxDeclarations_Period UNIQUE (vendor_id, tax_year, period_type, period_no),
+    CONSTRAINT CK_TaxDeclarations_Period
+        CHECK ((period_type = 'YEAR' AND period_no = 0)
+            OR (period_type = 'QUARTER' AND period_no BETWEEN 1 AND 4)),
+    CONSTRAINT CK_TaxDeclarations_Year CHECK (tax_year BETWEEN 2026 AND 2100),
+    CONSTRAINT CK_TaxDeclarations_Amounts CHECK (revenue_declared >= 0 AND revenue_system >= 0),
+    CONSTRAINT FK_TaxDeclarations_Vendor
+        FOREIGN KEY (vendor_id) REFERENCES Vendors(vendor_id)
+);
+
+-- The ward's list of things to pass on to the tax office, so a household that sells without
+-- being registered, moves, stops trading or is new and has no tax code is not left for the office
+-- to find on its own. Generated from the ward's own records and refreshed daily; the unique key
+-- makes the refresh idempotent, and the officer's decision on a row (reported / not needed) is
+-- kept. A referral is a pointer to a record, never a verdict about the household.
+CREATE TABLE TaxReferrals (
+    referral_id          BIGINT IDENTITY(1,1)  PRIMARY KEY,
+    ward_unit_id         INT                   NOT NULL,
+    ward_unit_type       AS CAST(N'WARD' AS NVARCHAR(20)) PERSISTED,
+    vendor_id            BIGINT                NULL,
+    reason_code          NVARCHAR(30)          NOT NULL,
+    source_type          NVARCHAR(20)          NOT NULL,
+    source_id            BIGINT                NOT NULL,
+    summary              NVARCHAR(500)         NOT NULL,
+    detected_at          DATETIME2             NOT NULL,  -- when the underlying event happened
+    created_at           DATETIME2             NOT NULL DEFAULT SYSUTCDATETIME(),
+    referral_status      NVARCHAR(10)          NOT NULL DEFAULT 'PENDING',
+    handled_by           BIGINT                NULL,      -- NULL when the system closed it itself
+    handled_at           DATETIME2             NULL,
+    authority_reference  NVARCHAR(100)         NULL,      -- the reference of the letter / submission to the tax office
+    handling_note        NVARCHAR(500)         NULL,
+    CONSTRAINT UQ_TaxReferrals_Source UNIQUE (reason_code, source_type, source_id),
+    CONSTRAINT CK_TaxReferrals_Reason
+        CHECK (reason_code IN ('UNREGISTERED_ACTIVITY','INVALID_PERMIT_ACTIVITY','ADDRESS_CHANGED',
+                               'BUSINESS_ENDED','NEW_HOUSEHOLD')),
+    CONSTRAINT CK_TaxReferrals_SourceType
+        CHECK (source_type IN ('VIOLATION','PERMIT_SCAN','ADDRESS_CHANGE','CONTRACT','VENDOR')),
+    CONSTRAINT CK_TaxReferrals_Status
+        CHECK (referral_status IN ('PENDING','REPORTED','DISMISSED')),
+    CONSTRAINT CK_TaxReferrals_Handled
+        CHECK (referral_status = 'PENDING' OR handled_at IS NOT NULL),
+    CONSTRAINT CK_TaxReferrals_DismissNote
+        CHECK (referral_status <> 'DISMISSED' OR handling_note IS NOT NULL),
+    CONSTRAINT FK_TaxReferrals_Ward
+        FOREIGN KEY (ward_unit_id, ward_unit_type)
+        REFERENCES AdministrativeUnits(unit_id, unit_type),
+    CONSTRAINT FK_TaxReferrals_Vendor
+        FOREIGN KEY (vendor_id) REFERENCES Vendors(vendor_id),
+    CONSTRAINT FK_TaxReferrals_HandledBy
+        FOREIGN KEY (handled_by) REFERENCES UserAccounts(user_id)
+);
+CREATE INDEX IX_TaxReferrals_Ward_Status ON TaxReferrals(ward_unit_id, referral_status);
+
+-- A message the ward sent to its households about tax, kept so the ward can see what it has
+-- already told them. Recipients get an ordinary notification.
+CREATE TABLE TaxAnnouncements (
+    announcement_id   BIGINT IDENTITY(1,1)  PRIMARY KEY,
+    ward_unit_id      INT                   NOT NULL,
+    ward_unit_type    AS CAST(N'WARD' AS NVARCHAR(20)) PERSISTED,
+    segment           NVARCHAR(20)          NOT NULL,
+    tax_year          INT                   NOT NULL,
+    title             NVARCHAR(150)         NOT NULL,
+    body              NVARCHAR(800)         NOT NULL,
+    recipient_count   INT                   NOT NULL,
+    created_by        BIGINT                NOT NULL,
+    creator_role      AS CAST(N'WARD_AUTHORITY' AS NVARCHAR(30)) PERSISTED,
+    created_at        DATETIME2             NOT NULL DEFAULT SYSUTCDATETIME(),
+    CONSTRAINT CK_TaxAnnouncements_Segment
+        CHECK (segment IN ('ALL','NOT_FILED','NO_TAX_CODE')),
+    CONSTRAINT CK_TaxAnnouncements_Recipients CHECK (recipient_count >= 0),
+    CONSTRAINT FK_TaxAnnouncements_Ward
+        FOREIGN KEY (ward_unit_id, ward_unit_type)
+        REFERENCES AdministrativeUnits(unit_id, unit_type),
+    CONSTRAINT FK_TaxAnnouncements_CreatedBy
+        FOREIGN KEY (created_by, creator_role)
+        REFERENCES UserAccounts(user_id, role_code)
+);
+CREATE INDEX IX_TaxAnnouncements_Ward ON TaxAnnouncements(ward_unit_id, created_at DESC);
+GO
+
+
+/* ============================================================
+   13. EF MIGRATION HISTORY
    StreetBizDB is database-first: this file is the schema, EF never creates or alters it
    (docs/database.md). The rows are stamped here so EF never believes it has work to do:
    InitialBaseline has an intentionally empty Up() (the schema predates EF) and
@@ -2280,8 +2506,12 @@ GO
                                       ChatMessages, ReportedContent)
    11 Assistant Persistence ...... 3  (ChatbotConversations, ChatbotMessages,
                                       ChatbotAudits)
+   12 Household Tax Support ...... 7  (TaxPolicies, TaxIndustryRates,
+                                      VendorTaxProfiles, RevenueEntries,
+                                      TaxDeclarations, TaxReferrals,
+                                      TaxAnnouncements)
    ------------------------------------------------------------
-   TOTAL: 62 tables (plus __EFMigrationsHistory), 5 triggers, 2 views
+   TOTAL: 69 tables (plus __EFMigrationsHistory), 5 triggers, 2 views
 
    Use-case coverage: the 70 Core and 31 Phase 2 use cases of the actor
    specification. AIAssistanceLogs backs AIC-01 (document check), AIC-02

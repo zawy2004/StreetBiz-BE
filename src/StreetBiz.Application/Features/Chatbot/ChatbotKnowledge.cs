@@ -8,7 +8,7 @@ public sealed record ChatbotGuide(string Id, string Title, string Text, string[]
 /// <summary>Reviewed product guidance, not a source of legal opinions or live permit validity.</summary>
 public sealed class ChatbotKnowledge
 {
-    public const string Version = "streetbiz-core-2026-10-06";
+    public const string Version = "streetbiz-core-2026-10-18";
     public static readonly ChatbotGuide[] Guides =
     [
         new("start", "Bắt đầu với StreetBiz", "StreetBiz hỗ trợ đăng ký kinh doanh và sử dụng vỉa hè, tra cứu giấy phép và phản ánh cộng đồng. Bạn có thể đăng ký tài khoản khách hàng hoặc hộ kinh doanh. Tài khoản cán bộ phường và quản trị viên do nền tảng quản lý, không tự nhận vai trò qua chat.", [], ["bắt đầu", "đăng ký tài khoản", "streetbiz", "xin chào", "hello"]),
@@ -22,6 +22,7 @@ public sealed class ChatbotKnowledge
         new("admin", "Phạm vi quản trị nền tảng", "Quản trị viên hỗ trợ vận hành tài khoản, danh mục và kiểm duyệt nội dung theo chức năng đang có. Vai trò này không có quyền phê duyệt hồ sơ vỉa hè hoặc xử phạt thay cán bộ phường, và không mặc định được đọc hội thoại riêng của người dùng. Chỉ dùng số liệu từ chức năng đã có nguồn dữ liệu thật.", ["PLATFORM_ADMIN"], ["quản trị", "nền tảng", "danh mục", "kiểm duyệt", "tài khoản", "admin"]),
         new("privacy", "Bảo vệ tài khoản", "Không gửi mật khẩu, OTP, khóa API, số CCCD hoặc ảnh giấy tờ định danh qua chatbot. Sử dụng quy trình xác minh danh tính trong Đăng ký kinh doanh. Có thể quản lý phiên đăng nhập ở mục Tài khoản; không chia sẻ mã xác thực với bất kỳ ai.", [], ["mật khẩu", "otp", "cccd", "bảo mật", "đăng nhập", "phiên", "khóa"]),
         new("legal", "Căn cứ pháp lý và thẩm quyền", "Trợ lý hiện cung cấp hướng dẫn sản phẩm; chưa có kho văn bản pháp lý đã được duyệt để kết luận điều luật hoặc mức phạt cụ thể. Với yêu cầu pháp lý, cần đối chiếu văn bản chính thức còn hiệu lực và cán bộ có thẩm quyền. Không suy đoán mức phạt từ ảnh hoặc trí nhớ của AI.", [], ["luật", "nghị định", "điều", "pháp lý", "phạt", "bao nhiêu", "xử phạt"]),
+        new("household-tax", "Thuế và doanh thu của hộ kinh doanh", "Mục Thuế & doanh thu giúp hộ kinh doanh theo dõi doanh thu năm so với ngưỡng không chịu thuế, ghi thêm doanh thu bán trực tiếp, xem việc cần làm và hạn thông báo, xem số thuế ước tính để tham khảo và xác nhận mình đã nộp. StreetBiz không khai, không nộp và không thu thuế thay hộ; số liệu chỉ để tham khảo, ngưỡng và tỷ lệ do quản trị nền tảng cấu hình theo quy định đang áp dụng. Phường chỉ thấy doanh thu của hộ khi hộ bật cho phép trong mục Mã số thuế và quyền riêng tư. Câu hỏi cụ thể về nghĩa vụ thuế cần hỏi cơ quan thuế quản lý.", ["VENDOR", "WARD_AUTHORITY"], ["thuế", "doanh thu", "ngưỡng", "kê khai", "mã số thuế", "gtgt", "tncn", "sổ doanh thu", "hóa đơn điện tử", "thông báo doanh thu"]),
         new("food-safety", "Hồ sơ an toàn thực phẩm", "Hộ kinh doanh có thể mở phần hồ sơ an toàn thực phẩm để xem yêu cầu và bổ sung theo form. Cán bộ đối chiếu ở hàng đợi an toàn thực phẩm. Trợ lý chưa tra cứu trạng thái riêng của hồ sơ này; mở màn hình để xem dữ liệu cập nhật.", ["VENDOR", "WARD_AUTHORITY"], ["an toàn", "thực phẩm", "attp"]),
     ];
 

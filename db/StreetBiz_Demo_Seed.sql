@@ -1342,6 +1342,100 @@ GO
 
 
 /* ============================================================
+   14. HOUSEHOLD TAX (TAX)
+   Tax year 2026 carries TWO policy versions on purpose: Nghị định 68/2026 set the no-tax
+   threshold at 500 million đ, Nghị định 141/2026 raised it to 1 billion đ from 1/1/2026. The
+   highest version is the one in force, so the screens show 1 billion and the admin's history
+   shows how it got there.
+
+   Revenue is generated relative to today so the demo works whenever it is built:
+     - vendor 1 (0905000101) sells about 3.1 million đ a day from 1 January, which puts it near
+       the threshold with a forecast that crosses it (the warning, the "when" and the e-invoice
+       obligations all show). Its profile has a tax code and agrees to share revenue with the ward.
+     - vendor 2 (0905000102) sells under 1 million đ a day for the last 80 days, has no tax code
+       and shares nothing: the ward sees it only as a household without a tax code.
+   Online sales are not seeded here: they are read from Orders (order 1 is COMPLETED).
+   ============================================================ */
+IF NOT EXISTS (SELECT 1 FROM TaxPolicies)
+BEGIN
+    SET IDENTITY_INSERT TaxPolicies ON;
+    INSERT INTO TaxPolicies
+        (policy_id, tax_year, version_no, legal_basis, revenue_threshold, einvoice_threshold,
+         group2_ceiling, group3_ceiling, pit_deducts_threshold, pit_profit_rate_g2, pit_profit_rate_g3,
+         pit_profit_rate_g4, annual_notice_month, annual_notice_day, warn_ratio, note, created_by, created_at)
+    VALUES
+        (1, 2026, 1,
+            N'Nghị định 68/2026/NĐ-CP (05/3/2026): hộ kinh doanh có doanh thu đến 500 triệu đồng/năm không chịu thuế GTGT, không nộp thuế TNCN.',
+            500000000, 1000000000, 3000000000, 50000000000, 1, 0.1500, 0.1700, 0.2000, 1, 31, 0.8000,
+            N'Phiên bản đầu tiên, đã được phiên bản 2 thay thế.', 1, DATEADD(DAY, -170, SYSUTCDATETIME())),
+        (2, 2026, 2,
+            N'Nghị định 141/2026/NĐ-CP (29/4/2026) sửa đổi Nghị định 68/2026/NĐ-CP: nâng ngưỡng lên 1 tỷ đồng/năm, áp dụng từ 01/01/2026.',
+            1000000000, 1000000000, 3000000000, 50000000000, 1, 0.1500, 0.1700, 0.2000, 1, 31, 0.8000,
+            N'Tham số tham khảo; đối chiếu văn bản gốc trước khi dùng cho báo cáo chính thức.', 1,
+            DATEADD(DAY, -140, SYSUTCDATETIME()));
+    SET IDENTITY_INSERT TaxPolicies OFF;
+
+    INSERT INTO TaxIndustryRates (policy_id, industry_code, industry_name, vat_rate, pit_rate, note)
+    SELECT p.policy_id, r.industry_code, r.industry_name, r.vat_rate, r.pit_rate, r.note
+    FROM TaxPolicies p
+    CROSS JOIN (VALUES
+        ('GOODS',              N'Bán hàng hoá (phân phối, cung cấp hàng hoá)',            0.0100, 0.0050, NULL),
+        ('FOOD_SERVICE',       N'Ăn uống (quán, xe đẩy, bán rong)',                       0.0300, 0.0150,
+            N'Xếp cùng nhóm "sản xuất, dịch vụ gắn với hàng hoá" theo hướng dẫn trước đây (TT 40/2021); cần đối chiếu văn bản hiện hành.'),
+        ('PRODUCTION_SERVICE', N'Sản xuất, vận tải, dịch vụ gắn với hàng hoá',            0.0300, 0.0150, NULL),
+        ('SERVICE',            N'Dịch vụ không gắn với hàng hoá',                         0.0500, 0.0200, NULL),
+        ('OTHER',              N'Hoạt động kinh doanh khác',                              0.0200, 0.0100, NULL)
+    ) AS r(industry_code, industry_name, vat_rate, pit_rate, note);
+END;
+GO
+
+IF NOT EXISTS (SELECT 1 FROM VendorTaxProfiles)
+BEGIN
+    INSERT INTO VendorTaxProfiles
+        (vendor_id, tax_code, industry_code, einvoice_registered, share_revenue_with_ward, consent_updated_at, created_at)
+    VALUES
+        (1, '048090001234', 'FOOD_SERVICE', 0, 1, DATEADD(DAY, -20, SYSUTCDATETIME()), DATEADD(DAY, -20, SYSUTCDATETIME())),
+        (2, NULL,           'FOOD_SERVICE', 0, 0, NULL,                                  DATEADD(DAY, -3,  SYSUTCDATETIME()));
+END;
+GO
+
+IF NOT EXISTS (SELECT 1 FROM RevenueEntries)
+BEGIN
+    DECLARE @today DATE = CAST(DATEADD(HOUR, 7, SYSUTCDATETIME()) AS DATE);   -- Vietnamese calendar day
+    DECLARE @jan1  DATE = DATEFROMPARTS(YEAR(@today), 1, 1);
+
+    -- Vendor 1: every day of the year so far, shaped like a week at a food stall
+    -- (Mon-Thu 2.6M, Fri 3.2M, Sat 4.1M, Sun 4.4M; every fourth day paid to the shop's bank account).
+    ;WITH days AS (
+        SELECT @jan1 AS d WHERE @jan1 < @today
+        UNION ALL
+        SELECT DATEADD(DAY, 1, d) FROM days WHERE d < DATEADD(DAY, -1, @today)
+    )
+    INSERT INTO RevenueEntries (vendor_id, entry_date, amount, channel, note)
+    SELECT 1, d,
+           CASE DATEDIFF(DAY, '20000103', d) % 7      -- 2000-01-03 was a Monday: 0 = Mon
+                WHEN 4 THEN 3200000 WHEN 5 THEN 4100000 WHEN 6 THEN 4400000 ELSE 2600000 END,
+           CASE WHEN DATEDIFF(DAY, '20000103', d) % 4 = 0 THEN 'BANK_TRANSFER' ELSE 'CASH' END,
+           N'Doanh thu bán trực tiếp tại ô'
+    FROM days
+    OPTION (MAXRECURSION 400);
+
+    -- Vendor 2: the last 80 days, small.
+    ;WITH days AS (
+        SELECT (CASE WHEN DATEADD(DAY, -80, @today) > @jan1 THEN DATEADD(DAY, -80, @today) ELSE @jan1 END) AS d
+        WHERE @jan1 < @today
+        UNION ALL
+        SELECT DATEADD(DAY, 1, d) FROM days WHERE d < DATEADD(DAY, -1, @today)
+    )
+    INSERT INTO RevenueEntries (vendor_id, entry_date, amount, channel, note)
+    SELECT 2, d, 600000 + (DATEDIFF(DAY, '20000103', d) % 3) * 100000, 'CASH', N'Bán nước ép tại xe'
+    FROM days
+    OPTION (MAXRECURSION 400);
+END;
+GO
+
+
+/* ============================================================
    Summary
    ============================================================ */
 SELECT
@@ -1363,7 +1457,9 @@ SELECT
     (SELECT COUNT(*) FROM MenuItems)              AS [menu_items],
     (SELECT COUNT(*) FROM Orders)                 AS [orders],
     (SELECT COUNT(*) FROM SlotTransferRequests)   AS [transfers],
-    (SELECT COUNT(*) FROM Notifications)          AS [notifications];
+    (SELECT COUNT(*) FROM Notifications)          AS [notifications],
+    (SELECT COUNT(*) FROM TaxPolicies)            AS [tax_policies],
+    (SELECT COUNT(*) FROM RevenueEntries)         AS [revenue_entries];
 
 SELECT registration_status, COUNT(*) AS [count]
 FROM BusinessRegistrations GROUP BY registration_status ORDER BY registration_status;
