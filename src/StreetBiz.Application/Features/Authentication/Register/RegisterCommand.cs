@@ -1,3 +1,4 @@
+using System.Data;
 using FluentValidation;
 using MediatR;
 using StreetBiz.Application.Common.Exceptions;
@@ -50,7 +51,8 @@ public sealed class RegisterCommandHandler(
     IPasswordHasher passwordHasher,
     IDateTimeProvider clock,
     IAuthTokenIssuer tokenIssuer,
-    IAdministrativeUnitRepository units) : IRequestHandler<RegisterCommand, AuthResultDto>
+    IAdministrativeUnitRepository units,
+    IUnitOfWork unitOfWork) : IRequestHandler<RegisterCommand, AuthResultDto>
 {
     public async Task<AuthResultDto> Handle(RegisterCommand request, CancellationToken cancellationToken)
     {
@@ -80,13 +82,19 @@ public sealed class RegisterCommandHandler(
             AccountStatuses.Active,
             now);
 
-        var userId = await userRepository.CreateAsync(newUser, cancellationToken);
+        // 4) Sign in immediately. The account (with its vendor row) and its first session are
+        // all-or-nothing, so a failed sign-in never leaves an account the user cannot reach.
+        return await unitOfWork.ExecuteInTransactionAsync(async transaction =>
+        {
+            var userId = await userRepository.CreateAsync(newUser, cancellationToken);
 
-        var user = new AppUser(
-            userId, request.PhoneNumber, newUser.PasswordHash, request.FullName,
-            request.RoleCode, request.WardUnitId, AccountStatuses.Active, now);
+            var user = new AppUser(
+                userId, request.PhoneNumber, newUser.PasswordHash, request.FullName,
+                request.RoleCode, request.WardUnitId, AccountStatuses.Active, now);
 
-        // 4) Sign in immediately.
-        return await tokenIssuer.IssueAsync(user, request.DeviceInfo, request.IpAddress, cancellationToken);
+            var result = await tokenIssuer.IssueAsync(user, request.DeviceInfo, request.IpAddress, cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
+            return result;
+        }, IsolationLevel.ReadCommitted, cancellationToken);
     }
 }

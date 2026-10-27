@@ -1,3 +1,4 @@
+using System.Data;
 using FluentValidation;
 using MediatR;
 using StreetBiz.Application.Common.Exceptions;
@@ -30,25 +31,32 @@ public sealed class ResetPasswordCommandHandler(
     IUserAccountRepository userRepository,
     IPasswordHasher passwordHasher,
     ISessionRepository sessionRepository,
-    ISecurityEvents securityEvents) : IRequestHandler<ResetPasswordCommand, Unit>
+    ISecurityEvents securityEvents,
+    IUnitOfWork unitOfWork) : IRequestHandler<ResetPasswordCommand, Unit>
 {
     public async Task<Unit> Handle(ResetPasswordCommand request, CancellationToken cancellationToken)
     {
         await otpService.ConsumeAsync(request.PhoneNumber, OtpPurposes.PasswordReset, request.Otp, cancellationToken);
 
-        var user = await userRepository.GetByPhoneAsync(request.PhoneNumber, cancellationToken)
-            ?? throw new NotFoundException("Account not found.");
+        // The OTP attempt is recorded above and must survive a failure below, so it stays outside
+        // this transaction. The new password, the sign-outs and the notice are all-or-nothing.
+        await unitOfWork.ExecuteInTransactionAsync(async transaction =>
+        {
+            var user = await userRepository.GetByPhoneAsync(request.PhoneNumber, cancellationToken)
+                ?? throw new NotFoundException("Account not found.");
 
-        await userRepository.UpdatePasswordHashAsync(
-            user.Id, passwordHasher.Hash(request.NewPassword), cancellationToken);
+            await userRepository.UpdatePasswordHashAsync(
+                user.Id, passwordHasher.Hash(request.NewPassword), cancellationToken);
 
-        await sessionRepository.RevokeAllForUserAsync(user.Id, cancellationToken);
-        await securityEvents.RecordAsync(
-            user.Id,
-            SecurityActions.PasswordReset,
-            null,
-            ("Mật khẩu đã được đặt lại", "Mật khẩu tài khoản của bạn vừa được đặt lại bằng mã OTP và mọi thiết bị đã bị đăng xuất. Nếu không phải bạn, hãy liên hệ hỗ trợ ngay."),
-            cancellationToken);
+            await sessionRepository.RevokeAllForUserAsync(user.Id, cancellationToken);
+            await securityEvents.RecordAsync(
+                user.Id,
+                SecurityActions.PasswordReset,
+                null,
+                ("Mật khẩu đã được đặt lại", "Mật khẩu tài khoản của bạn vừa được đặt lại bằng mã OTP và mọi thiết bị đã bị đăng xuất. Nếu không phải bạn, hãy liên hệ hỗ trợ ngay."),
+                cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
+        }, IsolationLevel.ReadCommitted, cancellationToken);
         return Unit.Value;
     }
 }
