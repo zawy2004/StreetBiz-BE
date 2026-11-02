@@ -1,3 +1,5 @@
+using StreetBiz.Application.DTOs.Payments;
+
 namespace StreetBiz.Application.DTOs.Commerce;
 
 public sealed record MarketplaceMenuItemDto(
@@ -102,6 +104,7 @@ public sealed record CheckoutPaymentDto(
     string Status,
     string PaymentUrl);
 
+/// <summary>For SEPAY, <c>BankTransfer</c> holds the VietQR to show instead of a page to redirect to.</summary>
 public sealed record CheckoutDto(
     long OrderId,
     string OrderCode,
@@ -109,7 +112,8 @@ public sealed record CheckoutDto(
     long PaymentTransactionId,
     string Provider,
     decimal Amount,
-    string PaymentUrl);
+    string PaymentUrl,
+    BankTransferDto? BankTransfer = null);
 
 public sealed record PaymentCallbackReceiptDto(
     string Result,

@@ -3,6 +3,8 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using StreetBiz.Application.Common.Security;
 using StreetBiz.Application.DTOs.Finance;
+using StreetBiz.Application.DTOs.Payments;
+using StreetBiz.Application.Features.Finance.BankTransfer;
 using StreetBiz.Application.Features.Finance.ConfirmSandboxPayment;
 using StreetBiz.Application.Features.Finance.GetInvoice;
 using StreetBiz.Application.Features.Finance.InvoiceDocuments;
@@ -110,6 +112,15 @@ public sealed class FinanceController(
     public async Task<ActionResult<FinancePaymentSyncDto>> SyncPayment(
         long transactionId, CancellationToken cancellationToken) =>
         Ok(await sender.Send(new SyncFinancePaymentCommand(transactionId), cancellationToken));
+
+    /// <summary>
+    /// FEE-01/FEE-04: the VietQR and transfer details of a payment still waiting for its SePay
+    /// bank transfer, so the payment page can show them again after a reload.
+    /// </summary>
+    [HttpGet("payments/{transactionId:long}/bank-transfer")]
+    public async Task<ActionResult<BankTransferDto>> GetBankTransfer(
+        long transactionId, CancellationToken cancellationToken) =>
+        Ok(await sender.Send(new GetFinanceBankTransferQuery(transactionId), cancellationToken));
 
     /// <summary>FEE-03: the caller's invoices, most recent first.</summary>
     [HttpGet("invoices")]

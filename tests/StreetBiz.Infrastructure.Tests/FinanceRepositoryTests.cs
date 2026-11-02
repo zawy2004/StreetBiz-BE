@@ -452,6 +452,49 @@ public sealed class FinanceRepositoryTests
         Assert.Equal(FeeItemStatuses.Pending,
             (await f.Db.FeeScheduleItems.AsNoTracking().SingleAsync(i => i.fee_item_id == SupersededItem)).item_status);
     }
+    [Fact]
+    public async Task A_second_sepay_transfer_for_a_paid_instalment_is_surplus_and_the_same_transfer_again_a_duplicate()
+    {
+        using var f = await Fixture.Create();
+        var repository = f.Repository();
+        var checkout = await repository.CreateFeeCheckoutAsync(Vendor, PastDueItem, "SEPAY", "qr-1", default);
+        var code = $"SBP{checkout.TransactionId}";
+        await repository.SetPaymentProviderReferenceAsync(checkout.TransactionId, code, default);
+
+        Task<FinanceCallbackMutationResult> Transfer(long sePayId) =>
+            repository.ApplyPaymentCallbackAsync(new PaymentCallbackData(
+                "SEPAY", code, null, checkout.Amount, PaymentStatuses.Success,
+                $$"""{"id":{{sePayId}},"content":"{{code}}","transferType":"in"}""", true, sePayId.ToString()), default);
+
+        Assert.Equal(PaymentCallbackOutcome.Applied, (await Transfer(92704)).Outcome);
+        // SePay delivering the same webhook again changes nothing.
+        Assert.Equal(PaymentCallbackOutcome.Duplicate, (await Transfer(92704)).Outcome);
+        // The payer sending the money a second time is new money: not applied, owed back.
+        var second = await Transfer(92705);
+
+        Assert.Equal(PaymentCallbackOutcome.Surplus, second.Outcome);
+        Assert.Equal(CallbackResults.Rejected, (await f.Db.PaymentCallbackEvents.AsNoTracking()
+            .SingleAsync(e => e.callback_event_id == second.CallbackEventId)).processing_result);
+        Assert.Equal(PaymentStatuses.Success, await StatusOf(f, checkout.TransactionId));
+        Assert.Single(await f.Db.Invoices.AsNoTracking().Where(i => i.fee_item_id == PastDueItem).ToListAsync());
+    }
+
+    [Fact]
+    public async Task A_repeated_momo_success_without_a_transfer_id_is_still_only_a_duplicate()
+    {
+        using var f = await Fixture.Create();
+        var repository = f.Repository();
+        var checkout = await repository.CreateFeeCheckoutAsync(Vendor, PastDueItem, "MOMO", "key-1", default);
+        await repository.SetPaymentProviderReferenceAsync(checkout.TransactionId, "SB-T1-aaaa1111", default);
+        var report = new PaymentCallbackData(
+            "MOMO", "SB-T1-aaaa1111", "key-1", checkout.Amount, PaymentStatuses.Success, "{}", true);
+
+        await repository.ApplyPaymentCallbackAsync(report, default);
+        var again = await repository.ApplyPaymentCallbackAsync(report, default);
+
+        Assert.Equal(PaymentCallbackOutcome.Duplicate, again.Outcome);
+    }
+
     private static async Task<string> StatusOf(Fixture f, long transactionId) =>
         (await f.Db.PaymentTransactions.AsNoTracking().SingleAsync(t => t.transaction_id == transactionId)).transaction_status;
 

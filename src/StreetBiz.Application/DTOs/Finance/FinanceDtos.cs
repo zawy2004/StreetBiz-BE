@@ -1,5 +1,6 @@
 using System.Globalization;
 using StreetBiz.Application.Common.Models;
+using StreetBiz.Application.DTOs.Payments;
 
 namespace StreetBiz.Application.DTOs.Finance;
 
@@ -110,14 +111,18 @@ public sealed record InvoiceDetailDto(
     public string? AmountInWords { get; init; }
 }
 
-/// <summary>FEE-01/FEE-04: a checkout was opened, here is where to send the vendor to pay it.</summary>
+/// <summary>
+/// FEE-01/FEE-04: a checkout was opened, here is where to send the vendor to pay it. For SEPAY
+/// there is nowhere to send them: <c>BankTransfer</c> holds the VietQR to show instead.
+/// </summary>
 public sealed record FinanceCheckoutDto(
     long TransactionId,
     string Purpose,
     long ReferenceId,
     string Provider,
     decimal Amount,
-    string PaymentUrl);
+    string PaymentUrl,
+    BankTransferDto? BankTransfer = null);
 
 public static class FinanceMapper
 {

@@ -50,11 +50,12 @@ evidence trail for a provider dispute.
 | --- | --- |
 | — | `GET /api/vendor/finance/summary` — outstanding totals, overdue count, next due date |
 | — | `GET /api/vendor/finance/fees?status=` — cross-contract fee instalment list |
-| FEE-01 | `POST /api/vendor/finance/fees/{feeItemId}/checkout` (header `Idempotency-Key`, body `{ "provider": "MOMO" \| "ZALOPAY" }`) |
+| FEE-01 | `POST /api/vendor/finance/fees/{feeItemId}/checkout` (header `Idempotency-Key`, body `{ "provider": "MOMO" \| "ZALOPAY" \| "SEPAY" }`; SEPAY returns a VietQR in `bankTransfer`, see [sepay-payments.md](sepay-payments.md)) |
 | — | `GET /api/vendor/finance/penalties?status=` — cross-violation penalty list |
 | FEE-04 | `POST /api/vendor/finance/penalties/{penaltyId}/checkout` (same shape) |
 | — | `POST /api/vendor/finance/payments/{transactionId}/sandbox-confirm` — Development + `Payments:SandboxEnabled` only, same role as `POST /api/orders/{orderId}/payment/sandbox-fail`; refused for a MoMo transaction once MoMo keys are configured |
 | — | `POST /api/vendor/finance/payments/{transactionId}/sync` — asks MoMo for the transaction's real state and applies it (the return page calls it, since MoMo's IPN cannot reach localhost) |
+| — | `GET /api/vendor/finance/payments/{transactionId}/bank-transfer` — the VietQR of a SEPAY payment still waiting for its transfer |
 | FEE-05 | `GET /api/vendor/finance/payments`, `GET /api/vendor/finance/violations` |
 | FEE-03 | `GET /api/vendor/finance/invoices`, `GET /api/vendor/finance/invoices/{invoiceId}` |
 | FEE-03 | `GET /api/vendor/finance/invoices/{invoiceId}/pdf` — the payment receipt as an A5 PDF (`{invoiceNumber}.pdf`) |

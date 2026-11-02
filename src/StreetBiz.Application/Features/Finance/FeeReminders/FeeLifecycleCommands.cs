@@ -91,7 +91,8 @@ public sealed class SettleStalePaymentsCommandHandler(
                             state.Amount,
                             state.Status,
                             state.RawPayload ?? "{}",
-                            state.SignatureValid),
+                            state.SignatureValid,
+                            state.ProviderEventId),
                         cancellationToken);
                     settled++;
                     continue;
