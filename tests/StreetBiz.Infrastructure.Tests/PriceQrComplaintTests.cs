@@ -541,6 +541,49 @@ public sealed class PriceQrComplaintTests
         Assert.Equal(7.0, dashboard.AvgResolutionHours30d);
     }
 
+    [Fact]
+    public async Task The_dashboard_counts_every_rental_application_still_waiting_like_the_inbox_does()
+    {
+        using var f = await Fixture.Create();
+        var now = f.Clock.GetUtcNow().UtcDateTime;
+        // Ward 1: one application in each status. Ward 2: a waiting one that must not be counted.
+        string[] statuses = ["PENDING", "UNDER_REVIEW", "MORE_INFORMATION_REQUIRED", "APPROVED", "REJECTED", "WITHDRAWN"];
+        for (var i = 0; i < statuses.Length; i++)
+        {
+            f.Db.SidewalkSlots.Add(new SidewalkSlot { slot_id = 300 + i, zone_id = 1, slot_code = $"C-0{i}", source = "WARD_DEFINED", slot_status = "AVAILABLE", latitude = 16.06m, longitude = 108.21m });
+            f.Db.RentalApplications.Add(new RentalApplication { application_id = 30 + i, registration_id = 1, slot_id = 300 + i, application_method = "MANUAL_SELECTED", application_status = statuses[i] });
+        }
+
+        f.Db.SidewalkSlots.Add(new SidewalkSlot { slot_id = 400, zone_id = 2, slot_code = "D-01", source = "WARD_DEFINED", slot_status = "AVAILABLE", latitude = 16.07m, longitude = 108.22m });
+        f.Db.RentalApplications.Add(new RentalApplication { application_id = 40, registration_id = 2, slot_id = 400, application_method = "MANUAL_SELECTED", application_status = "UNDER_REVIEW" });
+        await f.Db.SaveChangesAsync();
+        f.Db.ChangeTracker.Clear();
+
+        var dashboard = await new WardReportRepository(f.Db, f.Clock).GetDashboardAsync(1, DateOnly.FromDateTime(now), default);
+
+        // PENDING, UNDER_REVIEW and MORE_INFORMATION_REQUIRED: the three lists Hộp duyệt loads.
+        Assert.Equal(3, dashboard.PendingApplications);
+    }
+
+    [Fact]
+    public async Task The_vendor_contract_list_says_which_contracts_have_a_permit()
+    {
+        using var f = await Fixture.Create();
+        // Vendor 10 has contract 1 with permit 1 from the fixture; contract 3 has no permit yet.
+        f.Db.SidewalkSlots.Add(new SidewalkSlot { slot_id = 300, zone_id = 1, slot_code = "C-01", source = "WARD_DEFINED", slot_status = "ACTIVE", latitude = 16.06m, longitude = 108.21m });
+        f.Db.RentalApplications.Add(new RentalApplication { application_id = 3, registration_id = 1, slot_id = 300, application_method = "MANUAL_SELECTED", application_status = "APPROVED" });
+        f.Db.RentalContracts.Add(new RentalContract { contract_id = 3, application_id = 3, slot_id = 300, vendor_id = 10, start_date = new DateOnly(2026, 11, 1), end_date = new DateOnly(2027, 1, 31), contract_status = "ACTIVE" });
+        await f.Db.SaveChangesAsync();
+        f.Db.ChangeTracker.Clear();
+
+        var rows = await new RentalContractRepository(f.Db).ListByVendorAsync(10, null, default);
+
+        Assert.Equal(
+            new[] { (1L, true), (3L, false) },
+            rows.Select(r => (r.ContractId, r.HasPermit)).OrderBy(x => x.Item1));
+        Assert.Empty(await new RentalContractRepository(f.Db).ListByVendorAsync(999, null, default));
+    }
+
     #endregion
 
     private static SellerMenuInput Input(
