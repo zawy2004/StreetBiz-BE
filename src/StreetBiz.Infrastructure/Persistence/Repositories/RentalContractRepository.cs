@@ -24,10 +24,23 @@ public sealed class RentalContractRepository(StreetBizDbContext dbContext) : IRe
             query = query.Where(c => c.contract_status == status);
         }
 
-        return await query
+        var rows = await query
             .OrderByDescending(c => c.created_at)
             .Select(ToRowExpression)
             .ToListAsync(cancellationToken);
+        if (rows.Count == 0)
+        {
+            return rows;
+        }
+
+        var ids = rows.Select(r => r.ContractId).ToList();
+        var withPermit = (await dbContext.DigitalPermits.AsNoTracking()
+                .Where(p => ids.Contains(p.contract_id))
+                .Select(p => p.contract_id)
+                .Distinct()
+                .ToListAsync(cancellationToken))
+            .ToHashSet();
+        return rows.Select(r => r with { HasPermit = withPermit.Contains(r.ContractId) }).ToList();
     }
 
     public Task<RentalContractRow?> GetByIdAsync(long contractId, CancellationToken cancellationToken) =>
@@ -103,5 +116,5 @@ public sealed class RentalContractRepository(StreetBizDbContext dbContext) : IRe
         c => new RentalContractRow(
             c.contract_id, c.application_id, c.slot_id, c.slot.slot_code, c.slot.zone.zone_name, c.vendor_id,
             c.start_date, c.end_date, c.contract_status, c.cancelled_by, c.cancellation_reason,
-            c.cancelled_at, c.created_at, c.updated_at);
+            c.cancelled_at, c.created_at, c.updated_at, false);
 }

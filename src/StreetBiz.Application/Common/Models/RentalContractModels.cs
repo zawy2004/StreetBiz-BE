@@ -15,4 +15,6 @@ public sealed record RentalContractRow(
     string? CancellationReason,
     DateTime? CancelledAt,
     DateTime CreatedAt,
-    DateTime? UpdatedAt);
+    DateTime? UpdatedAt,
+    /// <summary>Whether a digital permit row exists for the contract (set by the vendor list).</summary>
+    bool HasPermit = false);
