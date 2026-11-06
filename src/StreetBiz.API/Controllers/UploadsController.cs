@@ -5,6 +5,7 @@ using StreetBiz.Application.Common.Interfaces;
 using StreetBiz.Application.Common.Security;
 using StreetBiz.Application.Features.AiMarketplace;
 using StreetBiz.Application.Features.FoodSafety;
+using StreetBiz.Application.Features.PenaltyReceipts;
 using StreetBiz.Application.Features.WardSlots;
 
 namespace StreetBiz.API.Controllers;
@@ -22,7 +23,8 @@ public sealed class UploadsController(
     IWardActorResolver wardActors,
     IBusinessRegistrationRepository registrations,
     IFoodSafetyService foodSafety,
-    IAiMarketplaceRepository vendorReports) : ControllerBase
+    IAiMarketplaceRepository vendorReports,
+    IPenaltyReceiptRepository penaltyReceipts) : ControllerBase
 {
 
     /// <summary>Uploads one evidence file (JPG/PNG/WEBP/PDF, max 5 MB) and returns its URL.</summary>
@@ -128,7 +130,8 @@ public sealed class UploadsController(
         var url = EvidenceFiles.BuildUrl(ownerUserId, fileName);
         return await registrations.EvidenceBelongsToWardAsync(ownerUserId, url, actor.WardId, cancellationToken)
             || await foodSafety.EvidenceBelongsToWardAsync(url, actor.WardId, cancellationToken)
-            || await vendorReports.ReportEvidenceBelongsToWardAsync(url, actor.WardId, cancellationToken);
+            || await vendorReports.ReportEvidenceBelongsToWardAsync(url, actor.WardId, cancellationToken)
+            || await penaltyReceipts.ReceiptBelongsToWardAsync(url, actor.WardId, cancellationToken);
     }
 
     private static ValidationAppException FileError(string message) =>

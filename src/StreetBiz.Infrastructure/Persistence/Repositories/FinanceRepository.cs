@@ -433,76 +433,6 @@ public sealed class FinanceRepository(
         });
     }
 
-    // ------------------------------------------------------------------
-    // FEE-04 checkout
-    // ------------------------------------------------------------------
-
-    public Task<PenaltyCheckoutRow?> GetPenaltyForCheckoutAsync(
-        long vendorId, long penaltyId, CancellationToken cancellationToken) =>
-        db.Penalties.AsNoTracking()
-            .Where(penalty => penalty.penalty_id == penaltyId && penalty.violation.vendor_id == vendorId)
-            .Select(penalty => new PenaltyCheckoutRow(
-                penalty.penalty_id,
-                penalty.violation.vendor_id!.Value,
-                penalty.violation.vendor!.user_id,
-                penalty.violation.violation_typeNavigation.description,
-                penalty.violation.slot != null ? penalty.violation.slot.slot_code : null,
-                penalty.amount,
-                penalty.penalty_status))
-            .FirstOrDefaultAsync(cancellationToken);
-
-    public async Task<FinanceCheckoutTransactionRow> CreatePenaltyCheckoutAsync(
-        long vendorId, long penaltyId, string provider, string idempotencyKey, CancellationToken cancellationToken)
-    {
-        var strategy = db.Database.CreateExecutionStrategy();
-        return await strategy.ExecuteAsync(async () =>
-        {
-            db.ChangeTracker.Clear();
-            await using var transaction = await db.Database.BeginTransactionAsync(
-                IsolationLevel.Serializable, cancellationToken);
-
-            var penalty = await db.Penalties
-                .SingleOrDefaultAsync(
-                    row => row.penalty_id == penaltyId && row.violation.vendor_id == vendorId,
-                    cancellationToken)
-                ?? throw new NotFoundException(FinanceMessages.PenaltyNotFound);
-
-            var replay = await FindCheckoutReplayAsync(idempotencyKey, null, penaltyId, provider, cancellationToken);
-            if (replay is not null)
-            {
-                return replay;
-            }
-
-            if (!PenaltyStatuses.IsPayable(penalty.penalty_status))
-            {
-                throw new DomainRuleException(FinanceMessages.PenaltyNoLongerPayable);
-            }
-
-            var open = await TakeOverOpenPaymentAsync(
-                db.PaymentTransactions.Where(payment => payment.penalty_id == penaltyId), provider, cancellationToken);
-            if (open is not null)
-            {
-                await transaction.CommitAsync(cancellationToken);
-                return open;
-            }
-
-            var payment = new PaymentTransaction
-            {
-                idempotency_key = idempotencyKey,
-                payment_purpose = PaymentPurposes.Penalty,
-                penalty_id = penaltyId,
-                provider = provider,
-                amount = penalty.amount,
-                transaction_status = PaymentStatuses.Pending,
-                created_at = Now,
-            };
-            db.PaymentTransactions.Add(payment);
-            await db.SaveChangesAsync(cancellationToken);
-            await transaction.CommitAsync(cancellationToken);
-            return new FinanceCheckoutTransactionRow(payment.transaction_id, idempotencyKey, provider, penalty.amount);
-        });
-    }
-
     /// <summary>
     /// Idempotency-Key replay, mirroring Commerce's checkout: the same key for the same
     /// instalment/penalty and provider is a client retry after a lost response and gets the
@@ -706,7 +636,10 @@ public sealed class FinanceRepository(
                 payment.provider,
                 payment.provider_reference,
                 payment.idempotency_key,
-                payment.created_at))
+                payment.created_at)
+            {
+                PayeeAccountId = payment.payee_account_id,
+            })
             .ToListAsync(cancellationToken);
 
     public async Task<bool> ClosePendingPaymentAsync(long transactionId, CancellationToken cancellationToken) =>
@@ -809,6 +742,13 @@ public sealed class FinanceRepository(
             if (!string.Equals(payment.provider, callback.Provider, StringComparison.Ordinal)
                 || callback.Amount != payment.amount
                 || normalizedStatus is not (PaymentStatuses.Success or PaymentStatuses.Failed))
+            {
+                return await Finish(PaymentCallbackOutcome.Rejected, CallbackResults.Rejected);
+            }
+
+            // PAYOS: only the receiving account the transaction pays into may settle it, so a webhook
+            // (or a status answer) from any other channel is refused, whatever it reports.
+            if (!ProviderTransfers.FromItsPayee(payment.payee_account_id, callback))
             {
                 return await Finish(PaymentCallbackOutcome.Rejected, CallbackResults.Rejected);
             }

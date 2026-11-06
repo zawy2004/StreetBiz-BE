@@ -136,16 +136,6 @@ public sealed record VendorViolationRow(
     decimal? PenaltyAmount,
     string? PenaltyStatus);
 
-/// <summary>A penalty as seen for FEE-04 checkout.</summary>
-public sealed record PenaltyCheckoutRow(
-    long PenaltyId,
-    long VendorId,
-    long VendorUserId,
-    string ViolationLabel,
-    string? SlotCode,
-    decimal Amount,
-    string PenaltyStatus);
-
 /// <summary>The PENDING transaction FEE-01/FEE-04 just opened, ready to hand to the payment gateway.</summary>
 public sealed record FinanceCheckoutTransactionRow(
     long TransactionId,
@@ -209,7 +199,11 @@ public sealed record StalePaymentRow(
     string Provider,
     string? ProviderReference,
     string IdempotencyKey,
-    DateTime CreatedAt);
+    DateTime CreatedAt)
+{
+    /// <summary>PAYOS: the receiving account to ask, with its own keys.</summary>
+    public long? PayeeAccountId { get; init; }
+}
 
 /// <summary>What the stale-payment sweep did: settled through the provider, or closed.</summary>
 public sealed record StalePaymentSweepResult(int SettledCount, int ClosedCount);

@@ -583,6 +583,13 @@ public sealed partial class CommerceRepository(
                 return await Finish(PaymentCallbackOutcome.Rejected, "REJECTED");
             }
 
+            // PAYOS: only the receiving account the transaction pays into may settle it, so a webhook
+            // (or a status answer) from any other channel is refused, whatever it reports.
+            if (!ProviderTransfers.FromItsPayee(payment.payee_account_id, callback))
+            {
+                return await Finish(PaymentCallbackOutcome.Rejected, "REJECTED");
+            }
+
             // A bank transfer that arrives for a settled or cancelled order is real money that
             // cannot be applied: recorded as REJECTED and raised as surplus for a manual refund.
             if (payment.transaction_status is PaymentSuccess or PaymentFailed)

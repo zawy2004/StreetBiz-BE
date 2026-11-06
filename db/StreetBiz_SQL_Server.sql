@@ -1407,6 +1407,54 @@ CREATE INDEX IX_Invoices_Vendor ON Invoices(vendor_id);
 CREATE UNIQUE INDEX UX_Invoices_FeeItem ON Invoices(fee_item_id) WHERE fee_item_id IS NOT NULL;
 CREATE UNIQUE INDEX UX_Invoices_Penalty ON Invoices(penalty_id) WHERE penalty_id IS NOT NULL;
 
+-- Where money is paid TO. StreetBiz holds no money: each household (for its orders) and each
+-- ward (for its rental fees) connects its own payOS channel, the payer transfers straight into
+-- that account by VietQR, and payOS's webhook / status API tells StreetBiz the money arrived.
+-- The channel's API key and checksum key are encrypted by the application (AES-GCM, key in
+-- configuration) before they are written; this table never holds them in clear.
+-- webhook_token is the unguessable part of the channel's webhook URL
+-- (/api/payments/payos/callback/{token}): it tells StreetBiz whose checksum key verifies the
+-- request without exposing an id. A disconnected account is DISABLED, not deleted, so a late
+-- webhook for one of its earlier payments can still be verified.
+CREATE TABLE PayeeAccounts (
+    payee_account_id        BIGINT IDENTITY(1,1)  PRIMARY KEY,
+    owner_type              NVARCHAR(10)          NOT NULL,
+    vendor_id               BIGINT                NULL,
+    ward_unit_id            INT                   NULL,
+    ward_unit_type          AS CAST(N'WARD' AS NVARCHAR(20)) PERSISTED,
+    provider                NVARCHAR(20)          NOT NULL DEFAULT 'PAYOS',
+    client_id               NVARCHAR(100)         NOT NULL,
+    api_key_protected       NVARCHAR(1000)        NOT NULL,
+    checksum_key_protected  NVARCHAR(1000)        NOT NULL,
+    bank_name               NVARCHAR(100)         NULL,
+    account_number          NVARCHAR(50)          NULL,
+    account_name            NVARCHAR(150)         NULL,
+    webhook_token           NVARCHAR(64)          NOT NULL UNIQUE,
+    status                  NVARCHAR(20)          NOT NULL DEFAULT 'ACTIVE',
+    last_error              NVARCHAR(500)         NULL,
+    webhook_confirmed_at    DATETIME2             NULL,
+    verified_at             DATETIME2             NULL,
+    last_checked_at         DATETIME2             NULL,
+    created_by              BIGINT                NOT NULL,
+    created_at              DATETIME2             NOT NULL DEFAULT SYSUTCDATETIME(),
+    updated_at              DATETIME2             NULL,
+    CONSTRAINT CK_PayeeAccounts_Owner
+        CHECK ((owner_type = 'VENDOR' AND vendor_id IS NOT NULL AND ward_unit_id IS NULL)
+            OR (owner_type = 'WARD' AND ward_unit_id IS NOT NULL AND vendor_id IS NULL)),
+    CONSTRAINT CK_PayeeAccounts_Provider CHECK (provider IN ('PAYOS')),
+    CONSTRAINT CK_PayeeAccounts_Status CHECK (status IN ('ACTIVE','ERROR','DISABLED')),
+    CONSTRAINT FK_PayeeAccounts_Vendor
+        FOREIGN KEY (vendor_id) REFERENCES Vendors(vendor_id),
+    CONSTRAINT FK_PayeeAccounts_Ward
+        FOREIGN KEY (ward_unit_id, ward_unit_type)
+        REFERENCES AdministrativeUnits(unit_id, unit_type),
+    CONSTRAINT FK_PayeeAccounts_CreatedBy
+        FOREIGN KEY (created_by) REFERENCES UserAccounts(user_id)
+);
+-- One receiving account per household and per ward; reconnecting replaces its keys in place.
+CREATE UNIQUE INDEX UX_PayeeAccounts_Vendor ON PayeeAccounts(vendor_id) WHERE vendor_id IS NOT NULL;
+CREATE UNIQUE INDEX UX_PayeeAccounts_Ward ON PayeeAccounts(ward_unit_id) WHERE ward_unit_id IS NOT NULL;
+
 -- SYS-04: idempotent callback processing (BR-37). order_id FK added later
 -- (ALTER TABLE) once the Phase 2 Orders table exists.
 CREATE TABLE PaymentTransactions (
@@ -1422,12 +1470,22 @@ CREATE TABLE PaymentTransactions (
     transaction_status       NVARCHAR(20)          NOT NULL DEFAULT 'PENDING',
     callback_received_at    DATETIME2             NULL,
     created_at                DATETIME2             NOT NULL DEFAULT SYSUTCDATETIME(),
+    -- PAYOS: whose account the money goes to (the ward for a fee, the household for an order).
+    -- Only that account's webhook can settle the transaction.
+    payee_account_id         BIGINT                NULL,
+    -- PAYOS: the payment link as payOS returned it (QR content, link, attempt), so the same QR
+    -- is shown again after a reload instead of opening a second link.
+    checkout_payload         NVARCHAR(MAX)         NULL,
     CONSTRAINT CK_PaymentTransactions_Purpose
         CHECK (payment_purpose IN ('RENTAL_FEE','PENALTY','ORDER')),
     CONSTRAINT CK_PaymentTransactions_Provider
         -- CASH / BANK_TRANSFER: a fee or penalty a ward officer recorded as collected in person.
         -- SEPAY: a VietQR bank transfer the payer made themselves, confirmed by SePay's webhook.
-        CHECK (provider IN ('MOMO','ZALOPAY','SEPAY','CASH','BANK_TRANSFER')),
+        -- PAYOS: a VietQR transfer straight into the payee's own payOS account.
+        -- TREASURY: a fine paid to the State Treasury, confirmed by the ward from its receipt.
+        CHECK (provider IN ('MOMO','ZALOPAY','SEPAY','PAYOS','CASH','BANK_TRANSFER','TREASURY')),
+    CONSTRAINT CK_PaymentTransactions_PayeeProvider
+        CHECK (payee_account_id IS NULL OR provider = 'PAYOS'),
     CONSTRAINT CK_PaymentTransactions_Status
         CHECK (transaction_status IN ('PENDING','SUCCESS','FAILED','REFUND_REQUIRED','REFUNDED')),
     -- payment_purpose must agree with which target column is filled; without
@@ -1441,9 +1499,13 @@ CREATE TABLE PaymentTransactions (
     CONSTRAINT FK_PaymentTransactions_FeeItem
         FOREIGN KEY (fee_item_id) REFERENCES FeeScheduleItems(fee_item_id),
     CONSTRAINT FK_PaymentTransactions_Penalty
-        FOREIGN KEY (penalty_id) REFERENCES Penalties(penalty_id)
+        FOREIGN KEY (penalty_id) REFERENCES Penalties(penalty_id),
+    CONSTRAINT FK_PaymentTransactions_PayeeAccount
+        FOREIGN KEY (payee_account_id) REFERENCES PayeeAccounts(payee_account_id)
 );
 CREATE INDEX IX_PaymentTransactions_Order ON PaymentTransactions(order_id);
+CREATE INDEX IX_PaymentTransactions_PayeeAccount
+    ON PaymentTransactions(payee_account_id) WHERE payee_account_id IS NOT NULL;
 
 -- SYS-04. PaymentTransactions.idempotency_key stops a callback being applied
 -- twice, but it keeps nothing of what the provider actually sent. When MoMo or
@@ -1460,7 +1522,7 @@ CREATE TABLE PaymentCallbackEvents (
     processing_result    NVARCHAR(20)          NOT NULL,
     received_at          DATETIME2             NOT NULL DEFAULT SYSUTCDATETIME(),
     CONSTRAINT CK_PaymentCallbackEvents_Provider
-        CHECK (provider IN ('MOMO','ZALOPAY','SEPAY')),
+        CHECK (provider IN ('MOMO','ZALOPAY','SEPAY','PAYOS')),
     CONSTRAINT CK_PaymentCallbackEvents_Result
         CHECK (processing_result IN ('APPLIED','DUPLICATE','UNMATCHED','REJECTED')),
     CONSTRAINT FK_PaymentCallbackEvents_Transaction
@@ -1468,6 +1530,42 @@ CREATE TABLE PaymentCallbackEvents (
 );
 CREATE INDEX IX_PaymentCallbackEvents_Reference
     ON PaymentCallbackEvents(provider, provider_reference);
+
+-- A fine is paid to the State Treasury, never through StreetBiz (Luật XLVPHC Điều 78: into the
+-- Treasury account named in the decision). The household uploads the receipt; a ward officer
+-- checks it and, on ACCEPTED, the penalty is recorded as paid (a TREASURY PaymentTransactions
+-- row). One receipt may wait for review per penalty at a time.
+CREATE TABLE PenaltyPaymentReceipts (
+    receipt_id            BIGINT IDENTITY(1,1)  PRIMARY KEY,
+    penalty_id            BIGINT                NOT NULL,
+    submitted_by          BIGINT                NOT NULL,
+    receipt_url           NVARCHAR(500)         NOT NULL,
+    reference             NVARCHAR(100)         NULL,   -- the Treasury receipt / transfer number
+    paid_on               DATE                  NOT NULL,
+    note                  NVARCHAR(500)         NULL,
+    status                NVARCHAR(20)          NOT NULL DEFAULT 'SUBMITTED',
+    submitted_at          DATETIME2             NOT NULL DEFAULT SYSUTCDATETIME(),
+    reviewed_by           BIGINT                NULL,
+    reviewer_role         AS CAST(N'WARD_AUTHORITY' AS NVARCHAR(30)) PERSISTED,
+    reviewed_at           DATETIME2             NULL,
+    review_note           NVARCHAR(500)         NULL,
+    CONSTRAINT CK_PenaltyPaymentReceipts_Status
+        CHECK (status IN ('SUBMITTED','ACCEPTED','REJECTED')),
+    -- a decision on a receipt names who made it and when; a rejection also says why
+    CONSTRAINT CK_PenaltyPaymentReceipts_Review
+        CHECK (status = 'SUBMITTED'
+            OR (reviewed_by IS NOT NULL AND reviewed_at IS NOT NULL
+                AND (status = 'ACCEPTED' OR review_note IS NOT NULL))),
+    CONSTRAINT FK_PenaltyPaymentReceipts_Penalty
+        FOREIGN KEY (penalty_id) REFERENCES Penalties(penalty_id),
+    CONSTRAINT FK_PenaltyPaymentReceipts_SubmittedBy
+        FOREIGN KEY (submitted_by) REFERENCES UserAccounts(user_id),
+    CONSTRAINT FK_PenaltyPaymentReceipts_Reviewer
+        FOREIGN KEY (reviewed_by, reviewer_role)
+        REFERENCES UserAccounts(user_id, role_code)
+);
+CREATE UNIQUE INDEX UX_PenaltyPaymentReceipts_OnePending
+    ON PenaltyPaymentReceipts(penalty_id) WHERE status = 'SUBMITTED';
 
 
 /* ============================================================
@@ -1991,8 +2089,9 @@ CREATE TABLE RefundTransactions (
     CONSTRAINT CK_RefundTransactions_Reason
         CHECK (refund_reason IN ('ORDER_REJECTED','ORDER_CANCELLED','COMPLAINT_RESOLVED')),
     CONSTRAINT CK_RefundTransactions_Provider
-        -- SEPAY has no refund API: its refunds are bank transfers made by hand and recorded here.
-        CHECK (provider IN ('MOMO','ZALOPAY','SEPAY')),
+        -- SEPAY and PAYOS refunds are bank transfers made by hand (by the household that was paid,
+        -- for PAYOS) and recorded here.
+        CHECK (provider IN ('MOMO','ZALOPAY','SEPAY','PAYOS')),
     CONSTRAINT CK_RefundTransactions_Status
         CHECK (refund_status IN ('PENDING','SUCCESS','FAILED')),
     CONSTRAINT CK_RefundTransactions_AmountPositive
@@ -2487,12 +2586,14 @@ GO
                                       SlotTransferRequests, PermitScanLogs,
                                       RenewalRequests, AddressChangeRequests)
    4  Buyer Trust & Verification . 2  (VendorComments, VendorReports)
-   5  Fee, Penalty & Invoicing ... 11 (ViolationTypes, PenaltyFeeSchedules,
+   5  Fee, Penalty & Invoicing ... 13 (ViolationTypes, PenaltyFeeSchedules,
                                       WardCompliancePolicies, Violations,
                                       Penalties, FeeSchedules,
                                       FeeScheduleItems, DepositRefunds,
-                                      Invoices, PaymentTransactions,
-                                      PaymentCallbackEvents)
+                                      Invoices, PayeeAccounts,
+                                      PaymentTransactions,
+                                      PaymentCallbackEvents,
+                                      PenaltyPaymentReceipts)
    6  Platform Admin & System .... 5  (FoodCategories, Notifications,
                                       AuditLogs, AIAssistanceLogs,
                                       ReportExports)
@@ -2509,7 +2610,7 @@ GO
    11 Assistant Persistence ...... 3  (ChatbotConversations, ChatbotMessages,
                                       ChatbotAudits)
    ------------------------------------------------------------
-   TOTAL: 63 tables (plus __EFMigrationsHistory), 6 triggers, 2 views
+   TOTAL: 65 tables (plus __EFMigrationsHistory), 6 triggers, 2 views
 
    Use-case coverage: the 70 Core and 31 Phase 2 use cases of the actor
    specification. AIAssistanceLogs backs AIC-01 (document check), AIC-02

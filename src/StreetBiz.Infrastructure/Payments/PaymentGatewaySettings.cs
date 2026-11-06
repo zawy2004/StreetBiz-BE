@@ -7,6 +7,7 @@ public sealed class PaymentGatewaySettings
     public PaymentProviderSettings Momo { get; set; } = new();
     public PaymentProviderSettings ZaloPay { get; set; } = new();
     public SePaySettings SePay { get; set; } = new();
+    public PayOsSettings PayOs { get; set; } = new();
 
     public PaymentProviderSettings For(string provider) => provider switch
     {
@@ -14,6 +15,39 @@ public sealed class PaymentGatewaySettings
         "ZALOPAY" => ZaloPay,
         _ => new PaymentProviderSettings(),
     };
+}
+
+/// <summary>
+/// payOS (https://payos.vn/docs/api/): every household and ward connects its own payOS channel,
+/// so the payer's VietQR transfer goes straight into the payee's account and StreetBiz never
+/// holds the money. The channel keys are stored per payee (encrypted with
+/// <see cref="CredentialKey"/>), not here.
+/// </summary>
+public sealed class PayOsSettings
+{
+    /// <summary>Off switches PAYOS off everywhere, whatever the payees have connected.</summary>
+    public bool Enabled { get; set; } = true;
+
+    /// <summary>payOS's merchant API. Point it at scripts/payos-fake for a demo without real money.</summary>
+    public string ApiBaseUrl { get; set; } = "https://api-merchant.payos.vn";
+
+    /// <summary>
+    /// The public https origin payOS can reach (ngrok, the deployed API), e.g. https://abc.ngrok-free.app.
+    /// Empty: the webhook is not registered and payments are settled by asking payOS instead.
+    /// </summary>
+    public string? PublicWebhookBaseUrl { get; set; }
+
+    /// <summary>Where payOS's hosted page sends the payer back (the web app), e.g. http://localhost:5173.</summary>
+    public string FrontendBaseUrl { get; set; } = "http://localhost:5173";
+
+    /// <summary>How long a payment link (and its QR) stays payable.</summary>
+    public int LinkLifetimeMinutes { get; set; } = 30;
+
+    /// <summary>
+    /// Base64 of 32 random bytes that encrypts the payees' keys (AES-GCM). User-secrets / App
+    /// Settings only. Outside Development, PAYOS stays off until it is set.
+    /// </summary>
+    public string? CredentialKey { get; set; }
 }
 
 /// <summary>

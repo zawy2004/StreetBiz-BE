@@ -6,7 +6,6 @@ using StreetBiz.Application.Common.Models;
 using StreetBiz.Application.Common.Security;
 using StreetBiz.Application.Features.Commerce;
 using StreetBiz.Application.Features.Finance.PayFee;
-using StreetBiz.Application.Features.Finance.PayPenalty;
 
 namespace StreetBiz.Application.Tests;
 
@@ -82,39 +81,6 @@ public sealed class FinancePaymentTests
             .Handle(new PayFeeCommand(99, "momo", "idem-1"), CancellationToken.None);
 
         await act.Should().ThrowAsync<NotFoundException>();
-    }
-
-    [Fact]
-    public async Task Pay_penalty_refuses_a_waived_penalty()
-    {
-        var finance = new Mock<IFinanceRepository>();
-        finance.Setup(x => x.GetPenaltyForCheckoutAsync(4, 3, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new PenaltyCheckoutRow(3, 4, 5, "Đổ nước thải ra vỉa hè", "NVL-01", 750_000m, PenaltyStatuses.Waived));
-
-        var act = () => new PayPenaltyCommandHandler(VendorContext(), finance.Object, Mock.Of<IPaymentGateway>())
-            .Handle(new PayPenaltyCommand(3, "zalopay", "idem-2"), CancellationToken.None);
-
-        await act.Should().ThrowAsync<DomainRuleException>();
-    }
-
-    [Fact]
-    public async Task Pay_penalty_opens_a_checkout_for_an_unpaid_penalty()
-    {
-        var finance = new Mock<IFinanceRepository>();
-        finance.Setup(x => x.GetPenaltyForCheckoutAsync(4, 2, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new PenaltyCheckoutRow(2, 4, 5, "Kê bàn ghế chắn lối đi bộ", "NVL-08", 1_000_000m, PenaltyStatuses.Unpaid));
-        finance.Setup(x => x.CreatePenaltyCheckoutAsync(4, 2, "ZALOPAY", "idem-2", It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new FinanceCheckoutTransactionRow(202, "idem-2", "ZALOPAY", 1_000_000m));
-        var gateway = AvailableGateway();
-        gateway.Setup(x => x.CreateCheckoutAsync(It.IsAny<PaymentGatewayCheckoutRequest>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new PaymentGatewayCheckoutResult("streetbiz://pay/zalopay", "ZALO-REF-1"));
-
-        var result = await new PayPenaltyCommandHandler(VendorContext(), finance.Object, gateway.Object)
-            .Handle(new PayPenaltyCommand(2, "zalopay", "idem-2"), CancellationToken.None);
-
-        result.Purpose.Should().Be(PaymentPurposes.Penalty);
-        result.TransactionId.Should().Be(202);
-        finance.Verify(x => x.SetPaymentProviderReferenceAsync(202, "ZALO-REF-1", It.IsAny<CancellationToken>()));
     }
 
     [Fact]

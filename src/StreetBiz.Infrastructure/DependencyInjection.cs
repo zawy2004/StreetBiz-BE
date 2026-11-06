@@ -105,7 +105,15 @@ public static class DependencyInjection
         services.AddHttpClient(MomoGateway.HttpClientName, client => client.Timeout = TimeSpan.FromSeconds(30));
         services.AddHttpClient(ZaloPayGateway.HttpClientName, client => client.Timeout = TimeSpan.FromSeconds(30));
         services.AddHttpClient(SePayGateway.HttpClientName, client => client.Timeout = TimeSpan.FromSeconds(15));
+        services.AddHttpClient(PayOsGateway.HttpClientName, client => client.Timeout = TimeSpan.FromSeconds(15));
         services.AddSingleton<IPaymentGateway, ConfiguredPaymentGateway>();
+        // payOS: each household and ward is paid into its own channel; their keys are encrypted at rest.
+        services.AddSingleton<ICredentialProtector, AesGcmCredentialProtector>();
+        services.AddSingleton<IPayeeChannelGateway, PayOsChannelGateway>();
+        services.AddScoped<IPayeeAccountRepository, PayeeAccountRepository>();
+        services.AddScoped<IPaymentTransactionRepository, PaymentTransactionRepository>();
+        // Fines are paid to the State Treasury: the household's receipt and the ward's check of it.
+        services.AddScoped<StreetBiz.Application.Features.PenaltyReceipts.IPenaltyReceiptRepository, PenaltyReceiptRepository>();
         services.Configure<AlertSettings>(configuration.GetSection(AlertSettings.SectionName));
         // Short timeout: the alert is sent while SePay/MoMo waits for the callback's answer.
         services.AddHttpClient<IPaymentAlertNotifier, DiscordPaymentAlertNotifier>(

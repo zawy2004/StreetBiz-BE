@@ -7,6 +7,7 @@ using StreetBiz.Application.Common.Security;
 using StreetBiz.Application.DTOs.Commerce;
 using StreetBiz.Application.DTOs.Payments;
 using StreetBiz.Application.Features.Commerce.OrderTracking;
+using StreetBiz.Application.Features.PayoutAccounts;
 
 namespace StreetBiz.Application.Features.Commerce;
 
@@ -34,10 +35,16 @@ public sealed class CheckoutOrderCommandValidator : AbstractValidator<CheckoutOr
     }
 }
 
+/// <summary>
+/// PAYOS pays the storefront's household straight into its own payOS account: a household that has
+/// not connected an ACTIVE receiving account takes no online orders.
+/// </summary>
 public sealed class CheckoutOrderCommandHandler(
     ICustomerContext customerContext,
     ICommerceRepository repository,
-    IPaymentGateway paymentGateway) : IRequestHandler<CheckoutOrderCommand, CheckoutDto>
+    IPaymentGateway paymentGateway,
+    IPayeeAccountRepository? payees = null,
+    PayeeCheckouts? payeeCheckouts = null) : IRequestHandler<CheckoutOrderCommand, CheckoutDto>
 {
     public async Task<CheckoutDto> Handle(
         CheckoutOrderCommand request,
@@ -49,6 +56,17 @@ public sealed class CheckoutOrderCommandHandler(
         if (!paymentGateway.IsProviderAvailable(provider))
         {
             throw new DomainRuleException($"Payment provider {provider} is not configured.");
+        }
+
+        // Checked before the order is written, so a store that cannot be paid leaves no unpayable order behind.
+        PayeeSummary? payee = null;
+        if (provider == PaymentProviders.PayOs)
+        {
+            payee = payees is null ? null : await payees.GetForCartAsync(request.CartId, customerUserId, cancellationToken);
+            if (payee is not { Active: true } || payeeCheckouts is null)
+            {
+                throw new DomainRuleException(CommerceMessages.StoreNotAcceptingOnlinePayment);
+            }
         }
 
         var mutation = await repository.CheckoutAsync(
@@ -78,15 +96,48 @@ public sealed class CheckoutOrderCommandHandler(
             throw new InvalidOperationException("The order payment transaction was not created.");
         }
 
-        var gatewayResult = await paymentGateway.CreateCheckoutAsync(
-            new PaymentGatewayCheckoutRequest(
-                row.OrderId,
-                row.OrderCode,
+        var gatewayRequest = new PaymentGatewayCheckoutRequest(
+            row.OrderId,
+            row.OrderCode,
+            row.PaymentTransactionId.Value,
+            row.PaymentIdempotencyKey,
+            row.PaymentProvider,
+            row.PaymentAmount.Value);
+        if (payee is not null && row.PaymentProvider == PaymentProviders.PayOs)
+        {
+            PaymentGatewayCheckoutResult payeeResult;
+            try
+            {
+                payeeResult = await payeeCheckouts!.OpenAsync(payee, gatewayRequest, cancellationToken);
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException)
+            {
+                // The link could not be opened: release the order (and the cart) so the customer can try again.
+                // A failure to release it must not hide why the payment could not start.
+                try
+                {
+                    await repository.CancelCustomerOrderAsync(
+                        customerUserId, row.OrderId, OrderStatuses.PendingPayment, CancellationToken.None);
+                }
+                catch (AppException)
+                {
+                }
+
+                throw;
+            }
+
+            return new CheckoutDto(
+                order.OrderId,
+                order.OrderCode,
+                order.OrderStatus,
                 row.PaymentTransactionId.Value,
-                row.PaymentIdempotencyKey,
                 row.PaymentProvider,
-                row.PaymentAmount.Value),
-            cancellationToken);
+                row.PaymentAmount.Value,
+                payeeResult.PaymentUrl,
+                BankTransferDto.From(payeeResult.BankTransfer));
+        }
+
+        var gatewayResult = await paymentGateway.CreateCheckoutAsync(gatewayRequest, cancellationToken);
         if (!string.IsNullOrWhiteSpace(gatewayResult.ProviderReference))
         {
             await repository.SetPaymentProviderReferenceAsync(
@@ -116,19 +167,31 @@ public sealed record GetOrderBankTransferQuery(long OrderId) : IRequest<BankTran
 public sealed class GetOrderBankTransferQueryHandler(
     ICustomerContext customerContext,
     ICommerceRepository repository,
-    IPaymentGateway paymentGateway) : IRequestHandler<GetOrderBankTransferQuery, BankTransferDto>
+    IPaymentGateway paymentGateway,
+    IPaymentTransactionRepository? transactions = null) : IRequestHandler<GetOrderBankTransferQuery, BankTransferDto>
 {
     public async Task<BankTransferDto> Handle(GetOrderBankTransferQuery request, CancellationToken cancellationToken)
     {
         var customerUserId = await customerContext.RequireCustomerUserIdAsync(cancellationToken);
         var order = await repository.GetCustomerOrderAsync(customerUserId, request.OrderId, cancellationToken)
             ?? throw new NotFoundException(CommerceMessages.OrderNotFound);
-        var instructions = order.OrderStatus == OrderStatuses.PendingPayment
+        BankTransferInstructions? instructions = null;
+        if (order.OrderStatus == OrderStatuses.PendingPayment
             && order.PaymentProvider is { } provider
             && order.PaymentProviderReference is { } reference
-            && order.PaymentAmount is { } amount
-                ? paymentGateway.DescribeBankTransfer(provider, reference, amount)
-                : null;
+            && order.PaymentAmount is { } amount)
+        {
+            // PAYOS: the link opened at checkout, shown again while it is still payable.
+            var stored = provider == PaymentProviders.PayOs
+                && order.PaymentTransactionId is { } transactionId
+                && transactions is not null
+                    ? await transactions.GetAsync(transactionId, cancellationToken)
+                    : null;
+            instructions = stored is not null
+                ? paymentGateway.DescribeStoredCheckout(provider, stored.CheckoutPayload, stored.Amount)
+                : paymentGateway.DescribeBankTransfer(provider, reference, amount);
+        }
+
         return BankTransferDto.From(instructions)
             ?? throw new NotFoundException("Đơn hàng này không chờ chuyển khoản.");
     }
@@ -145,7 +208,9 @@ public sealed record SyncOrderPaymentCommand(long OrderId) : IRequest<OrderDto>;
 public sealed class SyncOrderPaymentCommandHandler(
     ICustomerContext customerContext,
     ICommerceRepository repository,
-    IPaymentGateway paymentGateway) : IRequestHandler<SyncOrderPaymentCommand, OrderDto>
+    IPaymentGateway paymentGateway,
+    IPaymentTransactionRepository? transactions = null,
+    PayeeCheckouts? payeeCheckouts = null) : IRequestHandler<SyncOrderPaymentCommand, OrderDto>
 {
     public async Task<OrderDto> Handle(SyncOrderPaymentCommand request, CancellationToken cancellationToken)
     {
@@ -159,8 +224,15 @@ public sealed class SyncOrderPaymentCommandHandler(
             return order.ToDto();
         }
 
-        var status = await paymentGateway.QueryPaymentAsync(
-            order.PaymentProvider, order.PaymentProviderReference, cancellationToken);
+        // PAYOS: asked on the household's own channel, with its own keys.
+        var payment = order.PaymentProvider == PaymentProviders.PayOs
+            && order.PaymentTransactionId is { } transactionId
+            && transactions is not null
+                ? await transactions.GetAsync(transactionId, cancellationToken)
+                : null;
+        var status = payment?.PayeeAccountId is not null && payeeCheckouts is not null
+            ? await payeeCheckouts.QueryAsync(payment, cancellationToken)
+            : await paymentGateway.QueryPaymentAsync(order.PaymentProvider, order.PaymentProviderReference, cancellationToken);
         if (status?.Status is null)
         {
             return order.ToDto();
@@ -175,7 +247,10 @@ public sealed class SyncOrderPaymentCommandHandler(
                 status.Status,
                 status.RawPayload ?? "{}",
                 status.SignatureValid,
-                status.ProviderEventId),
+                status.ProviderEventId)
+            {
+                PayeeAccountId = payment?.PayeeAccountId,
+            },
             cancellationToken);
         var updated = await repository.GetCustomerOrderAsync(customerUserId, request.OrderId, cancellationToken);
         return (updated ?? order).ToDto();
@@ -188,7 +263,14 @@ public sealed record ProcessPaymentCallbackCommand(
     string RawPayload,
     string? Signature,
     string? Timestamp = null,
-    string? Authorization = null) : IRequest<PaymentCallbackReceiptDto>;
+    string? Authorization = null) : IRequest<PaymentCallbackReceiptDto>
+{
+    /// <summary>
+    /// PAYOS: the token in the webhook URL (/api/payments/payos/callback/{token}). It names the
+    /// receiving account whose checksum key verifies the body and which alone may settle it.
+    /// </summary>
+    public string? PayeeToken { get; init; }
+}
 
 public sealed class ProcessPaymentCallbackCommandValidator
     : AbstractValidator<ProcessPaymentCallbackCommand>
@@ -220,7 +302,8 @@ public sealed class ProcessPaymentCallbackCommandHandler(
     IPaymentGateway paymentGateway,
     ICommerceRepository repository,
     IFinanceRepository finance,
-    IPaymentAlertNotifier? alerts = null)
+    IPaymentAlertNotifier? alerts = null,
+    IPayeeAccountRepository? payees = null)
     : IRequestHandler<ProcessPaymentCallbackCommand, PaymentCallbackReceiptDto>
 {
     public async Task<PaymentCallbackReceiptDto> Handle(
@@ -228,10 +311,28 @@ public sealed class ProcessPaymentCallbackCommandHandler(
         CancellationToken cancellationToken)
     {
         var provider = request.Provider.Trim().ToUpperInvariant();
+        // PAYOS: the account is found from the URL, never from the body. An unknown token leaves
+        // nothing to verify with, so the callback is recorded as REJECTED.
+        var payee = provider == PaymentProviders.PayOs
+            && payees is not null
+            && !string.IsNullOrWhiteSpace(request.PayeeToken)
+                ? await payees.FindByWebhookTokenAsync(request.PayeeToken, cancellationToken)
+                : null;
+        if (provider == PaymentProviders.PayOs && payee is null)
+        {
+            // No such receiving account: nothing to verify with and nothing it could settle. This is
+            // also payOS's own test call while a channel is being connected (the account is saved
+            // after payOS has accepted the URL), so it is answered but neither recorded nor alerted.
+            return new PaymentCallbackReceiptDto("IGNORED", 0, null, null, null);
+        }
+
         var verified = await paymentGateway.VerifyCallbackAsync(
             provider,
             request.RawPayload,
-            new PaymentCallbackHeaders(request.Signature, request.Timestamp, request.Authorization),
+            new PaymentCallbackHeaders(request.Signature, request.Timestamp, request.Authorization)
+            {
+                Payee = payee?.Credentials,
+            },
             cancellationToken);
         if (verified.Ignored && verified.SignatureValid)
         {
@@ -247,7 +348,10 @@ public sealed class ProcessPaymentCallbackCommandHandler(
             verified.Status,
             request.RawPayload,
             verified.SignatureValid,
-            verified.ProviderEventId);
+            verified.ProviderEventId)
+        {
+            PayeeAccountId = payee?.Account.PayeeAccountId,
+        };
 
         PaymentCallbackReceiptDto receipt;
         PaymentCallbackOutcome outcome;

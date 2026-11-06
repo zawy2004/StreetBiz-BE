@@ -64,9 +64,15 @@ public static class PaymentProviders
     /// <summary>Bank transfer by VietQR, confirmed by SePay's webhook when the money lands.</summary>
     public const string SePay = "SEPAY";
 
-    public const string InvalidMessage = "Provider must be MOMO, ZALOPAY or SEPAY.";
+    /// <summary>
+    /// Bank transfer by VietQR straight into the payee's own payOS account (the ward for a fee,
+    /// the household for an order), confirmed by that channel's webhook or status API.
+    /// </summary>
+    public const string PayOs = "PAYOS";
 
-    public static bool IsValid(string value) => value is Momo or ZaloPay or SePay;
+    public const string InvalidMessage = "Provider must be MOMO, ZALOPAY, SEPAY or PAYOS.";
+
+    public static bool IsValid(string value) => value is Momo or ZaloPay or SePay or PayOs;
 }
 
 public static class SalesPeriods
@@ -114,5 +120,9 @@ public static class CommerceMessages
     public const string CheckoutPaymentEnded =
         "Lần thanh toán này đã thất bại hoặc đơn đã bị huỷ. Hãy bấm thanh toán lại để tạo đơn mới.";
     public const string CheckoutAlreadyPaid = "Đơn này đã được thanh toán.";
+
+    /// <summary>PAYOS: the storefront's household has no ACTIVE receiving account.</summary>
+    public const string StoreNotAcceptingOnlinePayment =
+        "Quán chưa nhận thanh toán online. Bạn có thể mua trực tiếp tại quầy.";
     public const string PaymentNotFound = "Đơn trả trước chưa có giao dịch thanh toán thành công.";
 }

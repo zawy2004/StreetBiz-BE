@@ -492,6 +492,11 @@ public sealed class FinanceDocumentRenderer : IFinanceDocumentRenderer
     {
         "MOMO" => "MoMo",
         "ZALOPAY" => "ZaloPay",
+        "SEPAY" => "Chuyển khoản VietQR",
+        "PAYOS" => "Chuyển khoản VietQR (payOS)",
+        "TREASURY" => "Nộp Kho bạc Nhà nước",
+        "CASH" => "Tiền mặt",
+        "BANK_TRANSFER" => "Chuyển khoản",
         _ => provider,
     };
 

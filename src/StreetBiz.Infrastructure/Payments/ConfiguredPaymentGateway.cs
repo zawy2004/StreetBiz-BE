@@ -29,17 +29,41 @@ public sealed class ConfiguredPaymentGateway(
     private bool UsesSePay(string provider) =>
         provider == PaymentProviders.SePay && settings.SePay.IsConfigured;
 
+    /// <summary>
+    /// payOS is used for PAYOS while it is switched on. Whether a given payee can be paid this way
+    /// (has connected an ACTIVE channel) is decided by the caller, which passes that payee's keys.
+    /// </summary>
+    private bool UsesPayOs(string provider) =>
+        provider == PaymentProviders.PayOs && settings.PayOs.Enabled && httpClientFactory is not null;
+
     public bool IsProviderAvailable(string provider) =>
         !string.IsNullOrWhiteSpace(settings.For(provider).CheckoutUrlTemplate)
         || UsesMomo(provider)
         || UsesZaloPay(provider)
         || UsesSePay(provider)
-        || settings.SandboxEnabled;
+        || UsesPayOs(provider)
+        || (settings.SandboxEnabled && provider != PaymentProviders.PayOs);
 
     public Task<PaymentGatewayCheckoutResult> CreateCheckoutAsync(
         PaymentGatewayCheckoutRequest request,
         CancellationToken cancellationToken)
     {
+        if (request.Provider == PaymentProviders.PayOs)
+        {
+            // Never simulated: a payOS payment always goes to a real (or the demo) payOS channel.
+            if (!UsesPayOs(request.Provider) || request.Payee is null)
+            {
+                throw new DomainRuleException("Payment provider PAYOS is not available for this payee.");
+            }
+
+            return PayOsGateway.CreateAsync(
+                httpClientFactory!.CreateClient(PayOsGateway.HttpClientName),
+                settings.PayOs,
+                request,
+                time.GetUtcNow(),
+                cancellationToken);
+        }
+
         if (UsesSePay(request.Provider))
         {
             return Task.FromResult(SePayGateway.Create(settings.SePay, request));
@@ -98,6 +122,13 @@ public sealed class ConfiguredPaymentGateway(
         if (provider == PaymentProviders.SePay)
         {
             return Task.FromResult(SePayGateway.VerifyWebhook(settings.SePay, rawPayload, headers, time.GetUtcNow()));
+        }
+
+        // payOS signs with the checksum key of the channel the webhook URL belongs to. Without
+        // that channel (an unknown URL) nothing authenticates, so it is recorded as REJECTED.
+        if (provider == PaymentProviders.PayOs)
+        {
+            return Task.FromResult(PayOsGateway.VerifyWebhook(headers?.Payee, rawPayload));
         }
 
         var signature = headers?.Signature;
@@ -186,6 +217,23 @@ public sealed class ConfiguredPaymentGateway(
 
     public BankTransferInstructions? DescribeBankTransfer(string provider, string providerReference, decimal amount) =>
         UsesSePay(provider) ? SePayGateway.Instructions(settings.SePay, providerReference, amount) : null;
+
+    public async Task<PaymentGatewayCallback?> QueryPaymentAsync(
+        string provider,
+        string providerReference,
+        PayeeCredentials payee,
+        CancellationToken cancellationToken) =>
+        UsesPayOs(provider)
+            ? await PayOsGateway.QueryAsync(
+                httpClientFactory!.CreateClient(PayOsGateway.HttpClientName),
+                settings.PayOs,
+                payee,
+                providerReference,
+                cancellationToken)
+            : await QueryPaymentAsync(provider, providerReference, cancellationToken);
+
+    public BankTransferInstructions? DescribeStoredCheckout(string provider, string? checkoutPayload, decimal amount) =>
+        provider == PaymentProviders.PayOs ? PayOsGateway.DescribeStored(checkoutPayload, time.GetUtcNow()) : null;
 
     private static string? Text(JsonElement root, string name) =>
         root.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String

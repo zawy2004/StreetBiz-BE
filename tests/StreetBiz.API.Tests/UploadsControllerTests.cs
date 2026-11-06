@@ -7,6 +7,7 @@ using StreetBiz.Application.Common.Interfaces;
 using StreetBiz.Application.Common.Security;
 using StreetBiz.Application.Features.AiMarketplace;
 using StreetBiz.Application.Features.FoodSafety;
+using StreetBiz.Application.Features.PenaltyReceipts;
 using StreetBiz.Application.Features.WardSlots;
 
 namespace StreetBiz.API.Tests;
@@ -20,13 +21,15 @@ public sealed class UploadsControllerTests
         IWardActorResolver? wardActors = null,
         IBusinessRegistrationRepository? registrations = null,
         IFileStorage? storage = null,
-        IAiMarketplaceRepository? vendorReports = null) =>
+        IAiMarketplaceRepository? vendorReports = null,
+        IPenaltyReceiptRepository? penaltyReceipts = null) =>
         new(storage ?? Mock.Of<IFileStorage>(),
             currentUser,
             wardActors ?? Mock.Of<IWardActorResolver>(),
             registrations ?? Mock.Of<IBusinessRegistrationRepository>(),
             Mock.Of<IFoodSafetyService>(),
-            vendorReports ?? Mock.Of<IAiMarketplaceRepository>());
+            vendorReports ?? Mock.Of<IAiMarketplaceRepository>(),
+            penaltyReceipts ?? Mock.Of<IPenaltyReceiptRepository>());
 
     private static Mock<ICurrentUser> User(long userId, string roleCode)
     {
@@ -154,6 +157,40 @@ public sealed class UploadsControllerTests
         var controller = Build(User(50, RoleCodes.WardAuthority).Object, wardActors.Object, vendorReports: reports.Object);
 
         var act = () => controller.Download(ownerUserId: 8, FileName, CancellationToken.None);
+
+        await act.Should().ThrowAsync<ForbiddenException>();
+    }
+
+    [Fact]
+    public async Task A_ward_officer_may_open_the_treasury_receipt_of_a_fine_in_their_own_ward()
+    {
+        var wardActors = new Mock<IWardActorResolver>();
+        wardActors.Setup(a => a.ResolveAsync(50, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new WardActor(50, WardId: 10, "Officer"));
+        var receipts = new Mock<IPenaltyReceiptRepository>();
+        receipts.Setup(r => r.ReceiptBelongsToWardAsync(
+                EvidenceFiles.BuildUrl(7, FileName), 10, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+        var controller = Build(User(50, RoleCodes.WardAuthority).Object, wardActors.Object, penaltyReceipts: receipts.Object);
+
+        // Storage has no such file, so reaching a 404 proves the access check passed.
+        var result = await controller.Download(ownerUserId: 7, FileName, CancellationToken.None);
+
+        result.Should().BeOfType<Microsoft.AspNetCore.Mvc.NotFoundResult>();
+    }
+
+    [Fact]
+    public async Task A_ward_officer_cannot_open_the_treasury_receipt_of_another_wards_fine()
+    {
+        var wardActors = new Mock<IWardActorResolver>();
+        wardActors.Setup(a => a.ResolveAsync(50, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new WardActor(50, WardId: 11, "Officer"));
+        var receipts = new Mock<IPenaltyReceiptRepository>();
+        receipts.Setup(r => r.ReceiptBelongsToWardAsync(It.IsAny<string>(), 10, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+        var controller = Build(User(50, RoleCodes.WardAuthority).Object, wardActors.Object, penaltyReceipts: receipts.Object);
+
+        var act = () => controller.Download(ownerUserId: 7, FileName, CancellationToken.None);
 
         await act.Should().ThrowAsync<ForbiddenException>();
     }

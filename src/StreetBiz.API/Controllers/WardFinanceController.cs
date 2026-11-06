@@ -1,6 +1,7 @@
 using MediatR;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using StreetBiz.Application.Features.PenaltyReceipts;
 using StreetBiz.Application.Features.WardFinance;
 
 namespace StreetBiz.API.Controllers;
@@ -32,6 +33,29 @@ public sealed class WardFinanceController(ISender sender) : ControllerBase
     public async Task<ActionResult<WardFinanceActionResultDto>> WaiveFeeItem(
         long feeItemId, ReasonRequest request, CancellationToken ct) =>
         Ok(await sender.Send(new WaiveFeeItemCommand(feeItemId, request.Reason), ct));
+
+    /// <summary>Treasury receipts households sent for fines of this ward, waiting ones first.</summary>
+    [HttpGet("penalty-receipts")]
+    public async Task<ActionResult<IReadOnlyList<WardPenaltyReceiptDto>>> ListPenaltyReceipts(
+        [FromQuery] string? status, CancellationToken ct) =>
+        Ok(await sender.Send(new ListPenaltyReceiptsQuery(status), ct));
+
+    /// <summary>The officer has checked the receipt: the fine is recorded as paid to the Treasury, with its invoice.</summary>
+    [HttpPost("penalty-receipts/{receiptId:long}/accept")]
+    public async Task<ActionResult<WardFinanceActionResultDto>> AcceptPenaltyReceipt(
+        long receiptId, AcceptPenaltyReceiptRequest request, CancellationToken ct) =>
+        Ok(await sender.Send(new AcceptPenaltyReceiptCommand(receiptId, request.Note), ct));
+
+    [HttpPost("penalty-receipts/{receiptId:long}/reject")]
+    public async Task<ActionResult<WardFinanceActionResultDto>> RejectPenaltyReceipt(
+        long receiptId, ReasonRequest request, CancellationToken ct) =>
+        Ok(await sender.Send(new RejectPenaltyReceiptCommand(receiptId, request.Reason), ct));
+
+    /// <summary>The sanction decision of a paid fine was annulled: the payment becomes owed back (the Treasury refunds it).</summary>
+    [HttpPost("penalties/{penaltyId:long}/annul")]
+    public async Task<ActionResult<WardFinanceActionResultDto>> AnnulPaidPenalty(
+        long penaltyId, ReasonRequest request, CancellationToken ct) =>
+        Ok(await sender.Send(new AnnulPaidPenaltyCommand(penaltyId, request.Reason), ct));
 
     [HttpPost("penalties/{penaltyId:long}/waive")]
     public async Task<ActionResult<WardFinanceActionResultDto>> WaivePenalty(

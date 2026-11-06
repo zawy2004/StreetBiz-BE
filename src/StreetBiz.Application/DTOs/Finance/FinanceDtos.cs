@@ -159,9 +159,6 @@ public static class FinanceMapper
     public static string FeeItemPeriodLabel(this FeeItemCheckoutRow row) =>
         PeriodLabel(row.Ordinal, row.OfCount, row.DueDate);
 
-    public static PenaltyDto ToDto(this PenaltyCheckoutRow row) => new(
-        row.PenaltyId, row.ViolationLabel, row.SlotCode, row.Amount, row.PenaltyStatus);
-
     public static InvoiceDto ToListDto(this InvoiceRow row) => new(
         row.InvoiceId, row.InvoiceNumber, row.Kind, row.Amount, row.IssuedAt, row.PeriodLabel);
 

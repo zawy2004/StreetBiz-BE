@@ -14,7 +14,17 @@ public sealed record PaymentGatewayCheckoutRequest(
     string Provider,
     decimal Amount,
     /// <summary>ORDER, RENTAL_FEE or PENALTY: decides which page the buyer returns to.</summary>
-    string Purpose = "ORDER");
+    string Purpose = "ORDER")
+{
+    /// <summary>
+    /// PAYOS: the channel the money goes to (the ward for a fee, the household for an order).
+    /// The link is created with these keys, so the transfer lands in the payee's own account.
+    /// </summary>
+    public PayeeCredentials? Payee { get; init; }
+
+    /// <summary>PAYOS: what an earlier attempt for this transaction stored, so the next attempt gets a new link code.</summary>
+    public string? PreviousCheckoutPayload { get; init; }
+}
 
 /// <summary>
 /// <c>BankTransfer</c> is set for a bank-transfer provider (SEPAY): there is no page to send the
@@ -23,7 +33,11 @@ public sealed record PaymentGatewayCheckoutRequest(
 public sealed record PaymentGatewayCheckoutResult(
     string PaymentUrl,
     string? ProviderReference,
-    BankTransferInstructions? BankTransfer = null);
+    BankTransferInstructions? BankTransfer = null)
+{
+    /// <summary>PAYOS: the link as the provider returned it, stored so the same QR is shown after a reload.</summary>
+    public string? CheckoutPayload { get; init; }
+}
 
 /// <summary>
 /// What the payer types into (or scans with) their banking app. <c>TransferContent</c> carries
@@ -35,7 +49,14 @@ public sealed record BankTransferInstructions(
     string? AccountName,
     decimal Amount,
     string TransferContent,
-    string QrImageUrl);
+    string QrImageUrl)
+{
+    /// <summary>PAYOS: the EMVCo VietQR content to draw as a QR code (there is no image URL).</summary>
+    public string? QrContent { get; init; }
+
+    /// <summary>PAYOS: the provider's hosted payment page, for a payer who prefers it.</summary>
+    public string? CheckoutUrl { get; init; }
+}
 
 /// <summary>
 /// The parts of a callback request a provider authenticates with: MoMo/ZaloPay sign with
@@ -45,7 +66,14 @@ public sealed record BankTransferInstructions(
 public sealed record PaymentCallbackHeaders(
     string? Signature,
     string? Timestamp = null,
-    string? Authorization = null);
+    string? Authorization = null)
+{
+    /// <summary>
+    /// PAYOS: the keys of the channel the webhook URL belongs to. payOS signs the body with that
+    /// channel's checksum key, so the right key is found from the URL, never from the body.
+    /// </summary>
+    public PayeeCredentials? Payee { get; init; }
+}
 
 public sealed record PaymentGatewayCallback(
     string? ProviderReference,
@@ -101,6 +129,24 @@ public interface IPaymentGateway
     /// QR again after a reload. Null for providers that are not paid by bank transfer.
     /// </summary>
     BankTransferInstructions? DescribeBankTransfer(string provider, string providerReference, decimal amount) =>
+        null;
+
+    /// <summary>
+    /// The state of a payment made to a payee's own channel (PAYOS), asked with that payee's keys.
+    /// Null when the provider has no such channel here.
+    /// </summary>
+    Task<PaymentGatewayCallback?> QueryPaymentAsync(
+        string provider,
+        string providerReference,
+        PayeeCredentials payee,
+        CancellationToken cancellationToken) =>
+        QueryPaymentAsync(provider, providerReference, cancellationToken);
+
+    /// <summary>
+    /// The transfer details kept from a checkout (PAYOS stores its link), so the page can show the
+    /// same QR again. Null once the stored link has expired, or for providers that store nothing.
+    /// </summary>
+    BankTransferInstructions? DescribeStoredCheckout(string provider, string? checkoutPayload, decimal amount) =>
         null;
 }
 
