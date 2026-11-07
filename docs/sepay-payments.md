@@ -1,8 +1,16 @@
 # SePay bank transfers
 
 SePay (https://developer.sepay.vn) watches a bank account and calls a webhook when money
-arrives. StreetBiz uses it as a third payment provider, `SEPAY`, beside MoMo and ZaloPay, for
-all three payment purposes: rental fees (FEE-01), penalties (FEE-04) and orders.
+arrives. StreetBiz uses it as a payment provider, `SEPAY`, beside MoMo and ZaloPay, for rental
+fees (FEE-01) and orders.
+
+> **Scope.** SePay watches **one** bank account, so every payment lands in a single account of
+> the platform. That is right for a demo, not for the real parties (a ward's fees, a household's
+> orders), and StreetBiz must not hold other people's money. The real model is
+> [payOS paid straight to the payee](payos-payments.md): each ward and household connects its own
+> account. SePay stays for a platform-owned account and is offered only where it is configured.
+> Fines are no longer paid online at all: they go to the State Treasury (see `payos-payments.md`),
+> so the penalty checkout mentioned below no longer exists.
 
 ## How a payment works
 
