@@ -15,6 +15,7 @@ public partial class StreetBizDbContext
     {
         ConfigureChatbot(modelBuilder);
         ConfigurePayees(modelBuilder);
+        ConfigureTax(modelBuilder);
         // The scaffold uses --use-database-names, so property names already equal
         // column names. Keep the commerce table names explicit so a future DbSet
         // rename cannot silently redirect order/payment mappings.
