@@ -22,6 +22,9 @@ public sealed class FinanceDocumentRenderer : IFinanceDocumentRenderer
     private static readonly CultureInfo Vietnamese = CultureInfo.GetCultureInfo("vi-VN");
     private static readonly Lazy<bool> Setup = new(RegisterFonts, isThreadSafe: true);
 
+    /// <summary>Registers the embedded fonts once for every renderer in this assembly (registering twice throws).</summary>
+    internal static void EnsureFonts() => _ = Setup.Value;
+
     public byte[] RenderInvoicePdf(InvoiceDocumentRow invoice, DateTime printedAtUtc)
     {
         _ = Setup.Value;
@@ -492,6 +495,10 @@ public sealed class FinanceDocumentRenderer : IFinanceDocumentRenderer
     {
         "MOMO" => "MoMo",
         "ZALOPAY" => "ZaloPay",
+        "PAYOS" => "Chuyển khoản VietQR (payOS)",
+        "TREASURY" => "Nộp Kho bạc Nhà nước",
+        "CASH" => "Tiền mặt",
+        "BANK_TRANSFER" => "Chuyển khoản",
         _ => provider,
     };
 

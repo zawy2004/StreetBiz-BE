@@ -19,6 +19,10 @@
   </ItemGroup>
 
   <ItemGroup>
+    <InternalsVisibleTo Include="StreetBiz.API.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\StreetBiz.Application\StreetBiz.Application.csproj" />
     <ProjectReference Include="..\StreetBiz.Infrastructure\StreetBiz.Infrastructure.csproj" />
   </ItemGroup>

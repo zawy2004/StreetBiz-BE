@@ -4,6 +4,7 @@ using StreetBiz.Application.Common.Exceptions;
 using StreetBiz.Application.Common.Interfaces;
 using StreetBiz.Application.Common.Models;
 using StreetBiz.Application.Common.Security;
+using StreetBiz.Application.Features.PayoutAccounts;
 
 namespace StreetBiz.Application.Features.Finance.SyncPayment;
 
@@ -25,7 +26,9 @@ public sealed class SyncFinancePaymentCommandValidator : AbstractValidator<SyncF
 public sealed class SyncFinancePaymentCommandHandler(
     IVendorContext vendorContext,
     IFinanceRepository finance,
-    IPaymentGateway paymentGateway)
+    IPaymentGateway paymentGateway,
+    IPaymentTransactionRepository? transactions = null,
+    PayeeCheckouts? payeeCheckouts = null)
     : IRequestHandler<SyncFinancePaymentCommand, FinancePaymentSyncDto>
 {
     public async Task<FinancePaymentSyncDto> Handle(
@@ -40,8 +43,13 @@ public sealed class SyncFinancePaymentCommandHandler(
             return new FinancePaymentSyncDto(payment.TransactionId, payment.Status);
         }
 
-        var state = await paymentGateway.QueryPaymentAsync(
-            payment.Provider, payment.ProviderReference, cancellationToken);
+        // PAYOS: asked on the ward's own channel, with its own keys.
+        var stored = payment.Provider == PaymentProviders.PayOs && transactions is not null
+            ? await transactions.GetAsync(payment.TransactionId, cancellationToken)
+            : null;
+        var state = stored?.PayeeAccountId is not null && payeeCheckouts is not null
+            ? await payeeCheckouts.QueryAsync(stored, cancellationToken)
+            : await paymentGateway.QueryPaymentAsync(payment.Provider, payment.ProviderReference, cancellationToken);
         if (state?.Status is null)
         {
             return new FinancePaymentSyncDto(payment.TransactionId, payment.Status);
@@ -55,7 +63,11 @@ public sealed class SyncFinancePaymentCommandHandler(
                 state.Amount,
                 state.Status,
                 state.RawPayload ?? "{}",
-                state.SignatureValid),
+                state.SignatureValid,
+                state.ProviderEventId)
+            {
+                PayeeAccountId = stored?.PayeeAccountId,
+            },
             cancellationToken);
         var after = await finance.GetVendorPaymentAsync(vendorId, request.TransactionId, cancellationToken);
         return new FinancePaymentSyncDto(payment.TransactionId, after?.Status ?? payment.Status);
