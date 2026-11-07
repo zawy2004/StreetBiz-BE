@@ -91,9 +91,13 @@ public sealed class WardReportRepository(StreetBizDbContext db, TimeProvider? cl
                     || registration.registration_status == RegistrationStatuses.MoreInformationRequired),
                 cancellationToken);
 
+        // Every application still waiting for the ward, the same three statuses Hộp duyệt lists
+        // (and the same set as pendingRegistrations above). Counting PENDING alone left the
+        // dashboard below the inbox as soon as an officer opened or sent back an application.
+        var openApplicationStatuses = ApplicationStatuses.Open;
         var pendingApplications = await db.RentalApplications.AsNoTracking()
             .CountAsync(application => application.slot.zone.ward_unit_id == wardUnitId
-                && application.application_status == ApplicationStatuses.Pending,
+                && openApplicationStatuses.Contains(application.application_status),
                 cancellationToken);
 
         // In force today: nothing moves a contract to EXPIRED when its end date passes.

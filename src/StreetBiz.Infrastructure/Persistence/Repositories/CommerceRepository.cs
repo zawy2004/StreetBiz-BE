@@ -32,6 +32,22 @@ public sealed partial class CommerceRepository(
     private DateTime Now => clock.GetUtcNow().UtcDateTime;
     private DateOnly Today => DateOnly.FromDateTime(TimeZoneInfo.ConvertTimeFromUtc(Now, BusinessTimeZone));
 
+    /// <summary>
+    /// A short, readable order number (<see cref="OrderCodes"/>) not used yet. Six random characters
+    /// give about 730 million codes per day, so a repeat is rare; it is still checked, and the
+    /// unique index on order_code stays the final guard.
+    /// </summary>
+    private async Task<string> NewOrderCodeAsync(DateTime nowUtc, CancellationToken cancellationToken)
+    {
+        var code = OrderCodes.New(nowUtc);
+        for (var attempt = 1; attempt < 5 && await db.Orders.AnyAsync(o => o.order_code == code, cancellationToken); attempt++)
+        {
+            code = OrderCodes.New(nowUtc);
+        }
+
+        return code;
+    }
+
     private IQueryable<Storefront> EligibleStores() => db.Storefronts.Where(store =>
         store.availability_status == StorefrontOpen && store.registration.registration_status == "APPROVED"
         && store.contract.contract_status == "ACTIVE" && store.contract.start_date <= Today && store.contract.end_date >= Today
@@ -436,7 +452,7 @@ public sealed partial class CommerceRepository(
             var now = Now;
             var order = new Order
             {
-                order_code = $"SB-{now:yyyyMMdd}-{Guid.NewGuid():N}"[..30],
+                order_code = await NewOrderCodeAsync(now, cancellationToken),
                 customer_user_id = customerUserId,
                 storefront_id = cart.storefront_id,
                 storefront_address_snapshot = cart.storefront.registration.declared_address,

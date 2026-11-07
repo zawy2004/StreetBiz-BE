@@ -668,6 +668,30 @@ public sealed class WardComplianceServiceTests
     }
 
     [Fact]
+    public async Task Evidence_reaches_the_officer_with_its_vietnamese_name_not_the_database_code()
+    {
+        using var f = await Fixture.Create();
+        await GiveConsentAndIdPhoto(f, registrationId: 2);
+        using (var db = f.NewDb())
+        {
+            db.RegistrationEvidences.Add(new RegistrationEvidence
+            {
+                registration_id = 2,
+                evidence_type = "IDENTITY_DOCUMENT_BACK",
+                file_url = "/uploads/cccd-back.jpg",
+                uploaded_at = DateTime.UtcNow,
+            });
+            await db.SaveChangesAsync();
+        }
+
+        var detail = await f.NewService(new CountingAiComplianceService()).GetEnrollmentDetailAsync(f.Actor, 2, default);
+
+        Assert.Equal(
+            new[] { ("IDENTITY_DOCUMENT", "CCCD mặt trước"), ("IDENTITY_DOCUMENT_BACK", "CCCD mặt sau") },
+            detail.Evidence.Select(e => (e.Type, e.Label)).OrderBy(x => x.Type));
+    }
+
+    [Fact]
     public async Task Changed_evidence_hides_the_stale_check_until_it_is_run_again()
     {
         using var f = await Fixture.Create();

@@ -146,7 +146,7 @@ public sealed class WardComplianceService(
         }
 
         var evidence = reg.RegistrationEvidences
-            .Select(e => new WardEvidenceDto(e.evidence_id, e.evidence_type, e.evidence_type, e.file_url))
+            .Select(e => new WardEvidenceDto(e.evidence_id, e.evidence_type, EvidenceTypes.Label(e.evidence_type), e.file_url))
             .ToList();
 
         var ownerName = reg.vendor?.user?.full_name ?? reg.display_name;
@@ -384,7 +384,7 @@ public sealed class WardComplianceService(
         }
 
         var evidence = reg.RegistrationEvidences
-            .Select(e => new WardEvidenceDto(e.evidence_id, e.evidence_type, e.evidence_type, e.file_url))
+            .Select(e => new WardEvidenceDto(e.evidence_id, e.evidence_type, EvidenceTypes.Label(e.evidence_type), e.file_url))
             .ToList();
         var ownerName = reg.vendor?.user?.full_name ?? reg.display_name;
 
