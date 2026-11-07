@@ -191,7 +191,7 @@ internal static class PayOsGateway
     }
 
     private static BankTransferInstructions Instructions(StoredCheckout stored) =>
-        new(BankName(stored.Bin), stored.AccountNumber ?? "", stored.AccountName, stored.Amount, stored.Description, "")
+        new(BankName(stored.Bin), stored.AccountNumber ?? "", stored.AccountName, stored.Amount, stored.Description)
         {
             QrContent = stored.QrCode,
             CheckoutUrl = string.IsNullOrWhiteSpace(stored.CheckoutUrl) ? null : stored.CheckoutUrl,

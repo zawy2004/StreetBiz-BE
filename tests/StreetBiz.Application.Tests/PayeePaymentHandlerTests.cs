@@ -24,7 +24,7 @@ public sealed class PayeePaymentHandlerTests
     private static readonly PayeeSummary Store = new(21, "VENDOR", "Bánh mì Cô Lan", "MB Bank", "••••••3456", "NGUYEN THI LAN", true);
     private static readonly PayeeCredentials WardKeys = new(11, "ward-client", "ward-api", "ward-checksum");
 
-    private static readonly BankTransferInstructions Qr = new("MB Bank", "V3CAS01", "UBND PHUONG", 1_040_000m, "CSXXSB101", "")
+    private static readonly BankTransferInstructions Qr = new("MB Bank", "V3CAS01", "UBND PHUONG", 1_040_000m, "CSXXSB101")
     {
         QrContent = "00020101QR",
         CheckoutUrl = "https://pay.payos.vn/web/x",
@@ -461,11 +461,44 @@ public sealed class PayeePaymentHandlerTests
     }
 
     [Fact]
-    public void Payos_is_an_accepted_provider_for_checkout()
+    public async Task An_order_page_reloaded_shows_the_same_stored_qr()
+    {
+        var commerce = new Mock<ICommerceRepository>();
+        commerce.Setup(x => x.GetCustomerOrderAsync(2, 19, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Order(OrderStatuses.PendingPayment));
+        var gateway = new Mock<IPaymentGateway>();
+        gateway.Setup(x => x.DescribeStoredCheckout("PAYOS", "{\"attempt\":1}", 1_040_000m)).Returns(Qr);
+
+        var dto = await new GetOrderBankTransferQueryHandler(
+                CustomerContext(), commerce.Object, gateway.Object, Transactions(55, 21, "{\"attempt\":1}", "PAYOS-55001").Object)
+            .Handle(new GetOrderBankTransferQuery(19), CancellationToken.None);
+
+        dto.QrContent.Should().Be("00020101QR");
+    }
+
+    [Fact]
+    public async Task A_settled_order_has_no_qr_to_show()
+    {
+        var commerce = new Mock<ICommerceRepository>();
+        commerce.Setup(x => x.GetCustomerOrderAsync(2, 19, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Order(OrderStatuses.Placed));
+        var gateway = new Mock<IPaymentGateway>(MockBehavior.Strict);
+
+        var act = () => new GetOrderBankTransferQueryHandler(
+                CustomerContext(), commerce.Object, gateway.Object, new Mock<IPaymentTransactionRepository>(MockBehavior.Strict).Object)
+            .Handle(new GetOrderBankTransferQuery(19), CancellationToken.None);
+
+        await act.Should().ThrowAsync<NotFoundException>();
+    }
+
+    [Fact]
+    public void Payos_is_an_accepted_provider_for_checkout_and_sepay_no_longer_is()
     {
         new PayFeeCommandValidator().Validate(new PayFeeCommand(2, "payos", "idem-1")).IsValid.Should().BeTrue();
         new CheckoutOrderCommandValidator().Validate(new CheckoutOrderCommand(1, "PAYOS", "idem-1")).IsValid.Should().BeTrue();
         PaymentProviders.IsValid("PAYOS").Should().BeTrue();
+        new PayFeeCommandValidator().Validate(new PayFeeCommand(2, "sepay", "idem-1")).IsValid.Should().BeFalse();
+        PaymentProviders.IsValid("SEPAY").Should().BeFalse();
     }
 
     // ----------------------------------------------------------------------------- the payee
@@ -499,6 +532,11 @@ public sealed class PayeePaymentHandlerTests
 
     private static FinancePaymentStateRow PaymentRow(string status) =>
         new(101, "PAYOS", "PAYOS-101001", "idem-1", status, 1_040_000m);
+
+    private static CommerceOrderRow Order(string status) => new(
+        19, "SB-000019", 2, "Khách", 1, "Bếp Việt", status, 1_040_000m, 1_040_000m, null, "PAYOS", "PENDING",
+        null, null, null, null, null, null, null, DateTime.UtcNow, [], [],
+        PaymentTransactionId: 55, PaymentIdempotencyKey: "idem-o", PaymentAmount: 1_040_000m, PaymentProviderReference: "PAYOS-55001");
 
     private static Mock<IPaymentTransactionRepository> Transactions(
         long id, long? payeeAccountId, string? checkoutPayload, string? providerReference)

@@ -298,15 +298,9 @@ public sealed class PaymentCallbacksController(
     {
         using var reader = new StreamReader(Request.Body);
         var rawPayload = await reader.ReadToEndAsync(cancellationToken);
-        var signature = Request.Headers["X-Payment-Signature"].FirstOrDefault()
-            ?? Request.Headers["X-SePay-Signature"].FirstOrDefault();
+        var signature = Request.Headers["X-Payment-Signature"].FirstOrDefault();
         var result = await sender.Send(
-            new ProcessPaymentCallbackCommand(
-                provider,
-                rawPayload,
-                signature,
-                Request.Headers["X-SePay-Timestamp"].FirstOrDefault(),
-                Request.Headers.Authorization.FirstOrDefault()),
+            new ProcessPaymentCallbackCommand(provider, rawPayload, signature),
             cancellationToken);
         if (result.OrderId is { } orderId && result.OrderStatus is { } orderStatus)
         {
@@ -324,14 +318,6 @@ public sealed class PaymentCallbacksController(
         if (string.Equals(provider, "zalopay", StringComparison.OrdinalIgnoreCase))
         {
             return new ObjectResult(StreetBiz.API.Controllers.ZaloPayAcknowledgement.For(result.Result));
-        }
-
-        // SePay's contract: 200 with {"success": true} within 30 s, or it retries for up to 5 hours.
-        // Everything recorded counts as delivered, including REJECTED/UNMATCHED: those were
-        // already sent to the payment alerts, and a retry would not change them.
-        if (string.Equals(provider, "sepay", StringComparison.OrdinalIgnoreCase))
-        {
-            return Ok(new { success = true, result = result.Result });
         }
 
         return Ok(result);

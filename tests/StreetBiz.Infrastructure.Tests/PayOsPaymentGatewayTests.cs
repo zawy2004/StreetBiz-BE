@@ -122,7 +122,7 @@ public sealed class PayOsPaymentGatewayTests
         Assert.Equal("00020101021238570010A000000727QRDATA", again?.QrContent);
         Assert.Null(expired);
         Assert.Null(Gateway(new FakePayOs("{}")).DescribeStoredCheckout("PAYOS", "not json", 1m));
-        Assert.Null(Gateway(new FakePayOs("{}")).DescribeStoredCheckout("SEPAY", created.CheckoutPayload, 1m));
+        Assert.Null(Gateway(new FakePayOs("{}")).DescribeStoredCheckout("MOMO", created.CheckoutPayload, 1m));
     }
 
     // ------------------------------------------------------------------------------- webhook

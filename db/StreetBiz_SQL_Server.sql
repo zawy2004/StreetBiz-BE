@@ -1480,10 +1480,9 @@ CREATE TABLE PaymentTransactions (
         CHECK (payment_purpose IN ('RENTAL_FEE','PENALTY','ORDER')),
     CONSTRAINT CK_PaymentTransactions_Provider
         -- CASH / BANK_TRANSFER: a fee or penalty a ward officer recorded as collected in person.
-        -- SEPAY: a VietQR bank transfer the payer made themselves, confirmed by SePay's webhook.
         -- PAYOS: a VietQR transfer straight into the payee's own payOS account.
         -- TREASURY: a fine paid to the State Treasury, confirmed by the ward from its receipt.
-        CHECK (provider IN ('MOMO','ZALOPAY','SEPAY','PAYOS','CASH','BANK_TRANSFER','TREASURY')),
+        CHECK (provider IN ('MOMO','ZALOPAY','PAYOS','CASH','BANK_TRANSFER','TREASURY')),
     CONSTRAINT CK_PaymentTransactions_PayeeProvider
         CHECK (payee_account_id IS NULL OR provider = 'PAYOS'),
     CONSTRAINT CK_PaymentTransactions_Status
@@ -1522,7 +1521,7 @@ CREATE TABLE PaymentCallbackEvents (
     processing_result    NVARCHAR(20)          NOT NULL,
     received_at          DATETIME2             NOT NULL DEFAULT SYSUTCDATETIME(),
     CONSTRAINT CK_PaymentCallbackEvents_Provider
-        CHECK (provider IN ('MOMO','ZALOPAY','SEPAY','PAYOS')),
+        CHECK (provider IN ('MOMO','ZALOPAY','PAYOS')),
     CONSTRAINT CK_PaymentCallbackEvents_Result
         CHECK (processing_result IN ('APPLIED','DUPLICATE','UNMATCHED','REJECTED')),
     CONSTRAINT FK_PaymentCallbackEvents_Transaction
@@ -2089,9 +2088,9 @@ CREATE TABLE RefundTransactions (
     CONSTRAINT CK_RefundTransactions_Reason
         CHECK (refund_reason IN ('ORDER_REJECTED','ORDER_CANCELLED','COMPLAINT_RESOLVED')),
     CONSTRAINT CK_RefundTransactions_Provider
-        -- SEPAY and PAYOS refunds are bank transfers made by hand (by the household that was paid,
-        -- for PAYOS) and recorded here.
-        CHECK (provider IN ('MOMO','ZALOPAY','SEPAY','PAYOS')),
+        -- PAYOS refunds are bank transfers made by hand by the household that was paid, and
+        -- recorded here.
+        CHECK (provider IN ('MOMO','ZALOPAY','PAYOS')),
     CONSTRAINT CK_RefundTransactions_Status
         CHECK (refund_status IN ('PENDING','SUCCESS','FAILED')),
     CONSTRAINT CK_RefundTransactions_AmountPositive

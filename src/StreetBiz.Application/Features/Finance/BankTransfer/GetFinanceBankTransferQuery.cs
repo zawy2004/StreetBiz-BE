@@ -8,8 +8,8 @@ using StreetBiz.Application.DTOs.Payments;
 namespace StreetBiz.Application.Features.Finance.BankTransfer;
 
 /// <summary>
-/// FEE-01/FEE-04: the VietQR of a fee or penalty payment still waiting for its SePay bank
-/// transfer, so the payment page can show it again after a reload. 404 once it is settled.
+/// FEE-01: the VietQR of a fee payment still waiting for its payOS bank transfer, so the
+/// payment page can show it again after a reload. 404 once it is settled.
 /// </summary>
 public sealed record GetFinanceBankTransferQuery(long TransactionId) : IRequest<BankTransferDto>;
 
@@ -31,16 +31,14 @@ public sealed class GetFinanceBankTransferQueryHandler(
             ?? throw new NotFoundException(FinanceMessages.TransactionNotFound);
         BankTransferInstructions? instructions = null;
         if (payment.Status == PaymentStatuses.Pending
-            && payment.ProviderReference is { } reference
-            && payment.Amount is { } amount)
+            && payment.Provider == PaymentProviders.PayOs
+            && transactions is not null)
         {
-            // PAYOS: the link opened at checkout, shown again while it is still payable.
-            var stored = payment.Provider == PaymentProviders.PayOs && transactions is not null
-                ? await transactions.GetAsync(payment.TransactionId, cancellationToken)
-                : null;
-            instructions = stored is not null
-                ? paymentGateway.DescribeStoredCheckout(payment.Provider, stored.CheckoutPayload, stored.Amount)
-                : paymentGateway.DescribeBankTransfer(payment.Provider, reference, amount);
+            // The payOS link opened at checkout, shown again while it is still payable.
+            var stored = await transactions.GetAsync(payment.TransactionId, cancellationToken);
+            instructions = stored is null
+                ? null
+                : paymentGateway.DescribeStoredCheckout(PaymentProviders.PayOs, stored.CheckoutPayload, stored.Amount);
         }
         return BankTransferDto.From(instructions)
             ?? throw new NotFoundException("Khoản thanh toán này không chờ chuyển khoản.");

@@ -112,7 +112,7 @@ public sealed record InvoiceDetailDto(
 }
 
 /// <summary>
-/// FEE-01/FEE-04: a checkout was opened, here is where to send the vendor to pay it. For SEPAY
+/// FEE-01/FEE-04: a checkout was opened, here is where to send the vendor to pay it. For PAYOS
 /// there is nowhere to send them: <c>BankTransfer</c> holds the VietQR to show instead.
 /// </summary>
 public sealed record FinanceCheckoutDto(

@@ -10,9 +10,9 @@ channel, and the payer's VietQR transfer lands in that account:
 | Fine (FEE-04) | the **State Treasury** | not through StreetBiz at all (see below) |
 
 A household without a connected channel takes no online order ("Quán chưa nhận thanh toán
-online"); a ward without one shows no online option for its fees. MoMo, ZaloPay and SePay stay,
-and are offered only where they are configured (or all simulated in Development). See
-`sepay-payments.md` for those.
+online"); a ward without one shows no online option for its fees. payOS is the only bank-transfer
+provider; the MoMo and ZaloPay wallets stay, and are offered only where they are configured (or
+both simulated in Development).
 
 Why: collecting other people's money and passing it on needs a payment-intermediary licence
 (Nghị định 52/2024) and makes StreetBiz the party that must refund. Paying straight to the payee
@@ -55,7 +55,37 @@ retry never reuses a code; `provider_reference` is `PAYOS-{orderCode}`. payOS's 
 uses a small order code (below 1000) and is ignored. The payment description is `SB{transactionId}`.
 
 A second transfer for an already-paid payment is recorded `REJECTED` (surplus) and raised through
-the payment alerts, exactly as for SePay; it is never applied twice.
+the payment alerts; it is never applied twice.
+
+### What can go wrong with a bank transfer
+
+| Case | Outcome | What happens |
+| --- | --- | --- |
+| Paid in full on the right channel | APPLIED | Paid and invoiced / order placed |
+| payOS sends the same transfer again | DUPLICATE | Nothing (matched on the bank `reference`) |
+| An unknown order code | UNMATCHED | Money is in the account but assigned to nothing |
+| Wrong amount, or a webhook from another payee's channel | REJECTED | Not applied |
+| A second transfer for something already paid, or money for a cancelled order | SURPLUS (stored as REJECTED) | Not applied; owed back by hand |
+| Bad signature, or an unknown webhook token | REJECTED | Not applied |
+| payOS's own test webhook (order code below 1000) | IGNORED | Acknowledged, not recorded |
+
+Every row but APPLIED, DUPLICATE and IGNORED raises a payment alert. payOS refunds are bank
+transfers made by hand by the payee.
+
+## Payment alerts (Discord)
+
+`IPaymentAlertNotifier` is told about every callback that could not be applied, for every
+provider, about server errors while applying one, and about a payee channel whose keys stopped
+working (`CHANNEL_ERROR`). `DiscordPaymentAlertNotifier` posts it to a Discord channel webhook as
+one embed (provider, outcome, reason, payment code, amount, the provider's transfer id, StreetBiz
+transaction, environment).
+
+| Key | Meaning |
+| --- | --- |
+| `Alerts:DiscordWebhookUrl` | The channel webhook URL. Empty switches alerts off. It lets anyone post to the channel: keep it in user-secrets |
+| `Alerts:DiscordMention` | Optional text before each alert, e.g. `<@&roleId>` or `@here` |
+
+Delivery is best effort with a 5 second timeout; a failing Discord never fails a callback.
 
 ## Connecting an account
 

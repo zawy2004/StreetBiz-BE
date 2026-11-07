@@ -460,23 +460,23 @@ public sealed class CommerceManagementTests
     }
 
     [Fact]
-    public async Task A_second_sepay_transfer_for_a_paid_order_is_surplus_and_leaves_the_order_alone()
+    public async Task A_second_bank_transfer_for_a_paid_order_is_surplus_and_leaves_the_order_alone()
     {
         using var f = await Fixture.Create();
         var cartId = await AddCart(f);
-        var order = (await f.Repository.CheckoutAsync(2, cartId, "SEPAY", "qr-order", default)).Order!;
-        var code = $"SBP{order.PaymentTransactionId}";
+        var order = (await f.Repository.CheckoutAsync(2, cartId, "PAYOS", "qr-order", default)).Order!;
+        var code = $"PAYOS-{order.PaymentTransactionId * 1000 + 1}";
         await f.Repository.SetPaymentProviderReferenceAsync(order.PaymentTransactionId!.Value, code, default);
 
-        Task<PaymentCallbackMutationResult> Transfer(long sePayId) =>
+        Task<PaymentCallbackMutationResult> Transfer(string bankReference) =>
             f.Repository.ApplyPaymentCallbackAsync(new PaymentCallbackData(
-                "SEPAY", code, null, 25000, "SUCCESS",
-                $$"""{"id":{{sePayId}},"content":"{{code}}","transferType":"in"}""", true, sePayId.ToString()), default);
+                "PAYOS", code, null, 25000, "SUCCESS",
+                $$$"""{"code":"00","data":{"reference":"{{{bankReference}}}"}}""", true, bankReference), default);
 
-        Assert.Equal(PaymentCallbackOutcome.Applied, (await Transfer(1)).Outcome);
+        Assert.Equal(PaymentCallbackOutcome.Applied, (await Transfer("FT001")).Outcome);
         var historyCount = await f.Db.OrderStatusHistories.CountAsync(x => x.order_id == order.OrderId);
-        Assert.Equal(PaymentCallbackOutcome.Duplicate, (await Transfer(1)).Outcome);
-        Assert.Equal(PaymentCallbackOutcome.Surplus, (await Transfer(2)).Outcome);
+        Assert.Equal(PaymentCallbackOutcome.Duplicate, (await Transfer("FT001")).Outcome);
+        Assert.Equal(PaymentCallbackOutcome.Surplus, (await Transfer("FT002")).Outcome);
         Assert.Equal("PLACED", (await f.Db.Orders.AsNoTracking().SingleAsync(o => o.order_id == order.OrderId)).order_status);
         Assert.Equal(historyCount, await f.Db.OrderStatusHistories.CountAsync(x => x.order_id == order.OrderId));
     }

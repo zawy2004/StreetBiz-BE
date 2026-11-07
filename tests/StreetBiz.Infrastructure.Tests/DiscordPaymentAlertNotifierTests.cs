@@ -16,7 +16,7 @@ public sealed class DiscordPaymentAlertNotifierTests
     private const string WebhookUrl = "https://discord.com/api/webhooks/1/test-token";
 
     private static readonly PaymentAlert Surplus = new(
-        "SEPAY", "SURPLUS", "Tiền về cho khoản đã thanh toán.", "SBP42", 900_000m, "92705", 42, 7);
+        "PAYOS", "SURPLUS", "Tiền về cho khoản đã thanh toán.", "PAYOS-42001", 900_000m, "92705", 42, 7);
 
     [Fact]
     public async Task An_alert_is_posted_as_one_embed_with_the_facts_a_person_needs()
@@ -30,11 +30,11 @@ public sealed class DiscordPaymentAlertNotifierTests
         var root = body.RootElement;
         Assert.Equal("<@&123>", root.GetProperty("content").GetString());
         var embed = root.GetProperty("embeds")[0];
-        Assert.Equal("Thanh toán cần xử lý: SEPAY · SURPLUS", embed.GetProperty("title").GetString());
+        Assert.Equal("Thanh toán cần xử lý: PAYOS · SURPLUS", embed.GetProperty("title").GetString());
         Assert.Equal("Tiền về cho khoản đã thanh toán.", embed.GetProperty("description").GetString());
         var fields = embed.GetProperty("fields").EnumerateArray()
             .ToDictionary(f => f.GetProperty("name").GetString()!, f => f.GetProperty("value").GetString());
-        Assert.Equal("SBP42", fields["Mã thanh toán"]);
+        Assert.Equal("PAYOS-42001", fields["Mã thanh toán"]);
         Assert.Equal("900.000 đ", fields["Số tiền"]);
         Assert.Equal("92705", fields["Mã GD nhà cung cấp"]);
         Assert.Equal("#42", fields["Giao dịch StreetBiz"]);

@@ -9,7 +9,7 @@ namespace StreetBiz.Infrastructure.Payments;
 /// Telling a repeated report from new money, and who may report it. MoMo reports one checkout, so a second success for
 /// a settled transaction is the same report again. A bank transfer is different: the payer can
 /// send the same payment code twice, or pay after the order was cancelled, and each of those is
-/// real money. SePay gives every transfer its own id (<see cref="PaymentCallbackData.ProviderEventId"/>),
+/// real money. payOS gives every transfer its own bank reference (<see cref="PaymentCallbackData.ProviderEventId"/>),
 /// kept in the stored payload of the callback that settled the transaction.
 /// </summary>
 internal static class ProviderTransfers
@@ -48,17 +48,13 @@ internal static class ProviderTransfers
         paymentPayeeAccountId == callback.PayeeAccountId;
 
     /// <summary>
-    /// The provider's id for the transfer inside a stored payload: SePay's "id"; for payOS the bank
-    /// reference, in a webhook's "data.reference" or a status answer's "transactions[].reference".
+    /// The provider's id for the transfer inside a stored payload: payOS's bank reference, in a
+    /// webhook's "data.reference" or a status answer's "transactions[].reference". Other providers
+    /// report one checkout and carry no transfer id.
     /// </summary>
     public static string? EventIdIn(string provider, string? rawPayload)
     {
-        if (provider != PaymentProviders.PayOs)
-        {
-            return SePayGateway.EventIdIn(rawPayload);
-        }
-
-        if (string.IsNullOrWhiteSpace(rawPayload))
+        if (provider != PaymentProviders.PayOs || string.IsNullOrWhiteSpace(rawPayload))
         {
             return null;
         }

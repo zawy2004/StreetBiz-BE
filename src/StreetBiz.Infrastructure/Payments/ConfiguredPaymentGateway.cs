@@ -25,10 +25,6 @@ public sealed class ConfiguredPaymentGateway(
     private bool UsesZaloPay(string provider) =>
         provider == "ZALOPAY" && settings.ZaloPay.IsZaloPayConfigured && httpClientFactory is not null;
 
-    /// <summary>SePay bank transfers are used for SEPAY whenever the account and an authentication are configured.</summary>
-    private bool UsesSePay(string provider) =>
-        provider == PaymentProviders.SePay && settings.SePay.IsConfigured;
-
     /// <summary>
     /// payOS is used for PAYOS while it is switched on. Whether a given payee can be paid this way
     /// (has connected an ACTIVE channel) is decided by the caller, which passes that payee's keys.
@@ -40,7 +36,6 @@ public sealed class ConfiguredPaymentGateway(
         !string.IsNullOrWhiteSpace(settings.For(provider).CheckoutUrlTemplate)
         || UsesMomo(provider)
         || UsesZaloPay(provider)
-        || UsesSePay(provider)
         || UsesPayOs(provider)
         || (settings.SandboxEnabled && provider != PaymentProviders.PayOs);
 
@@ -62,11 +57,6 @@ public sealed class ConfiguredPaymentGateway(
                 request,
                 time.GetUtcNow(),
                 cancellationToken);
-        }
-
-        if (UsesSePay(request.Provider))
-        {
-            return Task.FromResult(SePayGateway.Create(settings.SePay, request));
         }
 
         if (UsesMomo(request.Provider))
@@ -117,13 +107,6 @@ public sealed class ConfiguredPaymentGateway(
         PaymentCallbackHeaders? headers,
         CancellationToken cancellationToken)
     {
-        // SePay authenticates with its own headers and payload, whether or not it is configured
-        // (unconfigured, nothing authenticates, so the callback is recorded as REJECTED).
-        if (provider == PaymentProviders.SePay)
-        {
-            return Task.FromResult(SePayGateway.VerifyWebhook(settings.SePay, rawPayload, headers, time.GetUtcNow()));
-        }
-
         // payOS signs with the checksum key of the channel the webhook URL belongs to. Without
         // that channel (an unknown URL) nothing authenticates, so it is recorded as REJECTED.
         if (provider == PaymentProviders.PayOs)
@@ -205,18 +188,8 @@ public sealed class ConfiguredPaymentGateway(
                 cancellationToken);
         }
 
-        // Without an API token SePay cannot be asked: the webhook alone settles the payment.
-        return UsesSePay(provider) && !string.IsNullOrWhiteSpace(settings.SePay.ApiToken) && httpClientFactory is not null
-            ? await SePayGateway.QueryAsync(
-                httpClientFactory.CreateClient(SePayGateway.HttpClientName),
-                settings.SePay,
-                providerReference,
-                cancellationToken)
-            : null;
+        return null;
     }
-
-    public BankTransferInstructions? DescribeBankTransfer(string provider, string providerReference, decimal amount) =>
-        UsesSePay(provider) ? SePayGateway.Instructions(settings.SePay, providerReference, amount) : null;
 
     public async Task<PaymentGatewayCallback?> QueryPaymentAsync(
         string provider,

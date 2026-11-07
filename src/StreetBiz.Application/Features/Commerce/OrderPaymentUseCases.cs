@@ -159,7 +159,7 @@ public sealed class CheckoutOrderCommandHandler(
 }
 
 /// <summary>
-/// The VietQR of an order still waiting for its SePay bank transfer, so the payment page can
+/// The VietQR of an order still waiting for its payOS bank transfer, so the payment page can
 /// show it again after a reload or on another device. 404 once the order is no longer waiting.
 /// </summary>
 public sealed record GetOrderBankTransferQuery(long OrderId) : IRequest<BankTransferDto>;
@@ -177,19 +177,15 @@ public sealed class GetOrderBankTransferQueryHandler(
             ?? throw new NotFoundException(CommerceMessages.OrderNotFound);
         BankTransferInstructions? instructions = null;
         if (order.OrderStatus == OrderStatuses.PendingPayment
-            && order.PaymentProvider is { } provider
-            && order.PaymentProviderReference is { } reference
-            && order.PaymentAmount is { } amount)
+            && order.PaymentProvider == PaymentProviders.PayOs
+            && order.PaymentTransactionId is { } transactionId
+            && transactions is not null)
         {
-            // PAYOS: the link opened at checkout, shown again while it is still payable.
-            var stored = provider == PaymentProviders.PayOs
-                && order.PaymentTransactionId is { } transactionId
-                && transactions is not null
-                    ? await transactions.GetAsync(transactionId, cancellationToken)
-                    : null;
-            instructions = stored is not null
-                ? paymentGateway.DescribeStoredCheckout(provider, stored.CheckoutPayload, stored.Amount)
-                : paymentGateway.DescribeBankTransfer(provider, reference, amount);
+            // The payOS link opened at checkout, shown again while it is still payable.
+            var stored = await transactions.GetAsync(transactionId, cancellationToken);
+            instructions = stored is null
+                ? null
+                : paymentGateway.DescribeStoredCheckout(PaymentProviders.PayOs, stored.CheckoutPayload, stored.Amount);
         }
 
         return BankTransferDto.From(instructions)
@@ -257,13 +253,11 @@ public sealed class SyncOrderPaymentCommandHandler(
     }
 }
 
-/// <summary><c>Timestamp</c>/<c>Authorization</c> carry SePay's webhook authentication; see <see cref="PaymentCallbackHeaders"/>.</summary>
+/// <summary><c>Signature</c> is a URL-template gateway's signature header; see <see cref="PaymentCallbackHeaders"/>.</summary>
 public sealed record ProcessPaymentCallbackCommand(
     string Provider,
     string RawPayload,
-    string? Signature,
-    string? Timestamp = null,
-    string? Authorization = null) : IRequest<PaymentCallbackReceiptDto>
+    string? Signature) : IRequest<PaymentCallbackReceiptDto>
 {
     /// <summary>
     /// PAYOS: the token in the webhook URL (/api/payments/payos/callback/{token}). It names the
@@ -329,7 +323,7 @@ public sealed class ProcessPaymentCallbackCommandHandler(
         var verified = await paymentGateway.VerifyCallbackAsync(
             provider,
             request.RawPayload,
-            new PaymentCallbackHeaders(request.Signature, request.Timestamp, request.Authorization)
+            new PaymentCallbackHeaders(request.Signature)
             {
                 Payee = payee?.Credentials,
             },
@@ -402,8 +396,8 @@ public sealed class ProcessPaymentCallbackCommandHandler(
     private static string? ReasonFor(PaymentCallbackOutcome outcome, bool signatureValid) => outcome switch
     {
         PaymentCallbackOutcome.Rejected when !signatureValid =>
-            "Chữ ký hoặc API key không hợp lệ nên callback không được ghi nhận. " +
-            "Kiểm tra secret/API key ở cả hai phía (SePay và user-secrets).",
+            "Chữ ký không hợp lệ nên callback không được ghi nhận. " +
+            "Kiểm tra khoá ký ở cả hai phía (cổng thanh toán và cấu hình máy chủ).",
         PaymentCallbackOutcome.Rejected =>
             "Số tiền, trạng thái hoặc cổng thanh toán không khớp giao dịch, hoặc đơn không còn chờ thanh toán. " +
             "Chưa ghi nhận: đối soát với sao kê rồi xử lý thủ công.",

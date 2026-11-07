@@ -88,7 +88,7 @@ public sealed class FinancePaymentTests
     {
         var gateway = new Mock<IPaymentGateway>();
         gateway.Setup(x => x.VerifyCallbackAsync(
-                "MOMO", "payload", new PaymentCallbackHeaders("sig", null, null), It.IsAny<CancellationToken>()))
+                "MOMO", "payload", new PaymentCallbackHeaders("sig"), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new PaymentGatewayCallback("MOMO-REF", "idem-1", 1_040_000m, "SUCCESS", true));
         var commerce = new Mock<ICommerceRepository>(MockBehavior.Strict);
         var finance = new Mock<IFinanceRepository>();
@@ -112,7 +112,7 @@ public sealed class FinancePaymentTests
     {
         var gateway = new Mock<IPaymentGateway>();
         gateway.Setup(x => x.VerifyCallbackAsync(
-                "MOMO", "payload", new PaymentCallbackHeaders("sig", null, null), It.IsAny<CancellationToken>()))
+                "MOMO", "payload", new PaymentCallbackHeaders("sig"), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new PaymentGatewayCallback("MOMO-REF", "idem-9", 25_000m, "SUCCESS", true));
         var finance = new Mock<IFinanceRepository>();
         finance.Setup(x => x.FindPaymentPurposeAsync("MOMO-REF", "idem-9", It.IsAny<CancellationToken>()))

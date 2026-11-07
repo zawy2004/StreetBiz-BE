@@ -27,8 +27,8 @@ public sealed record PaymentGatewayCheckoutRequest(
 }
 
 /// <summary>
-/// <c>BankTransfer</c> is set for a bank-transfer provider (SEPAY): there is no page to send the
-/// payer to, so the screen shows the VietQR and these details instead of redirecting.
+/// <c>BankTransfer</c> is set for a bank-transfer provider (PAYOS): the screen shows the VietQR
+/// and these details on the page itself instead of redirecting.
 /// </summary>
 public sealed record PaymentGatewayCheckoutResult(
     string PaymentUrl,
@@ -48,10 +48,9 @@ public sealed record BankTransferInstructions(
     string AccountNumber,
     string? AccountName,
     decimal Amount,
-    string TransferContent,
-    string QrImageUrl)
+    string TransferContent)
 {
-    /// <summary>PAYOS: the EMVCo VietQR content to draw as a QR code (there is no image URL).</summary>
+    /// <summary>The EMVCo VietQR content to draw as a QR code.</summary>
     public string? QrContent { get; init; }
 
     /// <summary>PAYOS: the provider's hosted payment page, for a payer who prefers it.</summary>
@@ -59,14 +58,11 @@ public sealed record BankTransferInstructions(
 }
 
 /// <summary>
-/// The parts of a callback request a provider authenticates with: MoMo/ZaloPay sign with
-/// <c>Signature</c>; SePay sends <c>X-SePay-Signature</c> with <c>X-SePay-Timestamp</c>
-/// (HMAC) or an <c>Authorization: Apikey …</c> header.
+/// The parts of a callback request a provider authenticates with beyond its body:
+/// <c>Signature</c> for a URL-template gateway's HMAC header (MoMo and ZaloPay sign inside
+/// the body itself).
 /// </summary>
-public sealed record PaymentCallbackHeaders(
-    string? Signature,
-    string? Timestamp = null,
-    string? Authorization = null)
+public sealed record PaymentCallbackHeaders(string? Signature)
 {
     /// <summary>
     /// PAYOS: the keys of the channel the webhook URL belongs to. payOS signs the body with that
@@ -84,7 +80,7 @@ public sealed record PaymentGatewayCallback(
     /// <summary>What the provider actually sent, when it differs from the request body (status queries).</summary>
     string? RawPayload = null,
     /// <summary>
-    /// The provider's own id for this money movement (SePay's transaction id). Two reports with
+    /// The provider's own id for this money movement (payOS's bank reference). Two reports with
     /// the same id are one transfer sent twice; a different id is a second transfer.
     /// </summary>
     string? ProviderEventId = null,
@@ -123,13 +119,6 @@ public interface IPaymentGateway
         string providerReference,
         CancellationToken cancellationToken) =>
         Task.FromResult<PaymentGatewayCallback?>(null);
-
-    /// <summary>
-    /// The transfer details for a still-open bank-transfer payment, so its page can show the
-    /// QR again after a reload. Null for providers that are not paid by bank transfer.
-    /// </summary>
-    BankTransferInstructions? DescribeBankTransfer(string provider, string providerReference, decimal amount) =>
-        null;
 
     /// <summary>
     /// The state of a payment made to a payee's own channel (PAYOS), asked with that payee's keys.

@@ -61,18 +61,15 @@ public static class PaymentProviders
     public const string Momo = "MOMO";
     public const string ZaloPay = "ZALOPAY";
 
-    /// <summary>Bank transfer by VietQR, confirmed by SePay's webhook when the money lands.</summary>
-    public const string SePay = "SEPAY";
-
     /// <summary>
     /// Bank transfer by VietQR straight into the payee's own payOS account (the ward for a fee,
     /// the household for an order), confirmed by that channel's webhook or status API.
     /// </summary>
     public const string PayOs = "PAYOS";
 
-    public const string InvalidMessage = "Provider must be MOMO, ZALOPAY, SEPAY or PAYOS.";
+    public const string InvalidMessage = "Provider must be MOMO, ZALOPAY or PAYOS.";
 
-    public static bool IsValid(string value) => value is Momo or ZaloPay or SePay or PayOs;
+    public static bool IsValid(string value) => value is Momo or ZaloPay or PayOs;
 }
 
 public static class SalesPeriods

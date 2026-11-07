@@ -3,7 +3,7 @@ using StreetBiz.Application.Common.Interfaces;
 namespace StreetBiz.API.Controllers;
 
 /// <summary>
-/// The payment methods the web app may offer. The platform-wide providers (MoMo, ZaloPay, SePay)
+/// The payment methods the web app may offer. The platform-wide wallets (MoMo, ZaloPay)
 /// are offered where they are configured, or all simulated in Development; PAYOS is offered only
 /// for a payee that has connected its own ACTIVE receiving account, and comes first so the
 /// payment screen can preselect it. The payee is named so the payer sees who is being paid.
@@ -20,22 +20,19 @@ internal static class PaymentOptions
             && !string.IsNullOrWhiteSpace(configuration["Payments:ZaloPay:AppId"])
             && !string.IsNullOrWhiteSpace(configuration["Payments:ZaloPay:Key1"])
             && !string.IsNullOrWhiteSpace(configuration["Payments:ZaloPay:Key2"]);
-        var sePayLive =
-            !string.IsNullOrWhiteSpace(configuration["Payments:SePay:BankName"])
-            && !string.IsNullOrWhiteSpace(configuration["Payments:SePay:AccountNumber"]);
         var payOsLive = configuration.GetValue("Payments:PayOs:Enabled", true) && payee is { Active: true };
 
         // The simulator is only ever offered in Development; a real gateway is offered wherever it is configured.
         var platform = sandboxEnabled
-            ? new[] { "MOMO", "ZALOPAY", "SEPAY" }
-            : new[] { momoLive ? "MOMO" : null, zaloLive ? "ZALOPAY" : null, sePayLive ? "SEPAY" : null }
+            ? new[] { "MOMO", "ZALOPAY" }
+            : new[] { momoLive ? "MOMO" : null, zaloLive ? "ZALOPAY" : null }
                 .OfType<string>().ToArray();
         var providers = payOsLive ? ["PAYOS", .. platform] : platform;
 
         // Without the simulator, whatever is offered moves real money (a bank transfer is real money).
         var live = momoLive || zaloLive || payOsLive || !sandboxEnabled;
-        // The wallet gateways run against their test environments; a bank transfer does not.
-        var wallets = platform.Where(p => p is "MOMO" or "ZALOPAY").Select(p => p == "MOMO" ? "MoMo" : "ZaloPay").ToArray();
+        // The wallet gateways run against their test environments; a payOS bank transfer does not.
+        var wallets = platform.Select(p => p == "MOMO" ? "MoMo" : "ZaloPay").ToArray();
         return new
         {
             mode = providers.Length == 0 ? "UNAVAILABLE" : live ? "LIVE" : "SANDBOX",

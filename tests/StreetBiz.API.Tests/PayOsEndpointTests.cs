@@ -118,8 +118,8 @@ public sealed class PayOsEndpointTests
         var sandbox = Options(sandbox: true, Ward);
         var off = Options(sandbox: true, Ward, new() { ["Payments:PayOs:Enabled"] = "false" });
 
-        Assert.Equal(["PAYOS", "MOMO", "ZALOPAY", "SEPAY"], Providers(sandbox));
-        Assert.Equal(["MOMO", "ZALOPAY", "SEPAY"], Providers(off));
+        Assert.Equal(["PAYOS", "MOMO", "ZALOPAY"], Providers(sandbox));
+        Assert.Equal(["MOMO", "ZALOPAY"], Providers(off));
         Assert.Equal(JsonValueKind.Null, off.GetProperty("payee").ValueKind);
     }
 
@@ -129,10 +129,9 @@ public sealed class PayOsEndpointTests
         var configured = Options(sandbox: false, null, new()
         {
             ["Payments:Momo:PartnerCode"] = "p", ["Payments:Momo:SecretKey"] = "s",
-            ["Payments:SePay:BankName"] = "MBBank", ["Payments:SePay:AccountNumber"] = "0123456789",
         });
 
-        Assert.Equal(["MOMO", "SEPAY"], Providers(configured));
+        Assert.Equal(["MOMO"], Providers(configured));
         Assert.Equal("LIVE", configured.GetProperty("mode").GetString());
     }
 

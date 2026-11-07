@@ -126,7 +126,7 @@ public sealed class FinanceController(
         Ok(await sender.Send(new SyncFinancePaymentCommand(transactionId), cancellationToken));
 
     /// <summary>
-    /// FEE-01/FEE-04: the VietQR and transfer details of a payment still waiting for its SePay
+    /// FEE-01: the VietQR and transfer details of a payment still waiting for its payOS
     /// bank transfer, so the payment page can show them again after a reload.
     /// </summary>
     [HttpGet("payments/{transactionId:long}/bank-transfer")]

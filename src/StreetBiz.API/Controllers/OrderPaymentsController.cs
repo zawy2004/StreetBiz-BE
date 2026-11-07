@@ -30,7 +30,7 @@ public sealed class OrderPaymentsController(IHostEnvironment environment, IConfi
         Ok(PaymentOptions.Build(
             SandboxEnabled, configuration, await sender.Send(new GetStorefrontPayeeQuery(storefrontId), ct)));
 
-    /// <summary>The VietQR and transfer details of an order still waiting for its SePay bank transfer.</summary>
+    /// <summary>The VietQR and transfer details of an order still waiting for its payOS bank transfer.</summary>
     [HttpGet("{orderId:long}/payment/bank-transfer")]
     public async Task<ActionResult<BankTransferDto>> BankTransfer(long orderId, CancellationToken ct) =>
         Ok(await sender.Send(new GetOrderBankTransferQuery(orderId), ct));
