@@ -275,6 +275,8 @@ public sealed class ControllerEndpointContractTests
         "GET /api/ward/reports/debtors",
         "POST /api/ward/reports/debtors/{contractId}/remind",
         "GET /api/ward/reports/performance",
+        "GET /api/ward/reports/receipts",
+        "GET /api/ward/reports/receipts/{invoiceId}/pdf",
         "GET /api/ward/reports/receivables",
         "GET /api/ward/reports/refunds",
         "POST /api/ward/reports/refunds/{transactionId}/mark-refunded",

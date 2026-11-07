@@ -40,6 +40,25 @@ public sealed class WardCollectionController(ISender sender) : ControllerBase
         CancellationToken cancellationToken = default) =>
         Ok(await sender.Send(new GetCollectionTrendQuery(months), cancellationToken));
 
+    /// <summary>
+    /// "Lịch sử thu": every receipt of the ward in the period (default: this month), newest first,
+    /// with how it was paid and the reference to check it against.
+    /// </summary>
+    [HttpGet("receipts")]
+    public async Task<ActionResult<WardReceiptListDto>> Receipts(
+        [FromQuery] DateOnly? from,
+        [FromQuery] DateOnly? to,
+        CancellationToken cancellationToken) =>
+        Ok(await sender.Send(new ListWardReceiptsQuery(from, to), cancellationToken));
+
+    /// <summary>One receipt of the ward as the household's PDF; another ward's receipt is 404.</summary>
+    [HttpGet("receipts/{invoiceId:long}/pdf")]
+    public async Task<IActionResult> ReceiptPdf(long invoiceId, CancellationToken cancellationToken)
+    {
+        var file = await sender.Send(new GetWardReceiptPdfQuery(invoiceId), cancellationToken);
+        return File(file.Content, file.ContentType, file.FileName);
+    }
+
     /// <summary>Overdue fees by age, fees due in the next 30 days, and payments owed back.</summary>
     [HttpGet("receivables")]
     public async Task<ActionResult<ReceivablesDto>> Receivables(CancellationToken cancellationToken) =>
