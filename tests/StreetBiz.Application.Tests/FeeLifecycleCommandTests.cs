@@ -127,7 +127,7 @@ public sealed class FeeLifecycleCommandTests
 
         result.Should().Be(new StalePaymentSweepResult(1, 0));
         finance.Verify(f => f.ApplyPaymentCallbackAsync(
-            new PaymentCallbackData("MOMO", "momo-ref-1b", "idem-1", 990_000m, "SUCCESS", "{\"resultCode\":0}", true),
+            new PaymentCallbackData("MOMO", "momo-ref-1b", "idem-1", 990_000m, "SUCCESS", "{\"resultCode\":0}", true, null),
             It.IsAny<CancellationToken>()), Times.Once);
         finance.Verify(f => f.ClosePendingPaymentAsync(It.IsAny<long>(), It.IsAny<CancellationToken>()), Times.Never);
     }

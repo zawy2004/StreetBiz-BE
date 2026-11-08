@@ -109,6 +109,12 @@ public static class OfflinePaymentMethods
     public const string Cash = "CASH";
     public const string BankTransfer = "BANK_TRANSFER";
 
+    /// <summary>
+    /// A fine paid to the State Treasury, recorded when the ward accepts the household's receipt.
+    /// Not something an officer picks on the offline-payment form.
+    /// </summary>
+    public const string Treasury = "TREASURY";
+
     public static bool IsValid(string? value) => value is Cash or BankTransfer;
 }
 #endregion

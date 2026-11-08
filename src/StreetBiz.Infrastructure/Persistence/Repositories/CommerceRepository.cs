@@ -6,6 +6,7 @@ using StreetBiz.Application.Common.Interfaces;
 using StreetBiz.Application.Common.Models;
 using StreetBiz.Application.Common.Security;
 using StreetBiz.Application.Features.FoodSafety;
+using StreetBiz.Infrastructure.Payments;
 using StreetBiz.Infrastructure.Persistence.ScaffoldedModels;
 
 namespace StreetBiz.Infrastructure.Persistence.Repositories;
@@ -598,15 +599,28 @@ public sealed partial class CommerceRepository(
                 return await Finish(PaymentCallbackOutcome.Rejected, "REJECTED");
             }
 
+            // PAYOS: only the receiving account the transaction pays into may settle it, so a webhook
+            // (or a status answer) from any other channel is refused, whatever it reports.
+            if (!ProviderTransfers.FromItsPayee(payment.payee_account_id, callback))
+            {
+                return await Finish(PaymentCallbackOutcome.Rejected, "REJECTED");
+            }
+
+            // A bank transfer that arrives for a settled or cancelled order is real money that
+            // cannot be applied: recorded as REJECTED and raised as surplus for a manual refund.
             if (payment.transaction_status is PaymentSuccess or PaymentFailed)
             {
-                return await Finish(PaymentCallbackOutcome.Duplicate, "DUPLICATE");
+                return await db.IsNewTransferAsync(payment.transaction_id, callback, cancellationToken)
+                    ? await Finish(PaymentCallbackOutcome.Surplus, "REJECTED")
+                    : await Finish(PaymentCallbackOutcome.Duplicate, "DUPLICATE");
             }
 
             var order = payment.order;
             if (order.order_status != OrderStatuses.PendingPayment)
             {
-                return await Finish(PaymentCallbackOutcome.Rejected, "REJECTED");
+                return await db.IsNewTransferAsync(payment.transaction_id, callback, cancellationToken)
+                    ? await Finish(PaymentCallbackOutcome.Surplus, "REJECTED")
+                    : await Finish(PaymentCallbackOutcome.Rejected, "REJECTED");
             }
 
             var now = Now;

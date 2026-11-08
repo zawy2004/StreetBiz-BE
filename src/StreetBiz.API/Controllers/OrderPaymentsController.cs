@@ -1,7 +1,9 @@
 using MediatR;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using StreetBiz.Application.DTOs.Payments;
 using StreetBiz.Application.Features.Commerce;
+using StreetBiz.Application.Features.PayoutAccounts;
 using StreetBiz.API.Hubs;
 
 namespace StreetBiz.API.Controllers;
@@ -14,40 +16,24 @@ public sealed class OrderPaymentsController(IHostEnvironment environment, IConfi
 {
     private bool SandboxEnabled => environment.IsDevelopment() && configuration.GetValue<bool>("Payments:SandboxEnabled");
 
-    /// <summary>MoMo's own gateway is used whenever its merchant credentials are configured.</summary>
-    private bool MomoLive =>
-        !string.IsNullOrWhiteSpace(configuration["Payments:Momo:PartnerCode"])
-        && !string.IsNullOrWhiteSpace(configuration["Payments:Momo:SecretKey"]);
-
-    /// <summary>ZaloPay's gateway is offered only when it is switched on and has the credentials to sign a request.</summary>
-    private bool ZaloPayLive =>
-        configuration.GetValue<bool>("Payments:ZaloPay:Enabled")
-        && !string.IsNullOrWhiteSpace(configuration["Payments:ZaloPay:AppId"])
-        && !string.IsNullOrWhiteSpace(configuration["Payments:ZaloPay:Key1"])
-        && !string.IsNullOrWhiteSpace(configuration["Payments:ZaloPay:Key2"]);
-
+    /// <summary>The payment methods the platform offers, whoever is being paid.</summary>
     [HttpGet("payment-options")]
-    public IActionResult Options()
-    {
-        // The simulator is only ever offered in Development; a real gateway is offered wherever it is configured.
-        var momoLive = MomoLive;
-        var zaloLive = ZaloPayLive;
-        var providers = SandboxEnabled
-            ? new[] { "MOMO", "ZALOPAY" }
-            : new[] { momoLive ? "MOMO" : null, zaloLive ? "ZALOPAY" : null }.OfType<string>().ToArray();
-        var live = momoLive || zaloLive;
-        return Ok(new
-        {
-            mode = providers.Length == 0 ? "UNAVAILABLE" : live ? "LIVE" : "SANDBOX",
-            providers,
-            message = providers.Length == 0
-                ? "Thanh toán trực tuyến chưa sẵn sàng. Vui lòng thử lại sau."
-                : live
-                    ? "Thanh toán qua cổng " + string.Join(" / ", providers.Select(p => p == "MOMO" ? "MoMo" : "ZaloPay"))
-                        + " (môi trường test, không trừ tiền thật)."
-                    : "Thanh toán thử nghiệm, không trừ tiền thật."
-        });
-    }
+    public IActionResult Options() => Ok(PaymentOptions.Build(SandboxEnabled, configuration));
+
+    /// <summary>
+    /// The payment methods for an order from this storefront. PAYOS is offered, naming the household
+    /// that would be paid, only when the household has connected its own receiving account; without
+    /// it the storefront takes no online order by bank transfer.
+    /// </summary>
+    [HttpGet("storefronts/{storefrontId:long}/payment-options")]
+    public async Task<IActionResult> StorefrontOptions(long storefrontId, CancellationToken ct) =>
+        Ok(PaymentOptions.Build(
+            SandboxEnabled, configuration, await sender.Send(new GetStorefrontPayeeQuery(storefrontId), ct)));
+
+    /// <summary>The VietQR and transfer details of an order still waiting for its payOS bank transfer.</summary>
+    [HttpGet("{orderId:long}/payment/bank-transfer")]
+    public async Task<ActionResult<BankTransferDto>> BankTransfer(long orderId, CancellationToken ct) =>
+        Ok(await sender.Send(new GetOrderBankTransferQuery(orderId), ct));
 
     [HttpPost("{orderId:long}/payment/sandbox-fail")]
     public async Task<IActionResult> Fail(long orderId, CancellationToken ct)

@@ -159,6 +159,10 @@ public static class FinanceMessages
     public const string ProviderNotConfigured =
         "Cổng thanh toán này chưa được cấu hình. Vui lòng chọn phương thức khác.";
 
+    /// <summary>PAYOS: the ward of the slot has no ACTIVE receiving account, so a fee cannot go straight to it.</summary>
+    public const string WardNotAcceptingTransfers =
+        "Phường chưa mở nhận phí thuê ô qua chuyển khoản. Hãy nộp trực tiếp tại phường hoặc thử lại sau.";
+
     /// <summary>Sandbox-confirm refused for a MoMo transaction once MoMo's merchant keys are configured.</summary>
     public const string SandboxNotAvailableForRealProvider =
         "Cổng MoMo đang được cấu hình để thanh toán thật; không thể xác nhận giả lập giao dịch này.";

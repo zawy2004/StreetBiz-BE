@@ -239,8 +239,9 @@ public sealed class ZaloPayPaymentGatewayTests
         var settings = new PaymentGatewaySettings { ZaloPay = new PaymentProviderSettings { CallbackSecret = "template-secret" } };
         var gateway = new ConfiguredPaymentGateway(Options.Create(settings), new FakeFactory(new FakeZaloPay("{}")), new FixedTime(Now));
 
-        var valid = await gateway.VerifyCallbackAsync("ZALOPAY", raw, HexHmac("template-secret", raw), default);
-        var invalid = await gateway.VerifyCallbackAsync("ZALOPAY", raw, "00", default);
+        var valid = await gateway.VerifyCallbackAsync(
+            "ZALOPAY", raw, new PaymentCallbackHeaders(HexHmac("template-secret", raw)), default);
+        var invalid = await gateway.VerifyCallbackAsync("ZALOPAY", raw, new PaymentCallbackHeaders("00"), default);
 
         Assert.True(valid.SignatureValid);
         Assert.False(invalid.SignatureValid);

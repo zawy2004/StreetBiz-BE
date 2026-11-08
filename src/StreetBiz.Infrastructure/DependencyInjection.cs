@@ -104,7 +104,19 @@ public static class DependencyInjection
         services.AddFileStorage(configuration);
         services.AddHttpClient(MomoGateway.HttpClientName, client => client.Timeout = TimeSpan.FromSeconds(30));
         services.AddHttpClient(ZaloPayGateway.HttpClientName, client => client.Timeout = TimeSpan.FromSeconds(30));
+        services.AddHttpClient(PayOsGateway.HttpClientName, client => client.Timeout = TimeSpan.FromSeconds(15));
         services.AddSingleton<IPaymentGateway, ConfiguredPaymentGateway>();
+        // payOS: each household and ward is paid into its own channel; their keys are encrypted at rest.
+        services.AddSingleton<ICredentialProtector, AesGcmCredentialProtector>();
+        services.AddSingleton<IPayeeChannelGateway, PayOsChannelGateway>();
+        services.AddScoped<IPayeeAccountRepository, PayeeAccountRepository>();
+        services.AddScoped<IPaymentTransactionRepository, PaymentTransactionRepository>();
+        // Fines are paid to the State Treasury: the household's receipt and the ward's check of it.
+        services.AddScoped<StreetBiz.Application.Features.PenaltyReceipts.IPenaltyReceiptRepository, PenaltyReceiptRepository>();
+        services.Configure<AlertSettings>(configuration.GetSection(AlertSettings.SectionName));
+        // Short timeout: the alert is sent while payOS/MoMo waits for the callback's answer.
+        services.AddHttpClient<IPaymentAlertNotifier, DiscordPaymentAlertNotifier>(
+            client => client.Timeout = TimeSpan.FromSeconds(5));
         services.AddSingleton<IRefundGateway, ConfiguredRefundGateway>();
 
         services.AddScoped<IOtpService, OtpService>();
@@ -137,6 +149,13 @@ public static class DependencyInjection
         services.AddSingleton<IFinanceDocumentRenderer, Documents.FinanceDocumentRenderer>();
         services.Configure<FeeReminderOptions>(configuration.GetSection(FeeReminderOptions.SectionName));
         services.AddHostedService<FeeReminderHostedService>();
+
+        // Household tax (db/StreetBiz_SQL_Server.sql, section 12).
+        services.AddScoped<ITaxRepository, TaxRepository>();
+        services.AddSingleton<ITaxDocumentRenderer, Documents.TaxDocumentRenderer>();
+        services.Configure<TaxSweepOptions>(configuration.GetSection(TaxSweepOptions.SectionName));
+        services.AddHostedService<TaxSweepHostedService>();
+
         services.AddScoped<CommerceRepository>();
         services.AddScoped<ICommerceRepository>(provider => provider.GetRequiredService<CommerceRepository>());
 

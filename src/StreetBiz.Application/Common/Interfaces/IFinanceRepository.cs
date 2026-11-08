@@ -69,13 +69,6 @@ public interface IFinanceRepository
     Task<FinanceCheckoutTransactionRow> CreateFeeCheckoutAsync(
         long vendorId, long feeItemId, string provider, string idempotencyKey, CancellationToken cancellationToken);
 
-    /// <summary>FEE-04: the penalty as its owner sees it, or null.</summary>
-    Task<PenaltyCheckoutRow?> GetPenaltyForCheckoutAsync(long vendorId, long penaltyId, CancellationToken cancellationToken);
-
-    /// <summary>FEE-04: opens a PENDING PaymentTransactions row for the penalty.</summary>
-    Task<FinanceCheckoutTransactionRow> CreatePenaltyCheckoutAsync(
-        long vendorId, long penaltyId, string provider, string idempotencyKey, CancellationToken cancellationToken);
-
     /// <summary>Records the provider's own reference for a transaction once checkout returns one.</summary>
     Task SetPaymentProviderReferenceAsync(long transactionId, string providerReference, CancellationToken cancellationToken);
 

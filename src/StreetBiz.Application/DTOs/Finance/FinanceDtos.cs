@@ -1,5 +1,6 @@
 using System.Globalization;
 using StreetBiz.Application.Common.Models;
+using StreetBiz.Application.DTOs.Payments;
 
 namespace StreetBiz.Application.DTOs.Finance;
 
@@ -110,14 +111,18 @@ public sealed record InvoiceDetailDto(
     public string? AmountInWords { get; init; }
 }
 
-/// <summary>FEE-01/FEE-04: a checkout was opened, here is where to send the vendor to pay it.</summary>
+/// <summary>
+/// FEE-01/FEE-04: a checkout was opened, here is where to send the vendor to pay it. For PAYOS
+/// there is nowhere to send them: <c>BankTransfer</c> holds the VietQR to show instead.
+/// </summary>
 public sealed record FinanceCheckoutDto(
     long TransactionId,
     string Purpose,
     long ReferenceId,
     string Provider,
     decimal Amount,
-    string PaymentUrl);
+    string PaymentUrl,
+    BankTransferDto? BankTransfer = null);
 
 public static class FinanceMapper
 {
@@ -153,9 +158,6 @@ public static class FinanceMapper
 
     public static string FeeItemPeriodLabel(this FeeItemCheckoutRow row) =>
         PeriodLabel(row.Ordinal, row.OfCount, row.DueDate);
-
-    public static PenaltyDto ToDto(this PenaltyCheckoutRow row) => new(
-        row.PenaltyId, row.ViolationLabel, row.SlotCode, row.Amount, row.PenaltyStatus);
 
     public static InvoiceDto ToListDto(this InvoiceRow row) => new(
         row.InvoiceId, row.InvoiceNumber, row.Kind, row.Amount, row.IssuedAt, row.PeriodLabel);

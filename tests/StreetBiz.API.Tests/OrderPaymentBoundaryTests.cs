@@ -49,7 +49,27 @@ public sealed class OrderPaymentBoundaryTests
             Mock.Of<ISender>(), Mock.Of<IOrderPaymentTesting>(), Mock.Of<IOrderRealtimePublisher>());
         var options = JsonSerializer.SerializeToElement(Assert.IsType<OkObjectResult>(controller.Options()).Value);
         Assert.Equal("SANDBOX", options.GetProperty("mode").GetString());
-        Assert.Equal(2, options.GetProperty("providers").GetArrayLength());
+        Assert.Equal(["MOMO", "ZALOPAY"],
+            options.GetProperty("providers").EnumerateArray().Select(p => p.GetString()));
         Assert.Contains("không trừ tiền thật", options.GetProperty("message").GetString());
+    }
+
+    [Fact]
+    public void Outside_development_only_a_configured_wallet_is_offered()
+    {
+        var environment = new Mock<IHostEnvironment>();
+        environment.SetupGet(x => x.EnvironmentName).Returns("Production");
+        var configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["Payments:Momo:PartnerCode"] = "p",
+            ["Payments:Momo:SecretKey"] = "s",
+        }).Build();
+        var controller = new OrderPaymentsController(environment.Object, configuration,
+            Mock.Of<ISender>(), Mock.Of<IOrderPaymentTesting>(), Mock.Of<IOrderRealtimePublisher>());
+
+        var options = JsonSerializer.SerializeToElement(Assert.IsType<OkObjectResult>(controller.Options()).Value);
+
+        Assert.Equal(["MOMO"], options.GetProperty("providers").EnumerateArray().Select(p => p.GetString()));
+        Assert.Equal("LIVE", options.GetProperty("mode").GetString());
     }
 }

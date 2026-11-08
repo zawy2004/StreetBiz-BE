@@ -82,6 +82,28 @@ public sealed record ReceivablesDto(
     int RefundsPending,
     decimal RefundsPendingAmount);
 
+/// <summary>
+/// One receipt in the ward's "lịch sử thu": who paid what, when, how, and the reference to check it
+/// against. <c>PaymentStatus</c> is SUCCESS, or REFUND_REQUIRED / REFUNDED once the money is owed
+/// back (a fine whose decision was annulled); null when the receipt has no payment record.
+/// </summary>
+public sealed record WardReceiptDto(
+    long InvoiceId,
+    string InvoiceNumber,
+    DateTime IssuedAt,
+    string Kind,
+    string? PayerName,
+    string? PayerPhone,
+    string? SlotCode,
+    string Description,
+    decimal Amount,
+    string? Provider,
+    string? ProviderReference,
+    string? PaymentStatus);
+
+/// <summary>The receipts of a period, newest first, with the period actually used (defaults filled in).</summary>
+public sealed record WardReceiptListDto(DateOnly From, DateOnly To, IReadOnlyList<WardReceiptDto> Items);
+
 /// <summary>A payment owed back to a vendor (REFUND_REQUIRED) or already paid back (REFUNDED).</summary>
 public sealed record WardRefundDto(
     long TransactionId,

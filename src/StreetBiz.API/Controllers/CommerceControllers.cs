@@ -268,6 +268,29 @@ public sealed class PaymentCallbacksController(
     ISender sender,
     IOrderRealtimePublisher realtime) : ControllerBase
 {
+    /// <summary>
+    /// payOS's webhook for one payee's own channel: the token in the URL names the receiving account
+    /// whose checksum key verifies the body. Always 200 once recorded, so payOS does not retry a
+    /// REJECTED or UNMATCHED report.
+    /// </summary>
+    [HttpPost("payos/callback/{token}")]
+    public async Task<ActionResult<PaymentCallbackReceiptDto>> PayOsCallback(
+        string token,
+        CancellationToken cancellationToken)
+    {
+        using var reader = new StreamReader(Request.Body);
+        var rawPayload = await reader.ReadToEndAsync(cancellationToken);
+        var result = await sender.Send(
+            new ProcessPaymentCallbackCommand("PAYOS", rawPayload, null) { PayeeToken = token },
+            cancellationToken);
+        if (result.OrderId is { } orderId && result.OrderStatus is { } orderStatus)
+        {
+            await realtime.PublishAsync(orderId, orderStatus, cancellationToken);
+        }
+
+        return Ok(new { success = true, result = result.Result });
+    }
+
     [HttpPost("{provider}/callback")]
     public async Task<ActionResult<PaymentCallbackReceiptDto>> Callback(
         string provider,

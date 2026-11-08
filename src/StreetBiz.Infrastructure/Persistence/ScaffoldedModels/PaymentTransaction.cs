@@ -29,6 +29,12 @@ public partial class PaymentTransaction
 
     public DateTime created_at { get; set; }
 
+    public long? payee_account_id { get; set; }
+
+    public string? checkout_payload { get; set; }
+
+    public virtual PayeeAccount? payee_account { get; set; }
+
     public virtual ICollection<PaymentCallbackEvent> PaymentCallbackEvents { get; set; } = new List<PaymentCallbackEvent>();
 
     public virtual ICollection<RefundTransaction> RefundTransactions { get; set; } = new List<RefundTransaction>();

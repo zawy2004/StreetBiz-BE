@@ -50,6 +50,29 @@ public sealed class ChatbotPolicyTests
     }
 
     [Theory]
+    [InlineData("VENDOR")]
+    [InlineData("WARD_AUTHORITY")]
+    public void Household_tax_guide_answers_tax_questions_without_giving_legal_advice(string role)
+    {
+        var guides = new ChatbotKnowledge().Search(role, "Doanh thu của tôi đã chạm ngưỡng thuế chưa và kê khai thế nào?");
+
+        var guide = Assert.Single(guides, g => g.Id == "household-tax");
+        Assert.Contains("không khai, không nộp và không thu thuế thay hộ", guide.Text);
+        Assert.Contains("chỉ để tham khảo", guide.Text);
+    }
+
+    [Theory]
+    [InlineData("CUSTOMER")]
+    [InlineData("GUEST")]
+    [InlineData("PLATFORM_ADMIN")]
+    public void Household_tax_guide_is_not_offered_to_roles_without_a_household(string role)
+    {
+        var guides = new ChatbotKnowledge().Search(role, "Doanh thu của tôi đã chạm ngưỡng thuế chưa?");
+
+        Assert.DoesNotContain(guides, g => g.Id == "household-tax");
+    }
+
+    [Theory]
     [InlineData("VENDOR", "Hồ sơ kinh doanh của tôi đang ở bước nào?", "vendor.registrations")]
     [InlineData("VENDOR", "Tôi cần đóng khoản phí nào?", "vendor.finance")]
     [InlineData("VENDOR", "Hợp đồng của tôi khi nào hết hạn?", "vendor.contracts")]
