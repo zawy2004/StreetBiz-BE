@@ -1,0 +1,44 @@
+# Weekly update PRs into develop. They go through CI like any other PR; nothing merges on its own.
+version: 2
+updates:
+  - package-ecosystem: nuget
+    directory: /
+    target-branch: develop
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: Asia/Ho_Chi_Minh
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: build
+    labels: [dependencies]
+    groups:
+      # One PR for routine patch/minor bumps instead of one per package.
+      minor-and-patch:
+        update-types: [minor, patch]
+    ignore:
+      # The app targets .NET 8 (LTS); framework packages move with the runtime, not on their own.
+      - dependency-name: "Microsoft.AspNetCore.*"
+        update-types: [version-update:semver-major]
+      - dependency-name: "Microsoft.EntityFrameworkCore*"
+        update-types: [version-update:semver-major]
+      - dependency-name: "Microsoft.Extensions.*"
+        update-types: [version-update:semver-major]
+      # 3.2.0+ and 4.x fail every Release build without a paid Six Labors licence key
+      # (see StreetBiz.Infrastructure.csproj).
+      - dependency-name: "SixLabors.ImageSharp"
+        versions: [">= 3.2.0"]
+
+  - package-ecosystem: github-actions
+    directory: /
+    target-branch: develop
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: ci
+    labels: [dependencies]
+    groups:
+      actions:
+        patterns: ["*"]

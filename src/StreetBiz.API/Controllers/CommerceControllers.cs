@@ -8,6 +8,8 @@ using StreetBiz.Application.Common.Security;
 using StreetBiz.Application.Features.Commerce;
 using StreetBiz.Application.Features.Commerce.OrderTracking;
 using StreetBiz.API.Hubs;
+using Microsoft.AspNetCore.OutputCaching;
+using StreetBiz.API.Extensions;
 
 namespace StreetBiz.API.Controllers;
 
@@ -30,6 +32,7 @@ internal static class ZaloPayAcknowledgement
 public sealed class MarketplaceController(ISender sender) : ControllerBase
 {
     [HttpGet("menu-items")]
+    [OutputCache(PolicyName = PublicCache.Listing)]
     public async Task<ActionResult<IReadOnlyList<MarketplaceMenuItemDto>>> Search(
         [FromQuery] string? query,
         [FromQuery] int? wardId,
@@ -46,12 +49,14 @@ public sealed class MarketplaceController(ISender sender) : ControllerBase
             cancellationToken));
 
     [HttpGet("menu-items/{menuItemId:long}")]
+    [OutputCache(PolicyName = PublicCache.Listing)]
     public async Task<ActionResult<MarketplaceMenuItemDto>> Get(
         long menuItemId,
         CancellationToken cancellationToken) =>
         Ok(await sender.Send(new GetMarketplaceMenuItemQuery(menuItemId), cancellationToken));
 
     [HttpGet("service-areas")]
+    [OutputCache(PolicyName = PublicCache.Reference)]
     public async Task<ActionResult<IReadOnlyList<ServiceAreaDto>>> ServiceAreas(
         [FromQuery] decimal? latitude,
         [FromQuery] decimal? longitude,
@@ -81,11 +86,13 @@ public sealed class MarketplaceController(ISender sender) : ControllerBase
             cancellationToken));
 
     [HttpGet("categories")]
+    [OutputCache(PolicyName = PublicCache.Reference)]
     public async Task<ActionResult<IReadOnlyList<MarketplaceCategoryDto>>> Categories(
         CancellationToken cancellationToken) =>
         Ok(await sender.Send(new ListMarketplaceCategoriesQuery(), cancellationToken));
 
     [HttpGet("storefronts")]
+    [OutputCache(PolicyName = PublicCache.Listing)]
     public async Task<ActionResult<IReadOnlyList<StorefrontSummaryDto>>> Storefronts(
         [FromQuery] string? query,
         [FromQuery] int? wardId,
@@ -104,6 +111,7 @@ public sealed class MarketplaceController(ISender sender) : ControllerBase
             cancellationToken));
 
     [HttpGet("storefronts/{storefrontId:long}")]
+    [OutputCache(PolicyName = PublicCache.Listing)]
     public async Task<ActionResult<StorefrontDetailDto>> Storefront(
         long storefrontId,
         [FromQuery] decimal? latitude,
