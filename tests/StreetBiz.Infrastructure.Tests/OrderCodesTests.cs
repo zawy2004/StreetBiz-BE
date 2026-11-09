@@ -52,6 +52,10 @@ public sealed class OrderCodesTests
         var codes = Enumerable.Range(0, 5_000).Select(_ => OrderCodes.New(now)).ToList();
 
         Assert.All(codes, c => Assert.True(c.Length <= 30));
-        Assert.Equal(codes.Count, codes.Distinct().Count());
+        // 30^6 ≈ 729M codes a day: 5,000 of them collide about 1.7% of the time (birthday bound),
+        // which CommerceRepository absorbs by drawing again and the unique index backs up. Asking
+        // for zero repeats made this test fail about one run in sixty; more than two repeated
+        // codes (~1 in a million by chance) would mean the random part is broken.
+        Assert.True(codes.Count - codes.Distinct().Count() <= 2);
     }
 }
