@@ -3,12 +3,16 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using StreetBiz.Application.DTOs.PlatformAdministration;
 using StreetBiz.Application.Features.PlatformAdministration;
+using StreetBiz.API.Extensions;
 
 namespace StreetBiz.API.Controllers;
 
 [ApiController]
 [Authorize]
 [Route("api/platform")]
+// Food categories and hidden content appear on public pages; drop their cached copies on any change.
+[EvictsPublicCache(PublicCache.ReferenceTag)]
+[EvictsPublicCache(PublicCache.MarketplaceTag)]
 public sealed class PlatformAdministrationController(ISender sender) : ControllerBase
 {
     [HttpGet("me")]

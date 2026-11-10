@@ -1,12 +1,15 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using StreetBiz.Application.Features.Commerce;
+using StreetBiz.API.Extensions;
 
 namespace StreetBiz.API.Controllers;
 
 [ApiController]
 [Authorize]
 [Route("api/seller/storefronts")]
+// A seller's edit shows on the public storefront and menu at once, not after the 30 s cache.
+[EvictsPublicCache(PublicCache.MarketplaceTag)]
 public sealed class SellerStorefrontsController(ICommerceManagement service) : ControllerBase
 {
     [HttpGet]

@@ -62,6 +62,8 @@ builder.Services.AddCommunityApi();
 builder.Services.AddAuthRateLimits(builder.Environment);
 builder.Services.AddChatbotApi();
 builder.Services.AddAiRateLimit();
+builder.Services.AddHttpPerformance();
+builder.Services.AddAzureMonitorIfConfigured(builder.Configuration);
 // ai/vendor-assistant calls a paid LLM per request; an earlier draft left it [AllowAnonymous]
 // with no limit. Now [Authorize]-only, plus this per-account cap.
 builder.Services.AddRateLimiter(options =>
@@ -173,6 +175,7 @@ if (signDemoPermits)
 // actually received (a validation failure is a 400, not a 500).
 app.UseSerilogRequestLogging();
 app.UseExceptionHandler();
+app.UseResponseCompressionExceptSensitive();
 app.UseMiddleware<ChatbotEnvelopeMiddleware>();
 
 if (app.Environment.IsDevelopment())
@@ -207,6 +210,8 @@ app.UseCors(CorsSetup.PolicyName);
 app.UseAuthentication();
 app.UseAuthorization();
 app.UseRateLimiter();
+// After CORS and auth, so a cached public response still passes through them (PublicCache).
+app.UseOutputCache();
 // SignalR adds this for its own hubs; the chatbot voice relay is a plain WebSocket endpoint.
 app.UseWebSockets(new WebSocketOptions { KeepAliveInterval = TimeSpan.FromSeconds(20) });
 
