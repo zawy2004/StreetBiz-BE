@@ -6,7 +6,6 @@ using StreetBiz.Application.Common.Models;
 using StreetBiz.Application.Common.Security;
 using StreetBiz.Application.Features.Commerce;
 using StreetBiz.Application.Features.Finance.PayFee;
-using StreetBiz.Application.Features.Finance.PayPenalty;
 
 namespace StreetBiz.Application.Tests;
 
@@ -85,44 +84,11 @@ public sealed class FinancePaymentTests
     }
 
     [Fact]
-    public async Task Pay_penalty_refuses_a_waived_penalty()
-    {
-        var finance = new Mock<IFinanceRepository>();
-        finance.Setup(x => x.GetPenaltyForCheckoutAsync(4, 3, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new PenaltyCheckoutRow(3, 4, 5, "Đổ nước thải ra vỉa hè", "NVL-01", 750_000m, PenaltyStatuses.Waived));
-
-        var act = () => new PayPenaltyCommandHandler(VendorContext(), finance.Object, Mock.Of<IPaymentGateway>())
-            .Handle(new PayPenaltyCommand(3, "zalopay", "idem-2"), CancellationToken.None);
-
-        await act.Should().ThrowAsync<DomainRuleException>();
-    }
-
-    [Fact]
-    public async Task Pay_penalty_opens_a_checkout_for_an_unpaid_penalty()
-    {
-        var finance = new Mock<IFinanceRepository>();
-        finance.Setup(x => x.GetPenaltyForCheckoutAsync(4, 2, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new PenaltyCheckoutRow(2, 4, 5, "Kê bàn ghế chắn lối đi bộ", "NVL-08", 1_000_000m, PenaltyStatuses.Unpaid));
-        finance.Setup(x => x.CreatePenaltyCheckoutAsync(4, 2, "ZALOPAY", "idem-2", It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new FinanceCheckoutTransactionRow(202, "idem-2", "ZALOPAY", 1_000_000m));
-        var gateway = AvailableGateway();
-        gateway.Setup(x => x.CreateCheckoutAsync(It.IsAny<PaymentGatewayCheckoutRequest>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new PaymentGatewayCheckoutResult("streetbiz://pay/zalopay", "ZALO-REF-1"));
-
-        var result = await new PayPenaltyCommandHandler(VendorContext(), finance.Object, gateway.Object)
-            .Handle(new PayPenaltyCommand(2, "zalopay", "idem-2"), CancellationToken.None);
-
-        result.Purpose.Should().Be(PaymentPurposes.Penalty);
-        result.TransactionId.Should().Be(202);
-        finance.Verify(x => x.SetPaymentProviderReferenceAsync(202, "ZALO-REF-1", It.IsAny<CancellationToken>()));
-    }
-
-    [Fact]
     public async Task Callback_dispatches_a_rental_fee_purpose_to_finance_not_commerce()
     {
         var gateway = new Mock<IPaymentGateway>();
         gateway.Setup(x => x.VerifyCallbackAsync(
-                "MOMO", "payload", new PaymentCallbackHeaders("sig", null, null), It.IsAny<CancellationToken>()))
+                "MOMO", "payload", new PaymentCallbackHeaders("sig"), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new PaymentGatewayCallback("MOMO-REF", "idem-1", 1_040_000m, "SUCCESS", true));
         var commerce = new Mock<ICommerceRepository>(MockBehavior.Strict);
         var finance = new Mock<IFinanceRepository>();
@@ -146,7 +112,7 @@ public sealed class FinancePaymentTests
     {
         var gateway = new Mock<IPaymentGateway>();
         gateway.Setup(x => x.VerifyCallbackAsync(
-                "MOMO", "payload", new PaymentCallbackHeaders("sig", null, null), It.IsAny<CancellationToken>()))
+                "MOMO", "payload", new PaymentCallbackHeaders("sig"), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new PaymentGatewayCallback("MOMO-REF", "idem-9", 25_000m, "SUCCESS", true));
         var finance = new Mock<IFinanceRepository>();
         finance.Setup(x => x.FindPaymentPurposeAsync("MOMO-REF", "idem-9", It.IsAny<CancellationToken>()))

@@ -99,6 +99,86 @@ Set a real JWT signing key (>= 32 chars):
 dotnet user-secrets --project src/StreetBiz.API set "Jwt:SigningKey" "<a-long-random-secret>"
 ~~~
 
+### eKYC keys (REG-02: CCCD OCR and face match)
+
+FPT.AI is tried first, then Gemini. Each provider takes a pool of keys, rotated per request:
+
+1. FPT.AI keys, one after another. A key that is rate limited or out of quota (429), refused
+   (401, 403), failing (5xx) or unreachable hands over to the next FPT.AI key.
+2. Only when every FPT.AI key has failed: Gemini, with its own pool
+   (`AiCompliance:Gemini:ApiKeys`), rotated the same way.
+
+A photo FPT.AI reads but rejects (no card found, no face) is not retried on another key; it goes
+straight to Gemini. ID Recognition and Facematch are separate FPT.AI products with separate keys.
+Set them with user-secrets, never in a checked-in file (indexes start at 0; the single `ApiKey` /
+`FaceMatchApiKey` setting still works when there is one key):
+
+~~~powershell
+dotnet user-secrets --project src/StreetBiz.API set "AiCompliance:FptAi:ApiKeys:0" "<fpt-id-recognition-key-1>"
+dotnet user-secrets --project src/StreetBiz.API set "AiCompliance:FptAi:ApiKeys:1" "<fpt-id-recognition-key-2>"
+dotnet user-secrets --project src/StreetBiz.API set "AiCompliance:FptAi:FaceMatchApiKeys:0" "<fpt-facematch-key-1>"
+dotnet user-secrets --project src/StreetBiz.API set "AiCompliance:FptAi:FaceMatchApiKeys:1" "<fpt-facematch-key-2>"
+dotnet user-secrets --project src/StreetBiz.API set "AiCompliance:Gemini:ApiKeys:0" "<gemini-key-1>"
+~~~
+
+FPT.AI's out-of-credit answers seen so far (429 "API rate limit exceeded", 403 "You cannot consume
+this service", 200 with errorCode 1 "Out of transaction") all count as "this key is used up". If
+FPT.AI reads the front and then runs out on the back, Gemini reads the back and the two are merged.
+
+Gemini settings (`AiCompliance:Gemini:*`, all optional): `Model` is tried first, then each of
+`FallbackModels` (default `gemini-3.6-flash`). A model that is overloaded (5xx) or timed out is left
+at once for the next one; a key that is out of quota (429/403) hands over to the next key.
+`AttemptTimeoutSeconds` caps one call (default 20), `ThinkingBudget` defaults to 0 because reading
+a card needs no reasoning and thinking only adds latency. A whole eKYC request stops at 45 s with a
+"enter it by hand" answer, and the web client waits up to 60 s for these two endpoints.
+
+Use keys of accounts that are each entitled to their quota; check FPT.AI's terms before pooling
+free-trial accounts. Restart the API after changing keys. Only the last 4 characters of a key are
+written to the log.
+
+### Voice registration keys (X01: "Nói để đăng ký")
+
+The vendor tells the assistant about the business instead of typing; the assistant only drafts,
+and nothing is submitted until the vendor checks the card and taps "Đúng, nộp" (BR-41). No
+recording is stored: `AIAssistanceLogs` keeps the draft and a hash, `ChatbotAudits` the voice
+seconds. Two modes:
+
+| Mode | Needs | Without it |
+| --- | --- | --- |
+| Live conversation (Gemini Live) | `AiCompliance:Gemini:ApiKeys`, plus `Chatbot:Voice:Enabled` = `true` and `Chatbot:Voice:Model`, which are off and empty by default (see `Chatbot:Voice` in [chatbot-runbook.md](chatbot-runbook.md)) | The client falls back to tap-to-talk |
+| Tap-to-talk (record, then send) | `AiCompliance:Groq:ApiKeys` for speech to text; reading the answer tries Groq, then Gemini | The assistant asks the vendor to type the answer instead, which then needs the Gemini key; with no key at all the vendor uses the normal form |
+
+Set them like the eKYC keys (the Gemini pool is the same one, set once):
+
+~~~powershell
+dotnet user-secrets --project src/StreetBiz.API set "AiCompliance:Gemini:ApiKeys:0" "<gemini-key-1>"
+dotnet user-secrets --project src/StreetBiz.API set "AiCompliance:Groq:ApiKeys:0" "<groq-key-1>"
+dotnet user-secrets --project src/StreetBiz.API set "Chatbot:Voice:Enabled" "true"
+dotnet user-secrets --project src/StreetBiz.API set "Chatbot:Voice:Model" "gemini-3.8-live"
+~~~
+
+Optional, with defaults: `Features:VoiceRegistration` (`true`; `false` makes the X01 endpoints
+404), `AiCompliance:VoiceRegistration:Live` (`MaxSessionSeconds` 600, `IdleSeconds` 60,
+`MaxToolCalls` 40; the API refuses to start outside the supported range),
+`AiCompliance:VoiceRegistration:Extractors` (`["groq", "gemini"]`), `:GroqModel`
+(`openai/gpt-oss-120b`), `:GeminiModels` (`gemini-3.5-flash-lite`, `gemini-3.8-flash`),
+`:Vocabulary` (dishes and Đà Nẵng street names Whisper should expect) and
+`AiCompliance:Groq:SttModel` (`whisper-large-v3-turbo`).
+
+Clients:
+
+- Web: nothing to install. The "Nói để đăng ký" card, on the vendor home and on the first step of
+  a new registration, opens `/vendor/registrations/new/voice`. Browsers allow the microphone only
+  on `localhost` or HTTPS.
+- App (StreetBiz-App): run `npm install` once, because X01 adds `expo-audio` and `expo-speech`
+  (both work in Expo Go SDK 57, no native build). Allow the microphone. On the Android emulator also
+  run `adb reverse tcp:5023 tcp:5023` so the app reaches the API. "Nói để đăng ký" is on the
+  first step of the registration wizard.
+
+Free Gemini and Groq tiers may let the provider use what is sent. Before the pilot, use paid keys
+and have the consent screen say that the voice goes to an outside AI service; today it only says
+that the recording is not kept.
+
 ## Required reference data
 
 `role_code` is a FK to `Roles`. Ensure these exist:

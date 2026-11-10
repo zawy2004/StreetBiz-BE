@@ -58,8 +58,8 @@ PROVINCE/DISTRICT/WARD). Script chạy hai file theo thứ tự:
 
 | Thứ tự | File | Nội dung |
 |---|---|---|
-| 1 | `db/StreetBiz_SQL_Server.sql` | Schema (51 bảng, 5 trigger, 2 view, CHECK constraint), dữ liệu tham chiếu (4 vai trò, 10 đơn vị hành chính gồm 5 phường, 15 loại vi phạm) và đóng dấu `__EFMigrationsHistory` |
-| 2 | `db/StreetBiz_Demo_Seed.sql` | 10 tài khoản, 9 hồ sơ đăng ký đủ 7 trạng thái, ô vỉa hè, hợp đồng, gian hàng, đơn hàng |
+| 1 | `db/StreetBiz_SQL_Server.sql` | Schema (62 bảng, 5 trigger, 2 view, CHECK constraint), dữ liệu tham chiếu (4 vai trò; thành phố Đà Nẵng và 94 đơn vị cấp xã từ 1/7/2025: 23 phường, 70 xã, Đặc khu Hoàng Sa; 15 loại vi phạm) và đóng dấu `__EFMigrationsHistory` |
+| 2 | `db/StreetBiz_Demo_Seed.sql` | 10 tài khoản, 10 hồ sơ đăng ký đủ 7 trạng thái, ô vỉa hè, hợp đồng, gian hàng, đơn hàng |
 
 Tài khoản đăng nhập: xem [database.md](../database.md#demo-data) — tất cả
 dùng mật khẩu `Password123!`.
@@ -260,9 +260,9 @@ phường mình:
 
 | SĐT | Phường |
 |---|---|
-| 0983000001 | Phường Hải Châu 1 (ward 10) |
-| 0983000002 | Phường Thanh Khê Đông (ward 11) |
-| 0983000003 | Phường An Hải Bắc (ward 12) |
+| 0983000001 | Phường Hải Châu (ward 10) |
+| 0983000002 | Phường Thanh Khê (ward 11) |
+| 0983000003 | Phường An Hải (ward 12) |
 
 Vào tab **Hộp duyệt** (`/ward/inbox`) → tab **Hồ sơ đăng ký**, mở một hồ sơ rồi
 bấm một trong các nút: **Nhận xét duyệt** (chuyển sang ĐANG XÉT DUYỆT),
@@ -327,6 +327,7 @@ Bảng mã lỗi mà FE dựa vào:
 | `Failed to bind to address http://127.0.0.1:5023: address already in use` | Một API khác đang chạy. PowerShell: `Get-NetTCPConnection -LocalPort 5023 -State Listen` để lấy `OwningProcess`, rồi `Stop-Process -Id <id>` |
 | FE báo "Không kết nối được máy chủ", Console có lỗi **CORS** | API chưa chạy, hoặc chạy bản cũ. Ở Development, BE chấp nhận mọi cổng `localhost`; môi trường khác phải thêm địa chỉ FE vào `Cors:AllowedOrigins` |
 | Ô chọn phường trống / báo lỗi | Chưa seed phường → chạy lại `scripts/setup-local-db.ps1` |
+| Ô chọn phường chỉ có 5 phường cũ (Hải Châu 1, Thanh Khê Đông…) | DB dựng trước 10/2026 → dựng lại bằng `scripts/setup-local-db.ps1 -Recreate`, hoặc giữ dữ liệu và chạy hai script nâng cấp (xem [database.md](../database.md#upgrading-a-database-built-before-the-94-wards)) |
 | Lỗi 500 khi đăng ký | Thiếu bảng `Roles` / DB trống → chạy `scripts/setup-local-db.ps1` |
 | Không thấy OTP | Xem đúng terminal đang chạy API; tìm `[DEV-SMS]`. Script e2e cần API chạy kèm `| tee api.log` trong Git Bash (PowerShell `Tee-Object` ghi UTF-16, grep không đọc được) |
 | Đang đăng nhập nhưng mọi màn báo lỗi / bị đá ra | Token cũ từ phiên trước hoặc từ chế độ mock. Đăng xuất, hoặc xoá `streetbiz-auth` và `streetbiz-tokens` trong Local Storage |

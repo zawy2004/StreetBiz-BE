@@ -124,7 +124,10 @@ public sealed class WardApiTests
                 ["Jwt:Issuer"] = "StreetBiz",
                 ["Jwt:Audience"] = "StreetBiz",
                 ["WardDevelopment:AccessKey"] = DevKey,
-                ["WardDevelopment:UserId"] = "42"
+                ["WardDevelopment:UserId"] = "42",
+                // A Production host refuses to start without real token-signing keys.
+                ["Permit:SigningKey"] = Key,
+                ["OrderPickup:SigningKey"] = Key,
             }));
             builder.ConfigureServices(services =>
             {

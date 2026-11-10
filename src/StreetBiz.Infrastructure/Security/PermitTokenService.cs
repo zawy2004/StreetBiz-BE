@@ -11,6 +11,23 @@ public sealed class PermitSettings
 
     /// <summary>HMAC-SHA256 key for signing permit QR payloads. Must be set outside source control.</summary>
     public string SigningKey { get; init; } = string.Empty;
+
+    /// <summary>
+    /// The public web origin a printed QR links to: {PublicScanBaseUrl}/q/{token}, for example
+    /// http://&lt;LAN IP&gt;:5173 when scanning from a phone in a demo. Empty: no links, clients draw the
+    /// bare token as before.
+    /// </summary>
+    public string? PublicScanBaseUrl { get; init; }
+}
+
+/// <summary>Public permit links from <see cref="PermitSettings.PublicScanBaseUrl"/> (see <see cref="PermitQrText"/>).</summary>
+public sealed class PermitLinks(IOptions<PermitSettings> options) : IPermitLinks
+{
+    private readonly string? baseUrl = PermitQrText.NormalizeBaseUrl(options.Value.PublicScanBaseUrl);
+
+    public string? ScanUrl(string token, int? version = null) => PermitQrText.ScanUrl(baseUrl, token, version);
+
+    public string? PrintUrl(string token) => PermitQrText.PrintUrl(baseUrl, token);
 }
 
 /// <summary>

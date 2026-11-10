@@ -4,6 +4,8 @@ using StreetBiz.Application.Common.Exceptions;
 using StreetBiz.Application.Common.Interfaces;
 using StreetBiz.Application.Common.Security;
 using StreetBiz.Application.Features.Commerce;
+using StreetBiz.Application.Common.Models;
+using StreetBiz.Application.DTOs.Community;
 using StreetBiz.Application.Features.FoodSafety;
 using StreetBiz.Infrastructure.Persistence;
 using StreetBiz.Infrastructure.Persistence.ScaffoldedModels;
@@ -11,7 +13,8 @@ using StreetBiz.Infrastructure.Persistence.ScaffoldedModels;
 namespace StreetBiz.Infrastructure.Services;
 
 public sealed class CommerceManagement(StreetBizDbContext db, IVendorContext vendors,
-    ICustomerContext customers, IFileStorage storage, TimeProvider clock) : ICommerceManagement
+    ICustomerContext customers, IFileStorage storage, TimeProvider clock, IPermitLinks? permitLinks = null,
+    IPermitTokenService? permitTokens = null) : ICommerceManagement
 {
     private DateTime Now => clock.GetUtcNow().UtcDateTime;
     private DateOnly Today => DateOnly.FromDateTime(Now.AddHours(7));
@@ -36,7 +39,9 @@ public sealed class CommerceManagement(StreetBizDbContext db, IVendorContext ven
             var store = id.HasValue ? await OwnedStore(id.Value, vendor, ct) : new Storefront();
             if (id.HasValue && (store.registration_id != input.RegistrationId || store.contract_id != input.ContractId))
                 throw new ConflictException("Không thể đổi hồ sơ hoặc hợp đồng của gian hàng.");
-            if (id.HasValue && store.availability_status == "CLOSED" &&
+            // A moderator hides a storefront by pausing it and marking the report HIDDEN; the report
+            // is the record that the seller may not reopen it, whatever status the store shows now.
+            if (id.HasValue &&
                 await db.ReportedContents.AnyAsync(x => x.content_type == "STOREFRONT" &&
                     x.content_id == id.Value && x.status == "HIDDEN", ct))
                 throw new ForbiddenException("Gian hàng đã bị quản trị viên ẩn.");
@@ -66,6 +71,78 @@ public sealed class CommerceManagement(StreetBizDbContext db, IVendorContext ven
         return (await Stores(ct)).Single(x => x.StorefrontId == storeId);
     }
 
+    public async Task<StorefrontHoursDto> BusinessHours(long storeId, CancellationToken ct)
+    {
+        var vendor = await vendors.RequireVendorIdAsync(ct);
+        return await ReadHours(storeId, vendor, ct);
+    }
+
+    public async Task<StorefrontHoursDto> SaveBusinessHours(long storeId, StorefrontHoursInput input, CancellationToken ct)
+    {
+        var vendor = await vendors.RequireVendorIdAsync(ct);
+        await Write(async () =>
+        {
+            var store = await OwnedStore(storeId, vendor, ct);
+            var (from, to) = await RentalWindow(store.contract_id, ct);
+            // Validated against the zone's hours inside the transaction, so a ward changing them
+            // between the editor opening and saving cannot let a stale window through.
+            var rows = StorefrontHoursRules.Validate(input.Hours, from, to);
+
+            var existing = await db.StorefrontBusinessHours.Where(x => x.storefront_id == storeId).ToListAsync(ct);
+            db.StorefrontBusinessHours.RemoveRange(existing);
+            db.StorefrontBusinessHours.AddRange(rows.Select(row => new StorefrontBusinessHour
+            {
+                storefront_id = storeId,
+                day_of_week = row.DayOfWeek,
+                opens_at = row.OpensAt,
+                closes_at = row.ClosesAt,
+            }));
+            var ownerUserId = await db.Vendors.Where(x => x.vendor_id == vendor).Select(x => x.user_id).SingleAsync(ct);
+            db.AuditLogs.Add(new AuditLog
+            {
+                actor_user_id = ownerUserId,
+                action = "STORE_HOURS_UPDATE",
+                entity_type = "Storefront",
+                entity_id = storeId,
+                details = System.Text.Json.JsonSerializer.Serialize(new { before = existing.Count, after = rows.Count }),
+                created_at = Now,
+            });
+            store.updated_at = Now;
+            await db.SaveChangesAsync(ct);
+            return true;
+        }, ct);
+        return await ReadHours(storeId, vendor, ct);
+    }
+
+    private async Task<StorefrontHoursDto> ReadHours(long storeId, long vendor, CancellationToken ct)
+    {
+        var store = await db.Storefronts.AsNoTracking()
+            .Where(x => x.storefront_id == storeId && x.registration.vendor_id == vendor)
+            .Select(x => new { x.availability_status, x.contract_id })
+            .SingleOrDefaultAsync(ct)
+            ?? throw new NotFoundException("Không tìm thấy gian hàng của bạn.");
+        var rows = await db.StorefrontBusinessHours.AsNoTracking().Where(x => x.storefront_id == storeId)
+            .OrderBy(x => x.day_of_week).ThenBy(x => x.opens_at)
+            .Select(x => new StorefrontHourRow(x.day_of_week, x.opens_at, x.closes_at)).ToListAsync(ct);
+        var (from, to) = await RentalWindow(store.contract_id, ct);
+        return new StorefrontHoursDto(
+            storeId,
+            rows.Select(x => new BusinessHourItem(x.DayOfWeek, StorefrontHoursRules.Format(x.OpensAt), StorefrontHoursRules.Format(x.ClosesAt))).ToList(),
+            from is { } f && to is { } t ? new RentalWindowDto(StorefrontHoursRules.Format(f), StorefrontHoursRules.Format(t), f > t) : null,
+            store.availability_status,
+            store.availability_status == "OPEN" && StorefrontHours.IsOpen(rows, StorefrontHours.LocalNow(Now)));
+    }
+
+    /// <summary>The hours the ward rents the contract's pitch for (its zone's available_from/to), if it set any.</summary>
+    private async Task<(TimeOnly? From, TimeOnly? To)> RentalWindow(long contractId, CancellationToken ct)
+    {
+        var zone = await db.RentalContracts.AsNoTracking().Where(x => x.contract_id == contractId)
+            .Select(x => new { x.slot.zone.available_from, x.slot.zone.available_to }).SingleOrDefaultAsync(ct);
+        return zone is { available_from: not null, available_to: not null }
+            ? (zone.available_from, zone.available_to)
+            : (null, null);
+    }
+
     public async Task<IReadOnlyList<SellerCategoryDto>> Categories(CancellationToken ct)
     {
         await vendors.RequireVendorIdAsync(ct);
@@ -80,7 +157,7 @@ public sealed class CommerceManagement(StreetBizDbContext db, IVendorContext ven
             .OrderBy(x => x.menu_item_id).Select(x => new
             {
                 x.menu_item_id, x.storefront_id, x.category_id, x.category.category_name, x.category.requires_food_safety,
-                x.item_name, x.description, x.unit_price, x.availability_status, x.image_url,
+                x.item_name, x.description, x.unit_price, x.availability_status, x.image_url, x.item_name_en, x.price_unit,
                 Applications = x.FoodSafetyApplicationItems
                     .Select(a => new { a.application.application_status, a.application.expires_on }).ToList(),
             }).ToListAsync(ct);
@@ -94,7 +171,8 @@ public sealed class CommerceManagement(StreetBizDbContext db, IVendorContext ven
                 : x.Applications.Any(a => FoodSafetyStatuses.Open.Contains(a.application_status)) ? DishFoodSafetyStatuses.Pending
                 : DishFoodSafetyStatuses.Missing;
             return new SellerMenuItemDto(x.menu_item_id, x.storefront_id, x.category_id, x.item_name, x.description,
-                x.unit_price, x.availability_status, x.image_url, x.category_name, x.requires_food_safety, status, expiresOn);
+                x.unit_price, x.availability_status, x.image_url, x.category_name, x.requires_food_safety, status, expiresOn,
+                x.item_name_en, x.price_unit);
         }).ToList();
         return new SellerMenuDto(items, MenuRules.MaxActiveItemsPerStorefront);
     }
@@ -106,6 +184,12 @@ public sealed class CommerceManagement(StreetBizDbContext db, IVendorContext ven
         OptionalText(input.Description, 500);
         if (input.UnitPrice <= 0 || input.UnitPrice > 50_000_000 || decimal.Truncate(input.UnitPrice) != input.UnitPrice)
             throw new DomainRuleException("Giá món phải là số nguyên VND từ 1 đến 50.000.000.");
+        // BUY-06: a posted price names its unit (Luật Giá 2023 Điều 29); the English name is optional (D8).
+        Text(input.PriceUnit, PriceBoardRules.PriceUnitMaxLength, "Đơn vị tính");
+        if (input.NameEn?.Trim().Length > PriceBoardRules.NameEnMaxLength)
+            throw new DomainRuleException($"Tên tiếng Anh tối đa {PriceBoardRules.NameEnMaxLength} ký tự.");
+        var priceUnit = input.PriceUnit!.Trim();
+        var nameEn = string.IsNullOrWhiteSpace(input.NameEn) ? null : input.NameEn.Trim();
         if (input.AvailabilityStatus is not ("AVAILABLE" or "SOLD_OUT"))
             throw new DomainRuleException("Trạng thái món không hợp lệ.");
         var imageUrl = string.IsNullOrWhiteSpace(input.ImageUrl) ? null : input.ImageUrl.Trim();
@@ -137,6 +221,7 @@ public sealed class CommerceManagement(StreetBizDbContext db, IVendorContext ven
                     (FoodSafetyStatuses.Open.Contains(x.application.application_status) ||
                      (x.application.application_status == FoodSafetyStatuses.Approved && x.application.expires_on >= Today)), ct))
                 throw new ConflictException("Món đang có hồ sơ hoặc giấy ATTP; không thể đổi tên hay danh mục. Hãy thêm món mới.");
+            var before = itemId.HasValue ? PriceBoards.Snapshot(item) : default;
             if (!itemId.HasValue)
             {
                 item.storefront_id = storeId;
@@ -144,12 +229,20 @@ public sealed class CommerceManagement(StreetBizDbContext db, IVendorContext ven
                 db.MenuItems.Add(item);
             }
             item.item_name = input.Name.Trim();
+            item.item_name_en = nameEn;
             item.description = input.Description?.Trim();
             item.category_id = input.CategoryId;
             item.unit_price = input.UnitPrice;
+            item.price_unit = priceUnit;
             item.availability_status = input.AvailabilityStatus;
             if (imageUrl is not null) item.image_url = imageUrl;
             item.updated_at = Now;
+            // Price history in the same transaction (BUY-06): a new dish, or any change to what the
+            // board says about it. A new photo or description is not a new price.
+            if (!itemId.HasValue)
+                PriceBoards.Record(db, item, PriceBoardRules.Created, await OwnerUserId(vendor, ct), Now);
+            else if (PriceBoards.Snapshot(item) != before)
+                PriceBoards.Record(db, item, PriceBoardRules.Updated, await OwnerUserId(vendor, ct), Now);
             await db.SaveChangesAsync(ct);
             savedId = item.menu_item_id;
             return true;
@@ -165,12 +258,83 @@ public sealed class CommerceManagement(StreetBizDbContext db, IVendorContext ven
             await OwnedStore(storeId, vendor, ct);
             var item = await db.MenuItems.SingleOrDefaultAsync(x => x.menu_item_id == itemId && x.storefront_id == storeId, ct)
                 ?? throw new NotFoundException("Không tìm thấy món.");
+            var wasListed = PriceBoardRules.IsListed(item.availability_status);
             item.availability_status = "ARCHIVED";
             item.updated_at = Now;
+            // Taking a dish off the board is a board change; one already off it (hidden) is not.
+            if (wasListed)
+                PriceBoards.Record(db, item, PriceBoardRules.Archived, await OwnerUserId(vendor, ct), Now);
             await db.SaveChangesAsync(ct);
             return true;
         }, ct);
     }
+
+    /// <summary>
+    /// BUY-06: the board as it stands, its version, the 50 latest changes with the price before each,
+    /// and the public links for one paper board per slot the business holds. Each link wraps that
+    /// slot's live permit token (never a new code); without one, or without Permit:PublicScanBaseUrl,
+    /// they are null.
+    /// </summary>
+    public async Task<SellerPriceBoardDto> PriceBoard(long storeId, CancellationToken ct)
+    {
+        var vendor = await vendors.RequireVendorIdAsync(ct);
+        var board = await PriceBoards.ReadAsync(db,
+                db.Storefronts.Where(x => x.storefront_id == storeId && x.registration.vendor_id == vendor), ct)
+            ?? throw new NotFoundException("Không tìm thấy gian hàng của bạn.");
+        var history = await db.MenuItemPriceHistories.AsNoTracking()
+            .Where(x => x.storefront_id == storeId)
+            .OrderByDescending(x => x.changed_at).ThenByDescending(x => x.price_history_id)
+            .Take(PriceBoardRules.HistoryTake)
+            .Select(x => new
+            {
+                x.price_history_id, x.menu_item_id, x.item_name, x.item_name_en, x.price_unit, x.unit_price,
+                x.is_listed, x.change_kind, x.changed_at,
+                ChangedByRole = x.changed_byNavigation.role_code,
+                ChangedByName = x.changed_byNavigation.full_name,
+                PreviousUnitPrice = db.MenuItemPriceHistories
+                    .Where(p => p.menu_item_id == x.menu_item_id && p.price_history_id < x.price_history_id)
+                    .OrderByDescending(p => p.price_history_id)
+                    .Select(p => (decimal?)p.unit_price)
+                    .FirstOrDefault(),
+            })
+            .ToListAsync(ct);
+        // Every slot of this business with a permit that is live (or about to be): one paper board each.
+        // A token that does not parse (the demo seed's DO-NOT-SCAN placeholders) would print a QR that
+        // can only ever fail, so it is left out.
+        var registrationId = await db.Storefronts.AsNoTracking()
+            .Where(x => x.storefront_id == board.StorefrontId).Select(x => x.registration_id).SingleAsync(ct);
+        var today = Today;
+        var permits = await db.DigitalPermits.AsNoTracking()
+            .Where(x => x.permit_status == PermitStatuses.Active
+                && x.contract.contract_status == ContractStatuses.Active
+                && x.contract.end_date >= today
+                && x.contract.application.registration_id == registrationId)
+            .OrderBy(x => x.contract_id == board.ContractId ? 0 : 1).ThenBy(x => x.contract.slot.slot_code)
+            .Select(x => new { x.permit_id, x.contract_id, SlotCode = x.contract.slot.slot_code, x.qr_payload })
+            .ToListAsync(ct);
+        var boards = permits
+            .Where(x => permitTokens is null || permitTokens.TryParse(x.qr_payload, out _))
+            .Select(x => new PriceBoardPermitDto(x.permit_id, x.contract_id, x.SlotCode,
+                permitLinks?.ScanUrl(x.qr_payload, board.Version), permitLinks?.PrintUrl(x.qr_payload)))
+            .ToList();
+        return new SellerPriceBoardDto(
+            board.StorefrontId,
+            board.StorefrontName,
+            board.SlotCode,
+            board.Version,
+            board.UpdatedAt is { } updated ? DateTime.SpecifyKind(updated, DateTimeKind.Utc) : null,
+            boards.FirstOrDefault()?.QrUrl,
+            boards.FirstOrDefault()?.PrintUrl,
+            board.Items.Select(x => new PriceBoardItemDto(x.MenuItemId, x.Name, x.NameEn, x.PriceUnit, x.UnitPrice)).ToList(),
+            history.Select(x => new PriceHistoryEntryDto(
+                x.price_history_id, x.menu_item_id, x.item_name, x.item_name_en, x.price_unit, x.unit_price,
+                x.PreviousUnitPrice, x.is_listed, x.change_kind, DateTime.SpecifyKind(x.changed_at, DateTimeKind.Utc),
+                x.ChangedByRole == RoleCodes.Vendor ? x.ChangedByName ?? "Người bán" : "Quản trị viên")).ToList(),
+            boards);
+    }
+
+    private Task<long> OwnerUserId(long vendor, CancellationToken ct) =>
+        db.Vendors.Where(x => x.vendor_id == vendor).Select(x => x.user_id).SingleAsync(ct);
 
     public async Task<IReadOnlyList<CustomerComplaintDto>> Complaints(long orderId, CancellationToken ct)
     {
@@ -215,8 +379,10 @@ public sealed class CommerceManagement(StreetBizDbContext db, IVendorContext ven
     public async Task<OrderReviewDto?> Review(long orderId, CancellationToken ct)
     {
         await OwnedOrder(orderId, await customers.RequireCustomerUserIdAsync(ct), ct);
-        return await db.Reviews.AsNoTracking().Where(x => x.order_id == orderId)
-            .Select(x => new OrderReviewDto(x.review_id, x.rating, x.review_text)).SingleOrDefaultAsync(ct);
+        var review = await db.Reviews.AsNoTracking().Where(x => x.order_id == orderId)
+            .Select(x => new { x.review_id, x.rating, x.review_text, x.created_at }).SingleOrDefaultAsync(ct);
+        return review is null ? null : new OrderReviewDto(review.review_id, review.rating, review.review_text,
+            DateTime.SpecifyKind(ReviewRules.EditableUntil(review.created_at), DateTimeKind.Utc));
     }
 
     public async Task<OrderReviewDto> SaveReview(long orderId, OrderReviewInput input, CancellationToken ct)
@@ -231,6 +397,10 @@ public sealed class CommerceManagement(StreetBizDbContext db, IVendorContext ven
             var row = await db.Reviews.SingleOrDefaultAsync(x => x.order_id == orderId, ct);
             if (row is not null && await db.ReportedContents.AnyAsync(x => x.content_type == "REVIEW" && x.content_id == row.review_id && x.status == "HIDDEN", ct))
                 throw new ForbiddenException("Đánh giá đã bị quản trị viên ẩn.");
+            // BR-68: the first submission is open to anyone with a completed order; an edit has to come
+            // within the editing period counted from that first submission, not from the last edit.
+            if (row is not null && Now > ReviewRules.EditableUntil(row.created_at))
+                throw new DomainRuleException(ReviewRules.EditWindowClosed);
             if (row is null)
             {
                 row = new Review { order_id = orderId, customer_user_id = customer, created_at = Now };
@@ -240,7 +410,8 @@ public sealed class CommerceManagement(StreetBizDbContext db, IVendorContext ven
             row.rating = input.Rating;
             row.review_text = input.Text?.Trim();
             await db.SaveChangesAsync(ct);
-            return new OrderReviewDto(row.review_id, row.rating, row.review_text);
+            return new OrderReviewDto(row.review_id, row.rating, row.review_text,
+                DateTime.SpecifyKind(ReviewRules.EditableUntil(row.created_at), DateTimeKind.Utc));
         }, ct);
     }
 

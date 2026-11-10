@@ -29,6 +29,12 @@ public sealed class ChatbotSettings
     public int MaxTurnTokenBudget { get; set; } = 28000;
     public int GlobalConcurrentTurns { get; set; } = 8;
     public int RetentionDays { get; set; } = 30;
+
+    /// <summary>
+    /// Minutes between retention runs (15..1440). Six hours by default: often enough for a 30-day
+    /// rule, rare enough to let a serverless database pause between runs.
+    /// </summary>
+    public int RetentionSweepMinutes { get; set; } = 360;
 }
 
 public sealed class ChatbotProviderException(string category, bool transient) : Exception(category)

@@ -29,5 +29,15 @@ public interface IWardReportRepository
     Task<IReadOnlyList<WardInvoiceRow>> ListWardInvoicesAsync(
         int wardUnitId, DateOnly from, DateOnly to, CancellationToken cancellationToken);
 
+    /// <summary>
+    /// "Lịch sử thu": every receipt issued in the ward between two dates (inclusive), newest first,
+    /// each with the payment behind it.
+    /// </summary>
+    Task<IReadOnlyList<WardReceiptRow>> ListWardReceiptsAsync(
+        int wardUnitId, DateOnly from, DateOnly to, CancellationToken cancellationToken);
+
+    /// <summary>The household a receipt was issued to, when the receipt is one of this ward's; otherwise null.</summary>
+    Task<long?> GetReceiptVendorAsync(int wardUnitId, long invoiceId, CancellationToken cancellationToken);
+
     Task<string?> GetWardNameAsync(int wardUnitId, CancellationToken cancellationToken);
 }

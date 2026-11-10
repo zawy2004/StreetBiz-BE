@@ -18,6 +18,18 @@ public sealed class GeminiLiveVoiceTests
         Assert.NotNull(setup["inputAudioTranscription"]); Assert.NotNull(setup["outputAudioTranscription"]);
         Assert.Equal(700, setup["realtimeInputConfig"]!["automaticActivityDetection"]!["silenceDurationMs"]!.GetValue<int>());
         Assert.Equal("vendor__finance", setup["tools"]![0]!["functionDeclarations"]![0]!["name"]!.GetValue<string>());
+        // The chatbot may keep talking while it looks something up.
+        Assert.Null(setup["tools"]![0]!["functionDeclarations"]![0]!["behavior"]);
+    }
+
+    [Fact]
+    public void Voice_registration_tools_make_the_model_wait_for_the_servers_next_question()
+    {
+        var schema = JsonSerializer.SerializeToElement(new { type = "object" });
+        var setup = GeminiLiveVoiceProvider.Setup(new() { Model = "live-model" },
+            new("Trợ lý đăng ký.", [new("propose_fields", "Ghi đề xuất", schema)], BlockingTools: true))["setup"]!;
+        Assert.Equal("BLOCKING", setup["tools"]![0]!["functionDeclarations"]![0]!["behavior"]!.GetValue<string>());
+        Assert.Equal("propose_fields", setup["tools"]![0]!["functionDeclarations"]![0]!["name"]!.GetValue<string>());
     }
 
     [Fact]

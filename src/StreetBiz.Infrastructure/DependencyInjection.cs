@@ -38,6 +38,8 @@ public static class DependencyInjection
         services.AddScoped<WardSlots>();
         services.AddScoped<IWardSlots>(provider => provider.GetRequiredService<WardSlots>());
         services.AddScoped<IWardComplianceService, WardComplianceService>();
+        // Failed AI document checks are remembered across requests (see DocumentCheckFailures).
+        services.AddSingleton<DocumentCheckFailures>();
         services.AddScoped<StreetBiz.Application.Features.WardConfiguration.IWardConfigurationService, WardConfigurationService>();
         services.AddScoped<StreetBiz.Application.Features.AiAssistance.IAiAssistanceLogs, AiAssistanceLogs>();
         services.AddScoped<StreetBiz.Application.Features.AiAssistance.IWardAiInsights, WardAiInsights>();
@@ -101,10 +103,18 @@ public static class DependencyInjection
             });
         services.AddFileStorage(configuration);
         services.AddHttpClient(MomoGateway.HttpClientName, client => client.Timeout = TimeSpan.FromSeconds(30));
-        services.AddHttpClient(SePayGateway.HttpClientName, client => client.Timeout = TimeSpan.FromSeconds(15));
+        services.AddHttpClient(ZaloPayGateway.HttpClientName, client => client.Timeout = TimeSpan.FromSeconds(30));
+        services.AddHttpClient(PayOsGateway.HttpClientName, client => client.Timeout = TimeSpan.FromSeconds(15));
         services.AddSingleton<IPaymentGateway, ConfiguredPaymentGateway>();
+        // payOS: each household and ward is paid into its own channel; their keys are encrypted at rest.
+        services.AddSingleton<ICredentialProtector, AesGcmCredentialProtector>();
+        services.AddSingleton<IPayeeChannelGateway, PayOsChannelGateway>();
+        services.AddScoped<IPayeeAccountRepository, PayeeAccountRepository>();
+        services.AddScoped<IPaymentTransactionRepository, PaymentTransactionRepository>();
+        // Fines are paid to the State Treasury: the household's receipt and the ward's check of it.
+        services.AddScoped<StreetBiz.Application.Features.PenaltyReceipts.IPenaltyReceiptRepository, PenaltyReceiptRepository>();
         services.Configure<AlertSettings>(configuration.GetSection(AlertSettings.SectionName));
-        // Short timeout: the alert is sent while SePay/MoMo waits for the callback's answer.
+        // Short timeout: the alert is sent while payOS/MoMo waits for the callback's answer.
         services.AddHttpClient<IPaymentAlertNotifier, DiscordPaymentAlertNotifier>(
             client => client.Timeout = TimeSpan.FromSeconds(5));
         services.AddSingleton<IRefundGateway, ConfiguredRefundGateway>();
@@ -131,13 +141,34 @@ public static class DependencyInjection
         services.AddScoped<IChatRepository, ChatRepository>();
         services.AddScoped<INotificationRepository, NotificationRepository>();
         services.AddScoped<IPlatformAdministrationRepository, PlatformAdministrationRepository>();
+        services.AddScoped<IPlatformReportRepository, PlatformReportRepository>();
+        services.AddScoped<IContentReportRepository, ContentReportRepository>();
+        services.AddSingleton<IPlatformReportRenderer, Documents.PlatformReportRenderer>();
         services.AddScoped<IFinanceRepository, FinanceRepository>();
         services.AddScoped<IWardReportRepository, WardReportRepository>();
         services.AddScoped<StreetBiz.Application.Features.RegistrationIntegrity.IRegistrationIntegrityReader, RegistrationIntegrityReader>();
         services.AddSingleton<IFinanceDocumentRenderer, Documents.FinanceDocumentRenderer>();
         services.Configure<FeeReminderOptions>(configuration.GetSection(FeeReminderOptions.SectionName));
         services.AddHostedService<FeeReminderHostedService>();
-        services.AddScoped<ICommerceRepository, CommerceRepository>();
+
+        // Household tax (db/StreetBiz_SQL_Server.sql, section 12).
+        services.AddScoped<ITaxRepository, TaxRepository>();
+        services.AddSingleton<ITaxDocumentRenderer, Documents.TaxDocumentRenderer>();
+        services.Configure<TaxSweepOptions>(configuration.GetSection(TaxSweepOptions.SectionName));
+        services.AddHostedService<TaxSweepHostedService>();
+
+        services.AddScoped<CommerceRepository>();
+        services.AddScoped<ICommerceRepository>(provider => provider.GetRequiredService<CommerceRepository>());
+
+        // AIP-01..04 and AIB-01: the model only suggests (BR-41); every feature falls back when it is off or down.
+        services.AddSingleton<StreetBiz.Application.Features.AiMarketplace.IAiFeatureGate, Services.AiFeatureGate>();
+        services.AddScoped<StreetBiz.Application.Features.AiMarketplace.IAiSuggestionClient, Services.GeminiSuggestionClient>();
+        services.AddScoped<StreetBiz.Application.Features.AiMarketplace.IAiMarketplaceRepository, AiMarketplaceRepository>();
+        services.AddScoped<StreetBiz.Application.Features.AiMarketplace.IVendorReportAssistant, StreetBiz.Application.Features.AiMarketplace.VendorReportAssistant>();
+        services.AddSingleton<Services.VendorReportPreprocessor>();
+        services.AddSingleton<StreetBiz.Application.Features.AiMarketplace.IVendorReportPreprocessor>(
+            provider => provider.GetRequiredService<Services.VendorReportPreprocessor>());
+        services.AddHostedService(provider => provider.GetRequiredService<Services.VendorReportPreprocessor>());
         services.AddScoped<IOrderTrackingRepository, OrderTrackingRepository>();
         services.AddScoped<IVendorFinanceRepository, VendorFinanceRepository>();
         services.AddScoped<IWardCollectionRepository, WardCollectionRepository>();
@@ -145,10 +176,20 @@ public static class DependencyInjection
         services.AddScoped<StreetBiz.Application.Features.FoodSafety.IFoodSafetyService, FoodSafetyService>();
         services.AddScoped<StreetBiz.Application.Features.Commerce.IOrderPaymentTesting, OrderPaymentTesting>();
 
-        services.Configure<PermitSettings>(configuration.GetSection(PermitSettings.SectionName));
+        services.AddTokenSigningOptions(configuration);
         services.AddSingleton<IPermitTokenService, PermitTokenService>();
-        services.Configure<OrderPickupSettings>(
-            configuration.GetSection(OrderPickupSettings.SectionName));
+        services.AddSingleton<IPermitLinks, PermitLinks>();
+
+        // BUY-07 / WARD-19: the ward's internal target for closing a citizen report (D4: 7 working days).
+        var vendorReports = new VendorReportSettings();
+        configuration.GetSection(VendorReportSettings.SectionName).Bind(vendorReports);
+        if (vendorReports.DueWorkingDays is < 1 or > 60)
+        {
+            throw new InvalidOperationException("VendorReports:DueWorkingDays must be between 1 and 60.");
+        }
+
+        services.AddSingleton(vendorReports);
+        services.AddScoped<StreetBiz.Application.Features.VendorReports.IVendorReportDecisions, VendorReportDecisions>();
         services.AddSingleton<IOrderPickupTokenService, OrderPickupTokenService>();
 
         services.Configure<Sidewalk.SidewalkSettings>(configuration.GetSection(Sidewalk.SidewalkSettings.SectionName));
@@ -158,13 +199,21 @@ public static class DependencyInjection
 
         services.Configure<NominatimSettings>(configuration.GetSection(NominatimSettings.SectionName));
         services.AddMemoryCache();
-        services.AddHttpClient<IGeocodingService, NominatimGeocodingService>((sp, client) =>
+        services.AddHttpClient<NominatimGeocodingService>((sp, client) =>
         {
             var settings = sp.GetRequiredService<IOptions<NominatimSettings>>().Value;
             client.BaseAddress = new Uri(settings.BaseUrl.TrimEnd('/') + "/");
             client.Timeout = TimeSpan.FromSeconds(settings.TimeoutSeconds);
             client.DefaultRequestHeaders.UserAgent.ParseAdd(settings.UserAgent);
         });
+        services.AddHttpClient<EsriGeocodingService>(client =>
+        {
+            client.BaseAddress = new Uri(EsriGeocodingService.BaseUrl);
+            client.Timeout = TimeSpan.FromSeconds(8);
+        });
+        // Interactive search: Esri first (Nominatim is unreachable from the team's network), then
+        // Nominatim; stored forward lookups keep Nominatim first. See FallbackGeocodingService.
+        services.AddTransient<IGeocodingService, FallbackGeocodingService>();
 
         // Key comes from configuration (dotnet user-secrets / env var) only --
         // never hardcode AiCompliance:Gemini:ApiKey/FptAi:ApiKey/Groq:ApiKeys in
@@ -195,7 +244,69 @@ public static class DependencyInjection
             client.Timeout = TimeSpan.FromSeconds(30);
         });
 
+        // X01 "Kể chuyện là xong": speech to text + extraction for the voice registration interview.
+        // Same keys and rotation as the services above (AiKeyPools).
+        services.AddHttpClient<StreetBiz.Application.Features.VendorRegistration.AssistTurn.ISpeechToText,
+            Services.Voice.GroqWhisperSpeechToText>(client => client.Timeout = TimeSpan.FromSeconds(20));
+        services.AddHttpClient<Services.Voice.GroqRegistrationExtractor>(client => client.Timeout = TimeSpan.FromSeconds(20));
+        services.AddTransient<Services.Voice.GeminiRegistrationExtractor>();
+        services.AddTransient<StreetBiz.Application.Features.VendorRegistration.AssistTurn.IRegistrationExtractor,
+            Services.Voice.CompositeRegistrationExtractor>();
+
+        // X01 v2: the same interview as a live conversation, over the chatbot's Gemini Live relay.
+        var registrationVoice = new StreetBiz.Application.Features.VendorRegistration.AssistTurn.RegistrationVoiceSettings();
+        configuration.GetSection("AiCompliance:VoiceRegistration:Live").Bind(registrationVoice);
+        if (registrationVoice.MaxSessionSeconds is < 60 or > 900 || registrationVoice.IdleSeconds is < 20 or > 300
+            || registrationVoice.MaxToolCalls is < 5 or > 100 || registrationVoice.EvidenceWaitMs is < 0 or > 3000)
+        {
+            throw new InvalidOperationException("AiCompliance:VoiceRegistration:Live settings exceed supported limits.");
+        }
+
+        services.AddSingleton(registrationVoice);
+        services.AddSingleton<StreetBiz.Application.Features.VendorRegistration.AssistTurn.RegistrationVoiceTickets>();
+        services.AddScoped<StreetBiz.Application.Features.VendorRegistration.AssistTurn.RegistrationVoiceService>();
+
         return services;
+    }
+
+    /// <summary>
+    /// Binds the HMAC keys behind permit QR codes and pickup codes. An empty key still
+    /// "signs", so anyone who knows the token format could mint a valid permit or collect
+    /// someone else's order; outside Development and Testing the app refuses to start
+    /// without a real key instead of running that way silently.
+    /// </summary>
+    public static IServiceCollection AddTokenSigningOptions(
+        this IServiceCollection services, IConfiguration configuration)
+    {
+        services.AddOptions<PermitSettings>()
+            .Bind(configuration.GetSection(PermitSettings.SectionName))
+            .PostConfigure<IHostEnvironment>((settings, env) =>
+                RequireSigningKey(env, $"{PermitSettings.SectionName}:SigningKey", settings.SigningKey))
+            .ValidateOnStart();
+        services.AddOptions<OrderPickupSettings>()
+            .Bind(configuration.GetSection(OrderPickupSettings.SectionName))
+            .PostConfigure<IHostEnvironment>((settings, env) =>
+                RequireSigningKey(env, $"{OrderPickupSettings.SectionName}:SigningKey", settings.SigningKey))
+            .ValidateOnStart();
+        return services;
+    }
+
+    /// <summary>HMAC-SHA256 keys shorter than its 32-byte block are weaker than the algorithm.</summary>
+    public const int MinimumSigningKeyLength = 32;
+
+    private static void RequireSigningKey(IHostEnvironment env, string name, string? key)
+    {
+        if (env.IsDevelopment() || env.IsEnvironment("Testing"))
+        {
+            return;
+        }
+
+        if ((key?.Length ?? 0) < MinimumSigningKeyLength)
+        {
+            throw new InvalidOperationException(
+                $"{name} must be set (at least {MinimumSigningKeyLength} characters) outside Development. " +
+                "Set it as an App Setting / environment variable, never in appsettings.json.");
+        }
     }
 
     public static string GetStreetBizDatabaseConnectionString(

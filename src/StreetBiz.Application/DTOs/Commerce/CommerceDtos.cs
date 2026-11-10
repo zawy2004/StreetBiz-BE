@@ -104,7 +104,7 @@ public sealed record CheckoutPaymentDto(
     string Status,
     string PaymentUrl);
 
-/// <summary>For SEPAY, <c>BankTransfer</c> holds the VietQR to show instead of a page to redirect to.</summary>
+/// <summary>For PAYOS, <c>BankTransfer</c> holds the VietQR to show instead of a page to redirect to.</summary>
 public sealed record CheckoutDto(
     long OrderId,
     string OrderCode,

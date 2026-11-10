@@ -86,8 +86,15 @@ public sealed record PaymentCallbackData(
     string? Status,
     string RawPayload,
     bool SignatureValid,
-    /// <summary>The provider's id for this money movement (SePay); see <see cref="PaymentCallbackOutcome.Surplus"/>.</summary>
-    string? ProviderEventId = null);
+    /// <summary>The provider's id for this money movement (payOS's bank reference); see <see cref="PaymentCallbackOutcome.Surplus"/>.</summary>
+    string? ProviderEventId = null)
+{
+    /// <summary>
+    /// PAYOS: the receiving account whose channel sent (or answered) this report. A payment to a
+    /// payee is settled only by that payee's own channel; anything else is REJECTED.
+    /// </summary>
+    public long? PayeeAccountId { get; init; }
+}
 
 public enum PaymentCallbackOutcome
 {

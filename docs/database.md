@@ -7,11 +7,14 @@ The whole database is built from exactly **two scripts** in `db/`:
 
 | Script | Contains |
 | --- | --- |
-| `db/StreetBiz_SQL_Server.sql` | Schema (tables, triggers, views, every CHECK constraint), reference data (roles, wards, violation catalogue) and the `__EFMigrationsHistory` stamp |
+| `db/StreetBiz_SQL_Server.sql` | Schema (tables, triggers, views, every CHECK constraint), reference data (roles, Đà Nẵng's 94 commune-level units, violation catalogue) and the `__EFMigrationsHistory` stamp |
 | `db/StreetBiz_Demo_Seed.sql` | Demo accounts and a full demo scenario. Development only |
 
 Nothing else creates or alters the database: no delta scripts, no per-feature seed
-files, no SQL under `docs/`.
+files, no SQL under `docs/`. The one exception is the pair of one-off ward upgrades in
+[Upgrading a database built before the 94 wards](#upgrading-a-database-built-before-the-94-wards):
+they only bring an older database to what the two scripts above build, and a build
+never runs them.
 
 ## Build a local database
 
@@ -28,11 +31,43 @@ powershell -ExecutionPolicy Bypass -File scripts/setup-local-db.ps1 `
 
 The script creates the database, applies the schema, then the demo seed (skip it with
 `-SkipDemoSeed`), and writes the placeholder evidence files the seeded registrations
-point at. Without `-Recreate` it refuses to touch a database that already has tables.
+point at. Last, it signs the seed's placeholder permits with this machine's
+`Permit:SigningKey` (`dotnet run -- --sign-demo-permits`, Development only), so their QR codes
+verify as soon as the database is built: a real permit token cannot be checked in, because the
+key differs on every machine. Without a key it warns and the permits stay unscannable; set
+`Permit:SigningKey` with `dotnet user-secrets` and run that command again with the API stopped. Without `-Recreate` it refuses to touch a database that already has tables.
 Both scripts must run on an empty database; the schema file is not an upgrade script.
 
 Point the API at it with `STREETBIZ_DB_CONNECTION` (or `ConnectionStrings:StreetBizDB`).
 Never run the demo seed against a shared or production database.
+
+## Upgrading a database built before the 94 wards
+
+Since October 2026 the schema seeds the 94 commune-level units of Đà Nẵng (Nghị quyết
+1659/NQ-UBTVQH15, from 1/7/2025: 23 phường, 70 xã and Đặc khu Hoàng Sa), all directly
+under the city: there is no district level any more. A database built before that still
+lists 5 wards (Phường Hải Châu 1, Thanh Khê Đông, An Hải Bắc, Nam Dương, Hòa Quý) under
+4 districts. Either rebuild it as above, which drops every row, or keep its rows and run,
+in this order:
+
+~~~powershell
+sqlcmd -S "(localdb)\MSSQLLocalDB" -d StreetBizDB -E -I -f 65001 -i db\StreetBiz_Upgrade_DaNang_94_Wards.sql
+# only on a development database that has the demo seed:
+sqlcmd -S "(localdb)\MSSQLLocalDB" -d StreetBizDB -E -I -f 65001 -i db\StreetBiz_Upgrade_Demo_Ward_Names.sql
+~~~
+
+For Docker use `-S "localhost,1433" -U sa -P <password>` in place of `-S … -E`.
+
+| Script | Does |
+| --- | --- |
+| `db/StreetBiz_Upgrade_DaNang_94_Wards.sql` | Makes `AdministrativeUnits` exactly the schema's 94 units. Wards 10/11/12/14 keep their ids, contacts and every row that points at them, renamed Phường Hải Châu / Thanh Khê / An Hải / Ngũ Hành Sơn; ward 13 (Nam Dương, now part of phường Hải Châu) and the districts are removed. Stops, changing nothing, while ward 13 is still used by an account, registration, pricing zone, penalty rate or compliance policy: moving those is the ward's decision |
+| `db/StreetBiz_Upgrade_Demo_Ward_Names.sql` | Writes the current ward names into the demo rows that spell out the old ones: officers' sanction titles, registration addresses, address-change requests, notifications. Never on a pilot database, where an address stays as the vendor declared it |
+
+Each script runs in one transaction (any error changes nothing), refuses a file not read
+as UTF-8 (`-f 65001`) and a database older than the current schema, and is safe to run
+twice; on a database already built from the current scripts it changes nothing. A
+database upgraded with both matches a fresh build of the current scripts in every table
+(timestamps aside).
 
 ## Changing the database
 
@@ -66,9 +101,9 @@ BR-59). Stored as BCrypt work-factor-12 hashes.
 | # | Phone | Role | Ward | Purpose |
 | --- | --- | --- | --- | --- |
 | 1 | `0900000001` | PLATFORM_ADMIN | none | Platform administration (ADM-xx) |
-| 2 | `0983000001` | WARD_AUTHORITY | 10 Hải Châu 1 | Reviews (REG/WARD-xx). `scripts/e2e-auth-onboarding.sh` signs in as this account |
-| 3 | `0983000002` | WARD_AUTHORITY | 11 Thanh Khê Đông | Ward isolation checks: another ward's records return 404 |
-| 4 | `0983000003` | WARD_AUTHORITY | 12 An Hải Bắc | Third officer |
+| 2 | `0983000001` | WARD_AUTHORITY | 10 Hải Châu | Reviews (REG/WARD-xx). `scripts/e2e-auth-onboarding.sh` signs in as this account |
+| 3 | `0983000002` | WARD_AUTHORITY | 11 Thanh Khê | Ward isolation checks: another ward's records return 404 |
+| 4 | `0983000003` | WARD_AUTHORITY | 12 An Hải | Third officer |
 | 5 | `0905000101` | VENDOR | 10 | Approved: contract, permit, fee schedule and storefront |
 | 6 | `0905000102` | VENDOR | 10 | SUBMITTED with full evidence: ready for the ward to decide |
 | 7 | `0905000103` | VENDOR | 11 | SUBMITTED with no evidence: shows the approval blocker (BR-07) |
@@ -83,13 +118,17 @@ MORE_INFORMATION_REQUIRED; 6 REJECTED; 7 WITHDRAWN; 8 DRAFT; 10 is a second APPR
 registration for vendor `0905000102` with no contract, the natural receiver of a slot
 transfer). BR-09 holds: vendor 4 carries several registrations but only one open one.
 
-Also seeded: 5 wards in 4 districts of Đà Nẵng, 4 pricing zones and 30 slots (the 20
-`NVL-01..20` sit on the real Nguyễn Văn Linh centreline, 10 per side; three more are
-vendor proposals: PENDING, APPROVED and REJECTED), 2 active contracts with digital
-permits, 6 fee periods (PAID / OVERDUE / PENDING) and 3 invoices, 2 storefronts with 12
-menu items, 5 orders across COMPLETED / READY_FOR_PICKUP / PREPARING / PENDING_PAYMENT /
-REJECTED, 15 violation types and penalty rates for the three wards that have an officer
-(the five legal-citation types carry `legal_basis`). Officers get a
+Also seeded: 5 pricing zones and 33 slots (30
+ward-defined, of which the 20 `NVL-01..20` sit on the real Nguyễn Văn Linh centreline,
+10 per side; three more are vendor proposals: PENDING, APPROVED and REJECTED), 7
+contracts (5 ACTIVE, 1 CANCELLED, 1 EXPIRED) of which 2 carry digital permits, 2 fee
+schedules with 9 instalments (2 PAID, 1 OVERDUE, 6 PENDING) and 3 invoices, 2
+storefronts with 12 menu items (each with its unit of sale, and a price history of one CREATED
+row per dish plus the archival of the two archived ones: both boards are at "bản số 7"), 5 orders
+across COMPLETED / READY_FOR_PICKUP / PREPARING / PENDING_PAYMENT /
+REJECTED, 17 violation types and penalty rates for the three wards that have an officer
+(the seven legal-citation types carry `legal_basis`, among them the price-posting pair of
+Nghị định 87/2024/NĐ-CP Điều 13). Officers get a
 `sanction_authority_title` for their own ward.
 
 Every queue and list has something in it:
@@ -98,22 +137,28 @@ Every queue and list has something in it:
   renewals (PENDING, REJECTED), 2 address changes that compete for the same slot (a ward
   conflict), 2 slot holds (valid for a day so the demo stays visible; real holds last 15
   minutes).
-- **Ward compliance:** 6 permit scans (one about 95 m from its slot, one forged code), 5
-  violations (awaiting sanction, unpaid penalty, paid penalty, unidentified occupier, raised
-  from a customer report) and 3 vendor reports.
+- **Ward compliance:** 11 permit scans (one about 95 m from its slot, one forged code, and
+  repeated off-tolerance scans on permits 1 and 2 for the AIC-06 drift check), 4 violations
+  (paid penalty, unpaid penalty, a penalty waived on a customer-report violation, and an
+  unidentified occupier with no penalty because the offender cannot be billed, raised from
+  report 2) and 5 vendor reports: an overdue PENDING one, a PENDING overcharge with its price
+  evidence (2 x 45.000đ posted, 120.000đ charged), one DISMISSED, one MEDIATED with a 20.000đ
+  refund, and one closed by violation 4, with the notices each sent.
 - **Mẫu số 01 and eKYC:** registrations 1, 2, 4, 9 and 10 carry the owner-identity fields
   with fictional ID numbers. Approved ones were confirmed by an officer; 2 and 4 were not,
   so the ward must confirm identity before approving them. Registration 1 has household
   members; 2 and 4 have recorded OCR and face-match results (4 does not match).
 - **Moderation and money:** 2 community comments, 1 order review, 3 reported contents, 2
-  complaints, 8 payment transactions with callback events, 1 automatic refund, plus
+  complaints, 10 payment transactions (7 SUCCESS, 2 PENDING, 1 FAILED) with 6 callback
+  events, 1 automatic refund, plus
   notifications and 2 AI log entries.
 
 Things to know:
 
 - **Permit QR codes are fake.** `qr_payload` is `SEED-PERMIT-CONTRACT-n-DO-NOT-SCAN`,
   not a token signed by `IPermitTokenService`. Re-issue a permit through the API to
-  test WARD-11 or BUY-02 scans.
+  test WARD-11 or BUY-02 scans. A printed price board's QR is `{Permit:PublicScanBaseUrl}/q/{token}`
+  (for a phone on the LAN, e.g. `http://<LAN IP>:5173`); with the setting empty no link is built.
 - **Evidence files are empty images/PDFs.** The setup script writes a 1x1 JPEG and a
   one-page PDF so the reviewer's document preview works. File names must be exactly 32
   hex characters (`EvidenceFiles.IsValidFileName`) or the API rejects the URL.

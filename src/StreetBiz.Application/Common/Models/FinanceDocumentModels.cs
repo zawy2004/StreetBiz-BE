@@ -26,6 +26,25 @@ public sealed record InvoiceDocumentRow(
     string? ProviderReference,
     DateTime? PaidAt);
 
+/// <summary>
+/// One receipt of a ward ("lịch sử thu") with the payment behind it: how it was paid, the reference
+/// to check it against (the payOS order, the Treasury receipt number, the officer's own note) and,
+/// when the money is owed back or was returned, that state (REFUND_REQUIRED / REFUNDED).
+/// </summary>
+public sealed record WardReceiptRow(
+    long InvoiceId,
+    string InvoiceNumber,
+    DateTime IssuedAt,
+    string Kind,
+    string? PayerName,
+    string? PayerPhone,
+    string? SlotCode,
+    string Description,
+    decimal Amount,
+    string? PaymentProvider,
+    string? ProviderReference,
+    string? PaymentStatus);
+
 /// <summary>One receipt issued inside a ward during a report period (the "bảng kê thu").</summary>
 public sealed record WardInvoiceRow(
     string InvoiceNumber,

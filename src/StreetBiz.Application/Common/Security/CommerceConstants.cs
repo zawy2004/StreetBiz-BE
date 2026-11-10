@@ -33,6 +33,23 @@ public static class OrderStatuses
         value is Placed or Accepted or Preparing or ReadyForPickup;
 }
 
+/// <summary>
+/// REV-02 / BR-68: a review can be edited by its author only for a limited time after it was first
+/// submitted. The SRS addendum proposes 7 days and marks the number as awaiting supervisor sign-off,
+/// so it lives here, in one place, until it is confirmed.
+/// </summary>
+public static class ReviewRules
+{
+    public const int EditWindowDays = 7;
+    public static readonly TimeSpan EditWindow = TimeSpan.FromDays(EditWindowDays);
+
+    /// <summary>The last instant a review submitted at <paramref name="submittedAt"/> can still be edited.</summary>
+    public static DateTime EditableUntil(DateTime submittedAt) => submittedAt + EditWindow;
+
+    public const string EditWindowClosed =
+        "Đã quá thời hạn chỉnh sửa đánh giá (7 ngày kể từ lúc gửi), bạn không thể sửa nữa.";
+}
+
 public static class SellerOrderDecisions
 {
     public const string Accept = "ACCEPT";
@@ -44,12 +61,15 @@ public static class PaymentProviders
     public const string Momo = "MOMO";
     public const string ZaloPay = "ZALOPAY";
 
-    /// <summary>Bank transfer by VietQR, confirmed by SePay's webhook when the money lands.</summary>
-    public const string SePay = "SEPAY";
+    /// <summary>
+    /// Bank transfer by VietQR straight into the payee's own payOS account (the ward for a fee,
+    /// the household for an order), confirmed by that channel's webhook or status API.
+    /// </summary>
+    public const string PayOs = "PAYOS";
 
-    public const string InvalidMessage = "Provider must be MOMO, ZALOPAY or SEPAY.";
+    public const string InvalidMessage = "Provider must be MOMO, ZALOPAY or PAYOS.";
 
-    public static bool IsValid(string value) => value is Momo or ZaloPay or SePay;
+    public static bool IsValid(string value) => value is Momo or ZaloPay or PayOs;
 }
 
 public static class SalesPeriods
@@ -94,5 +114,12 @@ public static class CommerceMessages
     public const string OrderConflict = "Trạng thái đơn hàng vừa thay đổi. Vui lòng tải lại và thử lại.";
     public const string CheckoutAlreadyPending =
         "Bạn có một đơn đang chờ thanh toán. Hãy thanh toán hoặc huỷ đơn đó trước khi sửa giỏ hàng.";
+    public const string CheckoutPaymentEnded =
+        "Lần thanh toán này đã thất bại hoặc đơn đã bị huỷ. Hãy bấm thanh toán lại để tạo đơn mới.";
+    public const string CheckoutAlreadyPaid = "Đơn này đã được thanh toán.";
+
+    /// <summary>PAYOS: the storefront's household has no ACTIVE receiving account.</summary>
+    public const string StoreNotAcceptingOnlinePayment =
+        "Quán chưa nhận thanh toán online. Bạn có thể mua trực tiếp tại quầy.";
     public const string PaymentNotFound = "Đơn trả trước chưa có giao dịch thanh toán thành công.";
 }

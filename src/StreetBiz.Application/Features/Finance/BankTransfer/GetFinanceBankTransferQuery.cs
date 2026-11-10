@@ -8,8 +8,8 @@ using StreetBiz.Application.DTOs.Payments;
 namespace StreetBiz.Application.Features.Finance.BankTransfer;
 
 /// <summary>
-/// FEE-01/FEE-04: the VietQR of a fee or penalty payment still waiting for its SePay bank
-/// transfer, so the payment page can show it again after a reload. 404 once it is settled.
+/// FEE-01: the VietQR of a fee payment still waiting for its payOS bank transfer, so the
+/// payment page can show it again after a reload. 404 once it is settled.
 /// </summary>
 public sealed record GetFinanceBankTransferQuery(long TransactionId) : IRequest<BankTransferDto>;
 
@@ -21,18 +21,25 @@ public sealed class GetFinanceBankTransferQueryValidator : AbstractValidator<Get
 public sealed class GetFinanceBankTransferQueryHandler(
     IVendorContext vendorContext,
     IFinanceRepository finance,
-    IPaymentGateway paymentGateway) : IRequestHandler<GetFinanceBankTransferQuery, BankTransferDto>
+    IPaymentGateway paymentGateway,
+    IPaymentTransactionRepository? transactions = null) : IRequestHandler<GetFinanceBankTransferQuery, BankTransferDto>
 {
     public async Task<BankTransferDto> Handle(GetFinanceBankTransferQuery request, CancellationToken cancellationToken)
     {
         var vendorId = await vendorContext.RequireVendorIdAsync(cancellationToken);
         var payment = await finance.GetVendorPaymentAsync(vendorId, request.TransactionId, cancellationToken)
             ?? throw new NotFoundException(FinanceMessages.TransactionNotFound);
-        var instructions = payment.Status == PaymentStatuses.Pending
-            && payment.ProviderReference is { } reference
-            && payment.Amount is { } amount
-                ? paymentGateway.DescribeBankTransfer(payment.Provider, reference, amount)
-                : null;
+        BankTransferInstructions? instructions = null;
+        if (payment.Status == PaymentStatuses.Pending
+            && payment.Provider == PaymentProviders.PayOs
+            && transactions is not null)
+        {
+            // The payOS link opened at checkout, shown again while it is still payable.
+            var stored = await transactions.GetAsync(payment.TransactionId, cancellationToken);
+            instructions = stored is null
+                ? null
+                : paymentGateway.DescribeStoredCheckout(PaymentProviders.PayOs, stored.CheckoutPayload, stored.Amount);
+        }
         return BankTransferDto.From(instructions)
             ?? throw new NotFoundException("Khoản thanh toán này không chờ chuyển khoản.");
     }

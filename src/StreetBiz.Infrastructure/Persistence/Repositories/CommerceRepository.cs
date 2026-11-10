@@ -32,6 +32,22 @@ public sealed partial class CommerceRepository(
     private DateTime Now => clock.GetUtcNow().UtcDateTime;
     private DateOnly Today => DateOnly.FromDateTime(TimeZoneInfo.ConvertTimeFromUtc(Now, BusinessTimeZone));
 
+    /// <summary>
+    /// A short, readable order number (<see cref="OrderCodes"/>) not used yet. Six random characters
+    /// give about 730 million codes per day, so a repeat is rare; it is still checked, and the
+    /// unique index on order_code stays the final guard.
+    /// </summary>
+    private async Task<string> NewOrderCodeAsync(DateTime nowUtc, CancellationToken cancellationToken)
+    {
+        var code = OrderCodes.New(nowUtc);
+        for (var attempt = 1; attempt < 5 && await db.Orders.AnyAsync(o => o.order_code == code, cancellationToken); attempt++)
+        {
+            code = OrderCodes.New(nowUtc);
+        }
+
+        return code;
+    }
+
     private IQueryable<Storefront> EligibleStores() => db.Storefronts.Where(store =>
         store.availability_status == StorefrontOpen && store.registration.registration_status == "APPROVED"
         && store.contract.contract_status == "ACTIVE" && store.contract.start_date <= Today && store.contract.end_date >= Today
@@ -72,6 +88,11 @@ public sealed partial class CommerceRepository(
         {
             var storefronts = StorefrontsWhere(filter.WardId, filter.OpenAt).Select(s => s.storefront_id);
             items = items.Where(item => storefronts.Contains(item.storefront_id));
+        }
+
+        if (filter.MinRating is { } minRating)
+        {
+            items = items.Where(item => RatedAtLeast(minRating).Contains(item.storefront.registration.vendor_id));
         }
 
         var ordered = filter.Sort switch
@@ -419,7 +440,7 @@ public sealed partial class CommerceRepository(
             var now = Now;
             var order = new Order
             {
-                order_code = $"SB-{now:yyyyMMdd}-{Guid.NewGuid():N}"[..30],
+                order_code = await NewOrderCodeAsync(now, cancellationToken),
                 customer_user_id = customerUserId,
                 storefront_id = cart.storefront_id,
                 storefront_address_snapshot = cart.storefront.registration.declared_address,
@@ -557,6 +578,13 @@ public sealed partial class CommerceRepository(
                 || callback.Amount != payment.amount
                 || normalizedStatus is not (PaymentSuccess or PaymentFailed)
                 || payment.order is null)
+            {
+                return await Finish(PaymentCallbackOutcome.Rejected, "REJECTED");
+            }
+
+            // PAYOS: only the receiving account the transaction pays into may settle it, so a webhook
+            // (or a status answer) from any other channel is refused, whatever it reports.
+            if (!ProviderTransfers.FromItsPayee(payment.payee_account_id, callback))
             {
                 return await Finish(PaymentCallbackOutcome.Rejected, "REJECTED");
             }
@@ -949,6 +977,8 @@ public sealed partial class CommerceRepository(
     // storefront list, its counts and this search can never disagree about what is visible. The
     // in-term and vendor/registration consistency checks that EligibleStores() adds belong to the
     // write paths (cart, checkout, menu edits), which call it directly.
+    public IQueryable<MenuItem> SellableMenuItems() => MarketplaceMenuQuery();
+
     private IQueryable<MenuItem> MarketplaceMenuQuery() =>
         PublicStorefronts()
             .SelectMany(storefront => storefront.MenuItems)

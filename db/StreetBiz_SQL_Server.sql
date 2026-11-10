@@ -18,7 +18,7 @@
    - Forward references (PaymentTransactions -> Orders) are added via
      ALTER TABLE at the end of the script to keep CREATE TABLE order
      dependency-clean top to bottom.
-   - This script creates structural/simple constraints only, plus five
+   - This script creates structural/simple constraints only, plus six
      triggers and two views for rules that no CHECK constraint can express
      because they span rows, tables or time:
        TR_RentalContracts_NoOverlap          — one slot, one tenant at a time
@@ -26,6 +26,8 @@
        TR_Penalties_RequireIdentifiedOffender — cannot bill an unknown person
        TR_Storefronts_Phase2Gate             — BR-48 marketplace entry gate
        TR_RefundTransactions_NotMoreThanPaid — never refund more than came in
+       TR_MenuItemPriceHistory_AppendOnly    — a posted price, once recorded, is
+                                               never rewritten or removed
        vw_PermitValidity                     — the only correct answer to
                                                "is this QR good right now",
                                                derived from permit AND contract
@@ -964,7 +966,14 @@ CREATE TABLE VendorComments (
         FOREIGN KEY (customer_user_id) REFERENCES UserAccounts(user_id)
 );
 
--- BUY-05, AIB-01
+-- BUY-05, BUY-07, WARD-19, AIB-01
+-- report_type OVERCHARGE ("bán cao hơn giá niêm yết") carries its own price evidence: the server
+-- finds the MenuItemPriceHistory row in force at purchased_at and freezes posted_amount = that
+-- price x quantity on the report. Nothing the customer types is ever taken as the posted price.
+-- due_at is the ward's internal handling target (VendorReports:DueWorkingDays working days), not a
+-- statutory deadline. Closing a report is the officer's act (BR-41/43): DISMISSED with a reason
+-- written for the reporter, or REVIEWED as MEDIATED (with the refund the vendor paid back, if
+-- any) or VIOLATION_RECORDED (a biên bản raised from it: Violations.source_report_id).
 CREATE TABLE VendorReports (
     report_id                BIGINT IDENTITY(1,1)  PRIMARY KEY,
     reporter_user_id         BIGINT                NOT NULL,
@@ -979,11 +988,54 @@ CREATE TABLE VendorReports (
     reviewer_role         AS CAST(N'WARD_AUTHORITY' AS NVARCHAR(30)) PERSISTED,
     reviewed_at                  DATETIME2             NULL,
     created_at                   DATETIME2             NOT NULL DEFAULT SYSUTCDATETIME(),
+    report_type                  NVARCHAR(20)          NOT NULL DEFAULT 'GENERAL',
+    -- OVERCHARGE price evidence. The two foreign keys are added in section 8: MenuItems and
+    -- MenuItemPriceHistory are created further down.
+    menu_item_id                 BIGINT                NULL,
+    price_history_id             BIGINT                NULL,
+    quantity                     INT                   NULL,
+    posted_amount                DECIMAL(18,0)         NULL,
+    charged_amount               DECIMAL(18,0)         NULL,
+    purchased_at                 DATETIME2             NULL,
+    due_at                       DATETIME2             NULL,
+    resolution                   NVARCHAR(20)          NULL,
+    resolution_note              NVARCHAR(500)         NULL,
+    refund_amount                DECIMAL(18,0)         NULL,
     CONSTRAINT CK_VendorReports_Status
         CHECK (report_status IN ('PENDING','REVIEWED','DISMISSED')),
     -- BR-40: a report must reference at least one of vendor / slot / scanned permit.
     CONSTRAINT CK_VendorReports_HasReference
         CHECK (vendor_id IS NOT NULL OR slot_id IS NOT NULL OR scanned_permit_id IS NOT NULL),
+    CONSTRAINT CK_VendorReports_Type
+        CHECK (report_type IN ('GENERAL','OVERCHARGE','PRICE_NOT_POSTED')),
+    -- An overcharge complaint is actionable only with its whole price evidence and a real difference.
+    CONSTRAINT CK_VendorReports_OverchargeEvidence
+        CHECK (report_type <> 'OVERCHARGE'
+               OR (menu_item_id IS NOT NULL AND price_history_id IS NOT NULL AND quantity IS NOT NULL
+                   AND posted_amount IS NOT NULL AND charged_amount IS NOT NULL AND purchased_at IS NOT NULL
+                   AND quantity > 0 AND charged_amount > posted_amount)),
+    CONSTRAINT CK_VendorReports_Amounts
+        CHECK ((posted_amount IS NULL OR posted_amount >= 0) AND (charged_amount IS NULL OR charged_amount >= 0)),
+    CONSTRAINT CK_VendorReports_Resolution
+        CHECK (resolution IS NULL OR resolution IN ('DISMISSED','MEDIATED','VIOLATION_RECORDED')),
+    -- The status and the outcome say the same thing, so neither can drift from the other. Each
+    -- branch tests resolution IS NOT NULL first: a CHECK that evaluates to UNKNOWN passes.
+    CONSTRAINT CK_VendorReports_StatusOutcome
+        CHECK ((report_status = 'PENDING' AND resolution IS NULL)
+            OR (report_status = 'DISMISSED' AND resolution IS NOT NULL AND resolution = 'DISMISSED'
+                AND resolution_note IS NOT NULL)
+            OR (report_status = 'REVIEWED' AND resolution IS NOT NULL
+                AND resolution IN ('MEDIATED','VIOLATION_RECORDED'))),
+    CONSTRAINT CK_VendorReports_MediatedNote
+        CHECK (resolution IS NULL OR resolution <> 'MEDIATED' OR resolution_note IS NOT NULL),
+    -- BR-46: a closed report names who closed it and when.
+    CONSTRAINT CK_VendorReports_ReviewEvidence
+        CHECK (report_status = 'PENDING' OR (reviewed_by IS NOT NULL AND reviewed_at IS NOT NULL)),
+    -- A refund is the vendor paying back part of what was charged, only ever on a mediated case.
+    CONSTRAINT CK_VendorReports_Refund
+        CHECK (refund_amount IS NULL
+               OR (resolution IS NOT NULL AND resolution = 'MEDIATED' AND charged_amount IS NOT NULL
+                   AND refund_amount >= 0 AND refund_amount <= charged_amount)),
     CONSTRAINT FK_VendorReports_Reporter
         FOREIGN KEY (reporter_user_id) REFERENCES UserAccounts(user_id),
     CONSTRAINT FK_VendorReports_Vendor
@@ -997,6 +1049,14 @@ CREATE TABLE VendorReports (
         REFERENCES UserAccounts(user_id, role_code)
 );
 CREATE INDEX IX_VendorReports_Vendor ON VendorReports(vendor_id);
+-- "Phản ánh của tôi" and the ward inbox's overdue-first order.
+CREATE INDEX IX_VendorReports_Reporter ON VendorReports(reporter_user_id, created_at);
+CREATE INDEX IX_VendorReports_StatusDue ON VendorReports(report_status, due_at);
+-- One open report per person per vendor: a second one while the first waits adds noise, not
+-- evidence. vendor_id IS NOT NULL keeps slot-only reports out (a unique index treats NULLs as equal).
+CREATE UNIQUE INDEX UQ_VendorReports_OnePendingPerReporter
+    ON VendorReports(reporter_user_id, vendor_id)
+    WHERE report_status = 'PENDING' AND vendor_id IS NOT NULL;
 
 
 /* ============================================================
@@ -1139,6 +1199,10 @@ CREATE TABLE Violations (
     delivery_refusal_reason   NVARCHAR(500)   NULL,
     CONSTRAINT CK_Violations_Source
         CHECK (source IN ('ON_SITE','CUSTOMER_REPORT')),
+    -- A record raised from a citizen's report is a customer-report record. The reverse does not
+    -- hold: a report taken outside the app (phone, 1022) is CUSTOMER_REPORT with no report row.
+    CONSTRAINT CK_Violations_SourceReport
+        CHECK (source_report_id IS NULL OR source = 'CUSTOMER_REPORT'),
     -- must be pinned to something, or the record is not actionable
     CONSTRAINT CK_Violations_HasTarget
         CHECK (contract_id IS NOT NULL OR slot_id IS NOT NULL OR vendor_id IS NOT NULL),
@@ -1169,6 +1233,10 @@ CREATE TABLE Violations (
 CREATE INDEX IX_Violations_Contract ON Violations(contract_id);
 CREATE INDEX IX_Violations_Slot     ON Violations(slot_id);
 CREATE INDEX IX_Violations_Vendor   ON Violations(vendor_id);
+-- WARD-19: at most one biên bản per report, even when two officers press "Lập biên bản" at once.
+CREATE UNIQUE INDEX UQ_Violations_OnePerSourceReport
+    ON Violations(source_report_id)
+    WHERE source_report_id IS NOT NULL;
 
 -- BR-33: amount always looked up from PenaltyFeeSchedules, never entered ad hoc,
 -- then frozen here — a later rate change must not rewrite an issued penalty.
@@ -1339,6 +1407,54 @@ CREATE INDEX IX_Invoices_Vendor ON Invoices(vendor_id);
 CREATE UNIQUE INDEX UX_Invoices_FeeItem ON Invoices(fee_item_id) WHERE fee_item_id IS NOT NULL;
 CREATE UNIQUE INDEX UX_Invoices_Penalty ON Invoices(penalty_id) WHERE penalty_id IS NOT NULL;
 
+-- Where money is paid TO. StreetBiz holds no money: each household (for its orders) and each
+-- ward (for its rental fees) connects its own payOS channel, the payer transfers straight into
+-- that account by VietQR, and payOS's webhook / status API tells StreetBiz the money arrived.
+-- The channel's API key and checksum key are encrypted by the application (AES-GCM, key in
+-- configuration) before they are written; this table never holds them in clear.
+-- webhook_token is the unguessable part of the channel's webhook URL
+-- (/api/payments/payos/callback/{token}): it tells StreetBiz whose checksum key verifies the
+-- request without exposing an id. A disconnected account is DISABLED, not deleted, so a late
+-- webhook for one of its earlier payments can still be verified.
+CREATE TABLE PayeeAccounts (
+    payee_account_id        BIGINT IDENTITY(1,1)  PRIMARY KEY,
+    owner_type              NVARCHAR(10)          NOT NULL,
+    vendor_id               BIGINT                NULL,
+    ward_unit_id            INT                   NULL,
+    ward_unit_type          AS CAST(N'WARD' AS NVARCHAR(20)) PERSISTED,
+    provider                NVARCHAR(20)          NOT NULL DEFAULT 'PAYOS',
+    client_id               NVARCHAR(100)         NOT NULL,
+    api_key_protected       NVARCHAR(1000)        NOT NULL,
+    checksum_key_protected  NVARCHAR(1000)        NOT NULL,
+    bank_name               NVARCHAR(100)         NULL,
+    account_number          NVARCHAR(50)          NULL,
+    account_name            NVARCHAR(150)         NULL,
+    webhook_token           NVARCHAR(64)          NOT NULL UNIQUE,
+    status                  NVARCHAR(20)          NOT NULL DEFAULT 'ACTIVE',
+    last_error              NVARCHAR(500)         NULL,
+    webhook_confirmed_at    DATETIME2             NULL,
+    verified_at             DATETIME2             NULL,
+    last_checked_at         DATETIME2             NULL,
+    created_by              BIGINT                NOT NULL,
+    created_at              DATETIME2             NOT NULL DEFAULT SYSUTCDATETIME(),
+    updated_at              DATETIME2             NULL,
+    CONSTRAINT CK_PayeeAccounts_Owner
+        CHECK ((owner_type = 'VENDOR' AND vendor_id IS NOT NULL AND ward_unit_id IS NULL)
+            OR (owner_type = 'WARD' AND ward_unit_id IS NOT NULL AND vendor_id IS NULL)),
+    CONSTRAINT CK_PayeeAccounts_Provider CHECK (provider IN ('PAYOS')),
+    CONSTRAINT CK_PayeeAccounts_Status CHECK (status IN ('ACTIVE','ERROR','DISABLED')),
+    CONSTRAINT FK_PayeeAccounts_Vendor
+        FOREIGN KEY (vendor_id) REFERENCES Vendors(vendor_id),
+    CONSTRAINT FK_PayeeAccounts_Ward
+        FOREIGN KEY (ward_unit_id, ward_unit_type)
+        REFERENCES AdministrativeUnits(unit_id, unit_type),
+    CONSTRAINT FK_PayeeAccounts_CreatedBy
+        FOREIGN KEY (created_by) REFERENCES UserAccounts(user_id)
+);
+-- One receiving account per household and per ward; reconnecting replaces its keys in place.
+CREATE UNIQUE INDEX UX_PayeeAccounts_Vendor ON PayeeAccounts(vendor_id) WHERE vendor_id IS NOT NULL;
+CREATE UNIQUE INDEX UX_PayeeAccounts_Ward ON PayeeAccounts(ward_unit_id) WHERE ward_unit_id IS NOT NULL;
+
 -- SYS-04: idempotent callback processing (BR-37). order_id FK added later
 -- (ALTER TABLE) once the Phase 2 Orders table exists.
 CREATE TABLE PaymentTransactions (
@@ -1354,12 +1470,21 @@ CREATE TABLE PaymentTransactions (
     transaction_status       NVARCHAR(20)          NOT NULL DEFAULT 'PENDING',
     callback_received_at    DATETIME2             NULL,
     created_at                DATETIME2             NOT NULL DEFAULT SYSUTCDATETIME(),
+    -- PAYOS: whose account the money goes to (the ward for a fee, the household for an order).
+    -- Only that account's webhook can settle the transaction.
+    payee_account_id         BIGINT                NULL,
+    -- PAYOS: the payment link as payOS returned it (QR content, link, attempt), so the same QR
+    -- is shown again after a reload instead of opening a second link.
+    checkout_payload         NVARCHAR(MAX)         NULL,
     CONSTRAINT CK_PaymentTransactions_Purpose
         CHECK (payment_purpose IN ('RENTAL_FEE','PENALTY','ORDER')),
     CONSTRAINT CK_PaymentTransactions_Provider
         -- CASH / BANK_TRANSFER: a fee or penalty a ward officer recorded as collected in person.
-        -- SEPAY: a VietQR bank transfer the payer made themselves, confirmed by SePay's webhook.
-        CHECK (provider IN ('MOMO','ZALOPAY','SEPAY','CASH','BANK_TRANSFER')),
+        -- PAYOS: a VietQR transfer straight into the payee's own payOS account.
+        -- TREASURY: a fine paid to the State Treasury, confirmed by the ward from its receipt.
+        CHECK (provider IN ('MOMO','ZALOPAY','PAYOS','CASH','BANK_TRANSFER','TREASURY')),
+    CONSTRAINT CK_PaymentTransactions_PayeeProvider
+        CHECK (payee_account_id IS NULL OR provider = 'PAYOS'),
     CONSTRAINT CK_PaymentTransactions_Status
         CHECK (transaction_status IN ('PENDING','SUCCESS','FAILED','REFUND_REQUIRED','REFUNDED')),
     -- payment_purpose must agree with which target column is filled; without
@@ -1373,9 +1498,13 @@ CREATE TABLE PaymentTransactions (
     CONSTRAINT FK_PaymentTransactions_FeeItem
         FOREIGN KEY (fee_item_id) REFERENCES FeeScheduleItems(fee_item_id),
     CONSTRAINT FK_PaymentTransactions_Penalty
-        FOREIGN KEY (penalty_id) REFERENCES Penalties(penalty_id)
+        FOREIGN KEY (penalty_id) REFERENCES Penalties(penalty_id),
+    CONSTRAINT FK_PaymentTransactions_PayeeAccount
+        FOREIGN KEY (payee_account_id) REFERENCES PayeeAccounts(payee_account_id)
 );
 CREATE INDEX IX_PaymentTransactions_Order ON PaymentTransactions(order_id);
+CREATE INDEX IX_PaymentTransactions_PayeeAccount
+    ON PaymentTransactions(payee_account_id) WHERE payee_account_id IS NOT NULL;
 
 -- SYS-04. PaymentTransactions.idempotency_key stops a callback being applied
 -- twice, but it keeps nothing of what the provider actually sent. When MoMo or
@@ -1392,7 +1521,7 @@ CREATE TABLE PaymentCallbackEvents (
     processing_result    NVARCHAR(20)          NOT NULL,
     received_at          DATETIME2             NOT NULL DEFAULT SYSUTCDATETIME(),
     CONSTRAINT CK_PaymentCallbackEvents_Provider
-        CHECK (provider IN ('MOMO','ZALOPAY','SEPAY')),
+        CHECK (provider IN ('MOMO','ZALOPAY','PAYOS')),
     CONSTRAINT CK_PaymentCallbackEvents_Result
         CHECK (processing_result IN ('APPLIED','DUPLICATE','UNMATCHED','REJECTED')),
     CONSTRAINT FK_PaymentCallbackEvents_Transaction
@@ -1400,6 +1529,42 @@ CREATE TABLE PaymentCallbackEvents (
 );
 CREATE INDEX IX_PaymentCallbackEvents_Reference
     ON PaymentCallbackEvents(provider, provider_reference);
+
+-- A fine is paid to the State Treasury, never through StreetBiz (Luật XLVPHC Điều 78: into the
+-- Treasury account named in the decision). The household uploads the receipt; a ward officer
+-- checks it and, on ACCEPTED, the penalty is recorded as paid (a TREASURY PaymentTransactions
+-- row). One receipt may wait for review per penalty at a time.
+CREATE TABLE PenaltyPaymentReceipts (
+    receipt_id            BIGINT IDENTITY(1,1)  PRIMARY KEY,
+    penalty_id            BIGINT                NOT NULL,
+    submitted_by          BIGINT                NOT NULL,
+    receipt_url           NVARCHAR(500)         NOT NULL,
+    reference             NVARCHAR(100)         NULL,   -- the Treasury receipt / transfer number
+    paid_on               DATE                  NOT NULL,
+    note                  NVARCHAR(500)         NULL,
+    status                NVARCHAR(20)          NOT NULL DEFAULT 'SUBMITTED',
+    submitted_at          DATETIME2             NOT NULL DEFAULT SYSUTCDATETIME(),
+    reviewed_by           BIGINT                NULL,
+    reviewer_role         AS CAST(N'WARD_AUTHORITY' AS NVARCHAR(30)) PERSISTED,
+    reviewed_at           DATETIME2             NULL,
+    review_note           NVARCHAR(500)         NULL,
+    CONSTRAINT CK_PenaltyPaymentReceipts_Status
+        CHECK (status IN ('SUBMITTED','ACCEPTED','REJECTED')),
+    -- a decision on a receipt names who made it and when; a rejection also says why
+    CONSTRAINT CK_PenaltyPaymentReceipts_Review
+        CHECK (status = 'SUBMITTED'
+            OR (reviewed_by IS NOT NULL AND reviewed_at IS NOT NULL
+                AND (status = 'ACCEPTED' OR review_note IS NOT NULL))),
+    CONSTRAINT FK_PenaltyPaymentReceipts_Penalty
+        FOREIGN KEY (penalty_id) REFERENCES Penalties(penalty_id),
+    CONSTRAINT FK_PenaltyPaymentReceipts_SubmittedBy
+        FOREIGN KEY (submitted_by) REFERENCES UserAccounts(user_id),
+    CONSTRAINT FK_PenaltyPaymentReceipts_Reviewer
+        FOREIGN KEY (reviewed_by, reviewer_role)
+        REFERENCES UserAccounts(user_id, role_code)
+);
+CREATE UNIQUE INDEX UX_PenaltyPaymentReceipts_OnePending
+    ON PenaltyPaymentReceipts(penalty_id) WHERE status = 'SUBMITTED';
 
 
 /* ============================================================
@@ -1602,19 +1767,27 @@ CREATE TABLE StorefrontBusinessHours (
 );
 CREATE INDEX IX_StorefrontBusinessHours_Storefront ON StorefrontBusinessHours(storefront_id);
 
+-- The menu is also the stall's price board (BUY-06). Luật Giá 2023 Điều 29 ties a posted price
+-- to its unit of sale ("ổ", "ly", "kg"), so price_unit is mandatory. A dish is on the price board
+-- while it is AVAILABLE or SOLD_OUT; HIDDEN and ARCHIVED take it off. This is a legal duty, not a
+-- marketplace feature: the public board shows even while the storefront is PAUSED or CLOSED.
 CREATE TABLE MenuItems (
     menu_item_id         BIGINT IDENTITY(1,1)  PRIMARY KEY,
     storefront_id         BIGINT                NOT NULL,
     category_id           INT                   NOT NULL,
     item_name             NVARCHAR(180)         NOT NULL,
+    item_name_en          NVARCHAR(180)         NULL,  -- optional, typed by the vendor (D8)
     description            NVARCHAR(500)         NULL,
     image_url               NVARCHAR(500)         NULL,
     unit_price             DECIMAL(18,0)         NOT NULL,
+    price_unit             NVARCHAR(30)          NOT NULL DEFAULT N'phần',
     availability_status    NVARCHAR(20)          NOT NULL DEFAULT 'AVAILABLE',
     created_at               DATETIME2             NOT NULL DEFAULT SYSUTCDATETIME(),
     updated_at               DATETIME2             NULL,
     CONSTRAINT CK_MenuItems_Price
         CHECK (unit_price >= 0),
+    CONSTRAINT CK_MenuItems_PriceUnit
+        CHECK (LEN(LTRIM(price_unit)) > 0),
     CONSTRAINT CK_MenuItems_Availability
         CHECK (availability_status IN ('AVAILABLE','SOLD_OUT','HIDDEN','ARCHIVED')),
     CONSTRAINT FK_MenuItems_Storefront
@@ -1624,6 +1797,50 @@ CREATE TABLE MenuItems (
 );
 CREATE INDEX IX_MenuItems_Storefront ON MenuItems(storefront_id);
 CREATE INDEX IX_MenuItems_Category ON MenuItems(category_id);
+
+-- BUY-06 / BUY-07: every change to what a dish's posted price says -- created, renamed, repriced,
+-- unit changed, taken off or put back on the board -- appends one row that snapshots the whole
+-- dish, written in the same transaction as the change, by whoever made it (the vendor, or a
+-- moderator hiding/restoring the dish). A customer's overcharge complaint is judged against the
+-- row in force at purchased_at, so a later price change cannot rewrite the evidence: the trigger
+-- below refuses UPDATE and DELETE. The storefront's "bản số N" is its count of rows here, which
+-- only ever grows and says nothing about the prices themselves. storefront_id is copied from the
+-- dish (it never changes) so a board's history is one index seek.
+CREATE TABLE MenuItemPriceHistory (
+    price_history_id   BIGINT IDENTITY(1,1)  PRIMARY KEY,
+    menu_item_id       BIGINT                NOT NULL,
+    storefront_id      BIGINT                NOT NULL,
+    item_name          NVARCHAR(180)         NOT NULL,
+    item_name_en       NVARCHAR(180)         NULL,
+    price_unit         NVARCHAR(30)          NOT NULL,
+    unit_price         DECIMAL(18,0)         NOT NULL,
+    is_listed          BIT                   NOT NULL,
+    change_kind        NVARCHAR(20)          NOT NULL,
+    changed_by         BIGINT                NOT NULL,
+    changed_at         DATETIME2             NOT NULL DEFAULT SYSUTCDATETIME(),
+    CONSTRAINT CK_MenuItemPriceHistory_Price
+        CHECK (unit_price >= 0),
+    CONSTRAINT CK_MenuItemPriceHistory_ChangeKind
+        CHECK (change_kind IN ('CREATED','UPDATED','ARCHIVED','RESTORED')),
+    CONSTRAINT FK_MenuItemPriceHistory_MenuItem
+        FOREIGN KEY (menu_item_id) REFERENCES MenuItems(menu_item_id),
+    CONSTRAINT FK_MenuItemPriceHistory_Storefront
+        FOREIGN KEY (storefront_id) REFERENCES Storefronts(storefront_id),
+    CONSTRAINT FK_MenuItemPriceHistory_ChangedBy
+        FOREIGN KEY (changed_by) REFERENCES UserAccounts(user_id)
+);
+CREATE INDEX IX_MenuItemPriceHistory_Item       ON MenuItemPriceHistory(menu_item_id, changed_at);
+CREATE INDEX IX_MenuItemPriceHistory_Storefront ON MenuItemPriceHistory(storefront_id, changed_at);
+GO
+CREATE TRIGGER TR_MenuItemPriceHistory_AppendOnly
+ON MenuItemPriceHistory
+INSTEAD OF UPDATE, DELETE
+AS
+BEGIN
+    SET NOCOUNT ON;
+    THROW 51010, N'MenuItemPriceHistory is append-only: a posted price, once recorded, is never rewritten or removed.', 1;
+END;
+GO
 
 -- Food-safety (ATTP) certificate for some dishes of one storefront. Workflow:
 --   SUBMITTED -> (ward) MORE_INFORMATION_REQUIRED -> SUBMITTED again
@@ -1871,8 +2088,9 @@ CREATE TABLE RefundTransactions (
     CONSTRAINT CK_RefundTransactions_Reason
         CHECK (refund_reason IN ('ORDER_REJECTED','ORDER_CANCELLED','COMPLAINT_RESOLVED')),
     CONSTRAINT CK_RefundTransactions_Provider
-        -- SEPAY has no refund API: its refunds are bank transfers made by hand and recorded here.
-        CHECK (provider IN ('MOMO','ZALOPAY','SEPAY')),
+        -- PAYOS refunds are bank transfers made by hand by the household that was paid, and
+        -- recorded here.
+        CHECK (provider IN ('MOMO','ZALOPAY','PAYOS')),
     CONSTRAINT CK_RefundTransactions_Status
         CHECK (refund_status IN ('PENDING','SUCCESS','FAILED')),
     CONSTRAINT CK_RefundTransactions_AmountPositive
@@ -2012,6 +2230,15 @@ ALTER TABLE PaymentTransactions
     ADD CONSTRAINT FK_PaymentTransactions_Order
     FOREIGN KEY (order_id) REFERENCES Orders(order_id);
 
+-- VendorReports (section 4) points at the dish and the price row an overcharge complaint names.
+ALTER TABLE VendorReports
+    ADD CONSTRAINT FK_VendorReports_MenuItem
+    FOREIGN KEY (menu_item_id) REFERENCES MenuItems(menu_item_id);
+
+ALTER TABLE VendorReports
+    ADD CONSTRAINT FK_VendorReports_PriceHistory
+    FOREIGN KEY (price_history_id) REFERENCES MenuItemPriceHistory(price_history_id);
+
 
 /* ============================================================
    9. VIEWS
@@ -2049,8 +2276,10 @@ SELECT
         WHEN p.permit_status   = 'SUSPENDED'                   THEN 'SUSPENDED'
         WHEN c.contract_status = 'SUSPENDED'                   THEN 'SUSPENDED'
         WHEN c.contract_status = 'EXPIRED'                     THEN 'EXPIRED'
-        WHEN CAST(SYSUTCDATETIME() AS DATE) > c.end_date       THEN 'EXPIRED'
-        WHEN CAST(SYSUTCDATETIME() AS DATE) < c.start_date     THEN 'NOT_YET_VALID'
+        -- start_date/end_date are Vietnamese calendar days: compare with today in UTC+7, not UTC,
+        -- or a permit stays VALID until 07:00 the morning after it expires.
+        WHEN CAST(SWITCHOFFSET(SYSDATETIMEOFFSET(), '+07:00') AS DATE) > c.end_date   THEN 'EXPIRED'
+        WHEN CAST(SWITCHOFFSET(SYSDATETIMEOFFSET(), '+07:00') AS DATE) < c.start_date THEN 'NOT_YET_VALID'
         ELSE 'VALID'
     END AS effective_status
 FROM DigitalPermits p
@@ -2114,29 +2343,118 @@ INSERT INTO Roles (role_code, role_name) VALUES
     ('PLATFORM_ADMIN', N'Quản trị hệ thống');
 GO
 
--- AdministrativeUnits. Ids are pinned with IDENTITY_INSERT because docs, seeds and
--- scripts/e2e-auth-onboarding.sh refer to wards 10/11/12 by number.
+-- AdministrativeUnits: the 94 commune-level units of Đà Nẵng from 1/7/2025 (Nghị quyết
+-- 1659/NQ-UBTVQH15, 16/6/2025): 23 phường, 70 xã and đặc khu Hoàng Sa, all directly under the
+-- city -- there is no district level any more. unit_type is 'WARD' for every commune-level unit;
+-- the name says phường, xã or đặc khu. Ids are pinned with IDENTITY_INSERT because docs, seeds and
+-- scripts/e2e-auth-onboarding.sh refer to wards 10/11/12 by number: 10/11/12/14 are the units
+-- the former wards Hải Châu 1, Thanh Khê Đông, An Hải Bắc and Hòa Quý now belong to. The rest are
+-- numbered from 101 in the resolution's order.
 SET IDENTITY_INSERT AdministrativeUnits ON;
 INSERT INTO AdministrativeUnits (unit_id, unit_type, unit_name, parent_unit_id, contact_name, contact_phone) VALUES
-    ( 1, 'PROVINCE', N'Thành phố Đà Nẵng',      NULL, NULL,                      NULL),
-
-    ( 2, 'DISTRICT', N'Quận Hải Châu',             1, NULL,                      NULL),
-    ( 3, 'DISTRICT', N'Quận Thanh Khê',            1, NULL,                      NULL),
-    ( 4, 'DISTRICT', N'Quận Sơn Trà',              1, NULL,                      NULL),
-    ( 5, 'DISTRICT', N'Quận Ngũ Hành Sơn',         1, NULL,                      NULL),
-
-    (10, 'WARD',     N'Phường Hải Châu 1',         2, N'Nguyễn Thị Hồng Vân',    N'02363821021'),
-    (11, 'WARD',     N'Phường Thanh Khê Đông',     3, N'Trần Quốc Bảo',          N'02363759112'),
-    (12, 'WARD',     N'Phường An Hải Bắc',         4, N'Lê Thị Minh Thu',        N'02363944330'),
-    (13, 'WARD',     N'Phường Nam Dương',          2, N'Phạm Văn Hải',           N'02363827445'),
-    (14, 'WARD',     N'Phường Hòa Quý',            5, N'Võ Thị Kim Chi',         N'02363967208');
+    (  1, 'PROVINCE', N'Thành phố Đà Nẵng',         NULL, NULL, NULL),
+    ( 10, 'WARD',     N'Phường Hải Châu',           1, N'Nguyễn Thị Hồng Vân', N'02363821021'),
+    (101, 'WARD',     N'Phường Hòa Cường',          1, NULL, NULL),
+    ( 11, 'WARD',     N'Phường Thanh Khê',          1, N'Trần Quốc Bảo', N'02363759112'),
+    (102, 'WARD',     N'Phường An Khê',             1, NULL, NULL),
+    ( 12, 'WARD',     N'Phường An Hải',             1, N'Lê Thị Minh Thu', N'02363944330'),
+    (103, 'WARD',     N'Phường Sơn Trà',            1, NULL, NULL),
+    ( 14, 'WARD',     N'Phường Ngũ Hành Sơn',       1, N'Võ Thị Kim Chi', N'02363967208'),
+    (104, 'WARD',     N'Phường Hòa Khánh',          1, NULL, NULL),
+    (105, 'WARD',     N'Phường Hải Vân',            1, NULL, NULL),
+    (106, 'WARD',     N'Phường Liên Chiểu',         1, NULL, NULL),
+    (107, 'WARD',     N'Phường Cẩm Lệ',             1, NULL, NULL),
+    (108, 'WARD',     N'Phường Hòa Xuân',           1, NULL, NULL),
+    (109, 'WARD',     N'Phường Tam Kỳ',             1, NULL, NULL),
+    (110, 'WARD',     N'Phường Quảng Phú',          1, NULL, NULL),
+    (111, 'WARD',     N'Phường Hương Trà',          1, NULL, NULL),
+    (112, 'WARD',     N'Phường Bàn Thạch',          1, NULL, NULL),
+    (113, 'WARD',     N'Phường Điện Bàn',           1, NULL, NULL),
+    (114, 'WARD',     N'Phường Điện Bàn Đông',      1, NULL, NULL),
+    (115, 'WARD',     N'Phường An Thắng',           1, NULL, NULL),
+    (116, 'WARD',     N'Phường Điện Bàn Bắc',       1, NULL, NULL),
+    (117, 'WARD',     N'Phường Hội An',             1, NULL, NULL),
+    (118, 'WARD',     N'Phường Hội An Đông',        1, NULL, NULL),
+    (119, 'WARD',     N'Phường Hội An Tây',         1, NULL, NULL),
+    (120, 'WARD',     N'Xã Hòa Vang',               1, NULL, NULL),
+    (121, 'WARD',     N'Xã Hòa Tiến',               1, NULL, NULL),
+    (122, 'WARD',     N'Xã Bà Nà',                  1, NULL, NULL),
+    (123, 'WARD',     N'Xã Núi Thành',              1, NULL, NULL),
+    (124, 'WARD',     N'Xã Tam Mỹ',                 1, NULL, NULL),
+    (125, 'WARD',     N'Xã Tam Anh',                1, NULL, NULL),
+    (126, 'WARD',     N'Xã Đức Phú',                1, NULL, NULL),
+    (127, 'WARD',     N'Xã Tam Xuân',               1, NULL, NULL),
+    (128, 'WARD',     N'Xã Tây Hồ',                 1, NULL, NULL),
+    (129, 'WARD',     N'Xã Chiên Đàn',              1, NULL, NULL),
+    (130, 'WARD',     N'Xã Phú Ninh',               1, NULL, NULL),
+    (131, 'WARD',     N'Xã Lãnh Ngọc',              1, NULL, NULL),
+    (132, 'WARD',     N'Xã Tiên Phước',             1, NULL, NULL),
+    (133, 'WARD',     N'Xã Thạnh Bình',             1, NULL, NULL),
+    (134, 'WARD',     N'Xã Sơn Cẩm Hà',             1, NULL, NULL),
+    (135, 'WARD',     N'Xã Trà Liên',               1, NULL, NULL),
+    (136, 'WARD',     N'Xã Trà Giáp',               1, NULL, NULL),
+    (137, 'WARD',     N'Xã Trà Tân',                1, NULL, NULL),
+    (138, 'WARD',     N'Xã Trà Đốc',                1, NULL, NULL),
+    (139, 'WARD',     N'Xã Trà My',                 1, NULL, NULL),
+    (140, 'WARD',     N'Xã Nam Trà My',             1, NULL, NULL),
+    (141, 'WARD',     N'Xã Trà Tập',                1, NULL, NULL),
+    (142, 'WARD',     N'Xã Trà Vân',                1, NULL, NULL),
+    (143, 'WARD',     N'Xã Trà Linh',               1, NULL, NULL),
+    (144, 'WARD',     N'Xã Trà Leng',               1, NULL, NULL),
+    (145, 'WARD',     N'Xã Thăng Bình',             1, NULL, NULL),
+    (146, 'WARD',     N'Xã Thăng An',               1, NULL, NULL),
+    (147, 'WARD',     N'Xã Thăng Trường',           1, NULL, NULL),
+    (148, 'WARD',     N'Xã Thăng Điền',             1, NULL, NULL),
+    (149, 'WARD',     N'Xã Thăng Phú',              1, NULL, NULL),
+    (150, 'WARD',     N'Xã Đồng Dương',             1, NULL, NULL),
+    (151, 'WARD',     N'Xã Quế Sơn Trung',          1, NULL, NULL),
+    (152, 'WARD',     N'Xã Quế Sơn',                1, NULL, NULL),
+    (153, 'WARD',     N'Xã Xuân Phú',               1, NULL, NULL),
+    (154, 'WARD',     N'Xã Nông Sơn',               1, NULL, NULL),
+    (155, 'WARD',     N'Xã Quế Phước',              1, NULL, NULL),
+    (156, 'WARD',     N'Xã Duy Nghĩa',              1, NULL, NULL),
+    (157, 'WARD',     N'Xã Nam Phước',              1, NULL, NULL),
+    (158, 'WARD',     N'Xã Duy Xuyên',              1, NULL, NULL),
+    (159, 'WARD',     N'Xã Thu Bồn',                1, NULL, NULL),
+    (160, 'WARD',     N'Xã Điện Bàn Tây',           1, NULL, NULL),
+    (161, 'WARD',     N'Xã Gò Nổi',                 1, NULL, NULL),
+    (162, 'WARD',     N'Xã Đại Lộc',                1, NULL, NULL),
+    (163, 'WARD',     N'Xã Hà Nha',                 1, NULL, NULL),
+    (164, 'WARD',     N'Xã Thượng Đức',             1, NULL, NULL),
+    (165, 'WARD',     N'Xã Vu Gia',                 1, NULL, NULL),
+    (166, 'WARD',     N'Xã Phú Thuận',              1, NULL, NULL),
+    (167, 'WARD',     N'Xã Thạnh Mỹ',               1, NULL, NULL),
+    (168, 'WARD',     N'Xã Bến Giằng',              1, NULL, NULL),
+    (169, 'WARD',     N'Xã Nam Giang',              1, NULL, NULL),
+    (170, 'WARD',     N'Xã Đắc Pring',              1, NULL, NULL),
+    (171, 'WARD',     N'Xã La Dêê',                 1, NULL, NULL),
+    (172, 'WARD',     N'Xã La Êê',                  1, NULL, NULL),
+    (173, 'WARD',     N'Xã Sông Vàng',              1, NULL, NULL),
+    (174, 'WARD',     N'Xã Sông Kôn',               1, NULL, NULL),
+    (175, 'WARD',     N'Xã Đông Giang',             1, NULL, NULL),
+    (176, 'WARD',     N'Xã Bến Hiên',               1, NULL, NULL),
+    (177, 'WARD',     N'Xã Avương',                 1, NULL, NULL),
+    (178, 'WARD',     N'Xã Tây Giang',              1, NULL, NULL),
+    (179, 'WARD',     N'Xã Hùng Sơn',               1, NULL, NULL),
+    (180, 'WARD',     N'Xã Hiệp Đức',               1, NULL, NULL),
+    (181, 'WARD',     N'Xã Việt An',                1, NULL, NULL),
+    (182, 'WARD',     N'Xã Phước Trà',              1, NULL, NULL),
+    (183, 'WARD',     N'Xã Khâm Đức',               1, NULL, NULL),
+    (184, 'WARD',     N'Xã Phước Năng',             1, NULL, NULL),
+    (185, 'WARD',     N'Xã Phước Chánh',            1, NULL, NULL),
+    (186, 'WARD',     N'Xã Phước Thành',            1, NULL, NULL),
+    (187, 'WARD',     N'Xã Phước Hiệp',             1, NULL, NULL),
+    (188, 'WARD',     N'Xã Tam Hải',                1, NULL, NULL),
+    (189, 'WARD',     N'Xã Tân Hiệp',               1, NULL, NULL),
+    (190, 'WARD',     N'Đặc khu Hoàng Sa',          1, NULL, NULL);
 SET IDENTITY_INSERT AdministrativeUnits OFF;
 GO
 
 -- ViolationTypes (WARD-12 catalogue). Natural key: the code is what an officer picks on
 -- the spot and what PenaltyFeeSchedules prices. The first ten are the operational
--- catalogue; the last five are the legal-citation set the ward compliance module and its
--- AI classifier (AiComplianceService) map onto.
+-- catalogue; the next five are the legal-citation set the ward compliance module and its
+-- AI classifier (AiComplianceService) map onto; the last two are the price-posting pair
+-- (Nghị định 87/2024/NĐ-CP Điều 13) a customer's price complaint (BUY-07) leads to.
 -- NO_PERMIT and WASTE_DISPOSAL are retired from the start (is_active = 0): they duplicate
 -- UNAUTHORIZED_BUSINESS_USE (NĐ 168/2024 Đ12 k5) and HYGIENE_LITTERING (NĐ 45/2022 Đ25), which
 -- carry a legal citation. They stay in the catalogue so records that name them still resolve,
@@ -2156,7 +2474,9 @@ INSERT INTO ViolationTypes (violation_type_code, description, is_active) VALUES
     ('EXPIRED_OR_INVALID_PERMIT', N'Giấy phép sử dụng tạm thời vỉa hè hết hiệu lực hoặc sử dụng sai nội dung giấy phép', 1),
     ('STREET_VENDING_RESTRICTED', N'Bán hàng rong tại tuyến phố cấm',                           1),
     ('HYGIENE_LITTERING',         N'Vứt, thải, để rác thải sinh hoạt trên vỉa hè, lòng đường',  1),
-    ('OBSTRUCT_PUBLIC_ORDER',     N'Đổ rác, vật cản gây mất an ninh trật tự công cộng',         1);
+    ('OBSTRUCT_PUBLIC_ORDER',     N'Đổ rác, vật cản gây mất an ninh trật tự công cộng',         1),
+    ('PRICE_NOT_POSTED',          N'Không niêm yết giá hàng hóa, dịch vụ bằng hình thức theo quy định', 1),
+    ('PRICE_ABOVE_POSTED',        N'Bán cao hơn giá niêm yết',                                  1);
 GO
 
 
@@ -2222,11 +2542,240 @@ CREATE TABLE ChatbotAudits (
     timestamp DATETIME2 NOT NULL
 );
 CREATE INDEX IX_ChatbotAudits_Message ON ChatbotAudits(message_id, timestamp);
+-- The daily voice allowance (Chatbot:Voice:DailySecondsPerUser) sums one actor's
+-- voice_session rows since the start of the Vietnamese day.
+CREATE INDEX IX_ChatbotAudits_ActorOperation ON ChatbotAudits(actor_id, operation, timestamp) INCLUDE (outcome);
 GO
 
 
 /* ============================================================
-   12. EF MIGRATION HISTORY
+   12. HOUSEHOLD TAX SUPPORT (TAX)
+   From 1/1/2026 the lump-sum tax (thuế khoán) is gone: a household keeps its own revenue
+   record and declares what it earned. StreetBiz does not file or collect tax. It
+     - keeps the household's revenue book from its own orders plus the sales the household
+       records (RevenueEntries), and shows where that stands against the no-tax threshold;
+     - tracks the notices the household says it has filed (TaxDeclarations);
+     - gives the ward the list of households it is asked to keep current for the tax office,
+       and the cases it should pass on to it (TaxReferrals), without revealing any household's
+       revenue unless that household agreed (VendorTaxProfiles.share_revenue_with_ward).
+   Thresholds and rates are NOT constants: the law changed twice in 2026 alone, so they live in
+   versioned TaxPolicies rows that a platform administrator publishes. A published version is
+   never edited; a correction is a new version, and the highest version of a year is the one
+   in force.
+   ============================================================ */
+
+CREATE TABLE TaxPolicies (
+    policy_id              INT IDENTITY(1,1)  PRIMARY KEY,
+    tax_year               INT                NOT NULL,
+    version_no             INT                NOT NULL,
+    legal_basis            NVARCHAR(500)      NOT NULL,  -- the Nghị định / Luật behind these numbers
+    -- At or below this yearly revenue a household owes no VAT and no PIT; it only reports revenue.
+    revenue_threshold      DECIMAL(18,0)      NOT NULL,
+    -- Above this a household must issue e-invoices (coded, or from a connected cash register).
+    einvoice_threshold     DECIMAL(18,0)      NOT NULL,
+    -- Upper bounds of the revenue groups above the threshold (group 2 and group 3).
+    group2_ceiling         DECIMAL(18,0)      NOT NULL,
+    group3_ceiling         DECIMAL(18,0)      NOT NULL,
+    -- PIT on revenue is charged on the part above the threshold (1) or on all of it (0).
+    pit_deducts_threshold  BIT                NOT NULL DEFAULT 1,
+    -- PIT on profit (revenue minus costs), by group.
+    pit_profit_rate_g2     DECIMAL(5,4)       NOT NULL,
+    pit_profit_rate_g3     DECIMAL(5,4)       NOT NULL,
+    pit_profit_rate_g4     DECIMAL(5,4)       NOT NULL,
+    -- The yearly revenue notice is due on this day of the FOLLOWING year.
+    annual_notice_month    TINYINT            NOT NULL DEFAULT 1,
+    annual_notice_day      TINYINT            NOT NULL DEFAULT 31,
+    -- Share of the threshold at which a household is warned that it is getting close.
+    warn_ratio             DECIMAL(5,4)       NOT NULL DEFAULT 0.8000,
+    note                   NVARCHAR(1000)     NULL,
+    created_by             BIGINT             NOT NULL,
+    creator_role           AS CAST(N'PLATFORM_ADMIN' AS NVARCHAR(30)) PERSISTED,
+    created_at             DATETIME2          NOT NULL DEFAULT SYSUTCDATETIME(),
+    CONSTRAINT UQ_TaxPolicies_YearVersion UNIQUE (tax_year, version_no),
+    CONSTRAINT CK_TaxPolicies_Year
+        CHECK (tax_year BETWEEN 2026 AND 2100 AND version_no >= 1),
+    CONSTRAINT CK_TaxPolicies_Thresholds
+        CHECK (revenue_threshold > 0 AND einvoice_threshold > 0
+           AND group2_ceiling > revenue_threshold AND group3_ceiling > group2_ceiling),
+    CONSTRAINT CK_TaxPolicies_Rates
+        CHECK (pit_profit_rate_g2 BETWEEN 0 AND 1 AND pit_profit_rate_g3 BETWEEN 0 AND 1
+           AND pit_profit_rate_g4 BETWEEN 0 AND 1),
+    CONSTRAINT CK_TaxPolicies_WarnRatio
+        CHECK (warn_ratio > 0 AND warn_ratio < 1),
+    CONSTRAINT CK_TaxPolicies_NoticeDate
+        CHECK ((annual_notice_month IN (1,3,5,7,8,10,12) AND annual_notice_day BETWEEN 1 AND 31)
+            OR (annual_notice_month IN (4,6,9,11)        AND annual_notice_day BETWEEN 1 AND 30)
+            OR (annual_notice_month = 2                  AND annual_notice_day BETWEEN 1 AND 28)),
+    CONSTRAINT FK_TaxPolicies_CreatedBy
+        FOREIGN KEY (created_by, creator_role)
+        REFERENCES UserAccounts(user_id, role_code)
+);
+
+-- Rates on revenue by kind of business, one set per policy version. industry_code is a stable
+-- code (the household's profile stores it), the rates change with the policy.
+CREATE TABLE TaxIndustryRates (
+    rate_id         INT IDENTITY(1,1)  PRIMARY KEY,
+    policy_id       INT                NOT NULL,
+    industry_code   NVARCHAR(30)       NOT NULL,
+    industry_name   NVARCHAR(200)      NOT NULL,
+    vat_rate        DECIMAL(5,4)       NOT NULL,
+    pit_rate        DECIMAL(5,4)       NOT NULL,
+    note            NVARCHAR(300)      NULL,
+    CONSTRAINT UQ_TaxIndustryRates_Code UNIQUE (policy_id, industry_code),
+    CONSTRAINT CK_TaxIndustryRates_Rates
+        CHECK (vat_rate BETWEEN 0 AND 1 AND pit_rate BETWEEN 0 AND 1),
+    CONSTRAINT FK_TaxIndustryRates_Policy
+        FOREIGN KEY (policy_id) REFERENCES TaxPolicies(policy_id) ON DELETE CASCADE
+);
+
+-- One row per household (vendor), created the first time it opens the tax screens.
+CREATE TABLE VendorTaxProfiles (
+    vendor_id               BIGINT         NOT NULL PRIMARY KEY,
+    tax_code                NVARCHAR(14)   NULL,   -- mã số thuế: 10 digits, 10-3, or the 12-digit personal id
+    industry_code           NVARCHAR(30)   NOT NULL DEFAULT 'FOOD_SERVICE',
+    einvoice_registered     BIT            NOT NULL DEFAULT 0,
+    -- Whether the ward officer may see this household's revenue figures and revenue group.
+    -- Off by default: the ward always sees whether the notice was filed, never the amounts.
+    share_revenue_with_ward BIT            NOT NULL DEFAULT 0,
+    consent_updated_at      DATETIME2      NULL,
+    created_at              DATETIME2      NOT NULL DEFAULT SYSUTCDATETIME(),
+    updated_at              DATETIME2      NULL,
+    CONSTRAINT CK_VendorTaxProfiles_TaxCode
+        CHECK (tax_code IS NULL
+            OR (LEN(tax_code) IN (10, 12, 13, 14) AND tax_code NOT LIKE '%[^0-9-]%')),
+    CONSTRAINT FK_VendorTaxProfiles_Vendor
+        FOREIGN KEY (vendor_id) REFERENCES Vendors(vendor_id)
+);
+
+-- Sales the household records by hand (cash at the stall, a transfer to its own account). Sales
+-- through StreetBiz orders are NOT stored here: they are read from Orders, so the book can never
+-- count one sale twice. A wrong entry is voided, never edited or deleted, so the book keeps its
+-- history.
+CREATE TABLE RevenueEntries (
+    entry_id     BIGINT IDENTITY(1,1)  PRIMARY KEY,
+    vendor_id    BIGINT                NOT NULL,
+    entry_date   DATE                  NOT NULL,  -- the Vietnamese calendar day of the sales
+    amount       DECIMAL(18,0)         NOT NULL,
+    channel      NVARCHAR(20)          NOT NULL,
+    note         NVARCHAR(300)         NULL,
+    created_at   DATETIME2             NOT NULL DEFAULT SYSUTCDATETIME(),
+    voided_at    DATETIME2             NULL,
+    void_reason  NVARCHAR(300)         NULL,
+    CONSTRAINT CK_RevenueEntries_Amount
+        CHECK (amount > 0 AND amount <= 10000000000),
+    CONSTRAINT CK_RevenueEntries_Channel
+        CHECK (channel IN ('CASH','BANK_TRANSFER','EWALLET','OTHER')),
+    CONSTRAINT CK_RevenueEntries_Void
+        CHECK (voided_at IS NOT NULL OR void_reason IS NULL),
+    CONSTRAINT FK_RevenueEntries_Vendor
+        FOREIGN KEY (vendor_id) REFERENCES Vendors(vendor_id)
+);
+CREATE INDEX IX_RevenueEntries_Vendor_Date
+    ON RevenueEntries(vendor_id, entry_date) INCLUDE (amount, channel)
+    WHERE voided_at IS NULL;
+
+-- A notice or declaration the household confirms it has filed with the tax authority (through
+-- the tax portal / eTax Mobile: StreetBiz files nothing). period_type YEAR is the yearly revenue
+-- notice (period_no 0); QUARTER is the quarterly declaration a household above the threshold
+-- makes (period_no 1-4). revenue_system is StreetBiz's own figure when the household confirmed,
+-- kept beside what it declared so a difference stays visible.
+CREATE TABLE TaxDeclarations (
+    declaration_id       BIGINT IDENTITY(1,1)  PRIMARY KEY,
+    vendor_id            BIGINT                NOT NULL,
+    tax_year             INT                   NOT NULL,
+    period_type          NVARCHAR(10)          NOT NULL,
+    period_no            TINYINT               NOT NULL DEFAULT 0,
+    revenue_declared     DECIMAL(18,0)         NOT NULL,
+    revenue_system       DECIMAL(18,0)         NOT NULL,
+    filed_on             DATE                  NOT NULL,  -- the day it was filed with the authority
+    authority_reference  NVARCHAR(100)         NULL,      -- the portal's receipt / transaction number
+    receipt_url          NVARCHAR(500)         NULL,      -- an uploaded proof (evidence file URL)
+    note                 NVARCHAR(500)         NULL,
+    created_at           DATETIME2             NOT NULL DEFAULT SYSUTCDATETIME(),
+    updated_at           DATETIME2             NULL,
+    CONSTRAINT UQ_TaxDeclarations_Period UNIQUE (vendor_id, tax_year, period_type, period_no),
+    CONSTRAINT CK_TaxDeclarations_Period
+        CHECK ((period_type = 'YEAR' AND period_no = 0)
+            OR (period_type = 'QUARTER' AND period_no BETWEEN 1 AND 4)),
+    CONSTRAINT CK_TaxDeclarations_Year CHECK (tax_year BETWEEN 2026 AND 2100),
+    CONSTRAINT CK_TaxDeclarations_Amounts CHECK (revenue_declared >= 0 AND revenue_system >= 0),
+    CONSTRAINT FK_TaxDeclarations_Vendor
+        FOREIGN KEY (vendor_id) REFERENCES Vendors(vendor_id)
+);
+
+-- The ward's list of things to pass on to the tax office, so a household that sells without
+-- being registered, moves, stops trading or is new and has no tax code is not left for the office
+-- to find on its own. Generated from the ward's own records and refreshed daily; the unique key
+-- makes the refresh idempotent, and the officer's decision on a row (reported / not needed) is
+-- kept. A referral is a pointer to a record, never a verdict about the household.
+CREATE TABLE TaxReferrals (
+    referral_id          BIGINT IDENTITY(1,1)  PRIMARY KEY,
+    ward_unit_id         INT                   NOT NULL,
+    ward_unit_type       AS CAST(N'WARD' AS NVARCHAR(20)) PERSISTED,
+    vendor_id            BIGINT                NULL,
+    reason_code          NVARCHAR(30)          NOT NULL,
+    source_type          NVARCHAR(20)          NOT NULL,
+    source_id            BIGINT                NOT NULL,
+    summary              NVARCHAR(500)         NOT NULL,
+    detected_at          DATETIME2             NOT NULL,  -- when the underlying event happened
+    created_at           DATETIME2             NOT NULL DEFAULT SYSUTCDATETIME(),
+    referral_status      NVARCHAR(10)          NOT NULL DEFAULT 'PENDING',
+    handled_by           BIGINT                NULL,      -- NULL when the system closed it itself
+    handled_at           DATETIME2             NULL,
+    authority_reference  NVARCHAR(100)         NULL,      -- the reference of the letter / submission to the tax office
+    handling_note        NVARCHAR(500)         NULL,
+    CONSTRAINT UQ_TaxReferrals_Source UNIQUE (reason_code, source_type, source_id),
+    CONSTRAINT CK_TaxReferrals_Reason
+        CHECK (reason_code IN ('UNREGISTERED_ACTIVITY','INVALID_PERMIT_ACTIVITY','ADDRESS_CHANGED',
+                               'BUSINESS_ENDED','NEW_HOUSEHOLD')),
+    CONSTRAINT CK_TaxReferrals_SourceType
+        CHECK (source_type IN ('VIOLATION','PERMIT_SCAN','ADDRESS_CHANGE','CONTRACT','VENDOR')),
+    CONSTRAINT CK_TaxReferrals_Status
+        CHECK (referral_status IN ('PENDING','REPORTED','DISMISSED')),
+    CONSTRAINT CK_TaxReferrals_Handled
+        CHECK (referral_status = 'PENDING' OR handled_at IS NOT NULL),
+    CONSTRAINT CK_TaxReferrals_DismissNote
+        CHECK (referral_status <> 'DISMISSED' OR handling_note IS NOT NULL),
+    CONSTRAINT FK_TaxReferrals_Ward
+        FOREIGN KEY (ward_unit_id, ward_unit_type)
+        REFERENCES AdministrativeUnits(unit_id, unit_type),
+    CONSTRAINT FK_TaxReferrals_Vendor
+        FOREIGN KEY (vendor_id) REFERENCES Vendors(vendor_id),
+    CONSTRAINT FK_TaxReferrals_HandledBy
+        FOREIGN KEY (handled_by) REFERENCES UserAccounts(user_id)
+);
+CREATE INDEX IX_TaxReferrals_Ward_Status ON TaxReferrals(ward_unit_id, referral_status);
+
+-- A message the ward sent to its households about tax, kept so the ward can see what it has
+-- already told them. Recipients get an ordinary notification.
+CREATE TABLE TaxAnnouncements (
+    announcement_id   BIGINT IDENTITY(1,1)  PRIMARY KEY,
+    ward_unit_id      INT                   NOT NULL,
+    ward_unit_type    AS CAST(N'WARD' AS NVARCHAR(20)) PERSISTED,
+    segment           NVARCHAR(20)          NOT NULL,
+    tax_year          INT                   NOT NULL,
+    title             NVARCHAR(150)         NOT NULL,
+    body              NVARCHAR(800)         NOT NULL,
+    recipient_count   INT                   NOT NULL,
+    created_by        BIGINT                NOT NULL,
+    creator_role      AS CAST(N'WARD_AUTHORITY' AS NVARCHAR(30)) PERSISTED,
+    created_at        DATETIME2             NOT NULL DEFAULT SYSUTCDATETIME(),
+    CONSTRAINT CK_TaxAnnouncements_Segment
+        CHECK (segment IN ('ALL','NOT_FILED','NO_TAX_CODE')),
+    CONSTRAINT CK_TaxAnnouncements_Recipients CHECK (recipient_count >= 0),
+    CONSTRAINT FK_TaxAnnouncements_Ward
+        FOREIGN KEY (ward_unit_id, ward_unit_type)
+        REFERENCES AdministrativeUnits(unit_id, unit_type),
+    CONSTRAINT FK_TaxAnnouncements_CreatedBy
+        FOREIGN KEY (created_by, creator_role)
+        REFERENCES UserAccounts(user_id, role_code)
+);
+CREATE INDEX IX_TaxAnnouncements_Ward ON TaxAnnouncements(ward_unit_id, created_at DESC);
+GO
+
+
+/* ============================================================
+   13. EF MIGRATION HISTORY
    StreetBizDB is database-first: this file is the schema, EF never creates or alters it
    (docs/database.md). The rows are stamped here so EF never believes it has work to do:
    InitialBaseline has an intentionally empty Up() (the schema predates EF) and
@@ -2255,25 +2804,28 @@ GO
                                       RegistrationEvidence,
                                       BusinessRegistrationHouseholdMembers,
                                       KycVerificationResults)
-   3  Sidewalk Slot & Rental ..... 12 (PricingZones, SidewalkSlots,
-                                      ZoneFeeComponents, StreetFeatures,
+   3  Sidewalk Slot & Rental ..... 13 (PricingZones, SidewalkSlots,
+                                      SlotImages, ZoneFeeComponents, StreetFeatures,
                                       SlotHolds, RentalApplications,
                                       RentalContracts, DigitalPermits,
                                       SlotTransferRequests, PermitScanLogs,
                                       RenewalRequests, AddressChangeRequests)
    4  Buyer Trust & Verification . 2  (VendorComments, VendorReports)
-   5  Fee, Penalty & Invoicing ... 11 (ViolationTypes, PenaltyFeeSchedules,
+   5  Fee, Penalty & Invoicing ... 13 (ViolationTypes, PenaltyFeeSchedules,
                                       WardCompliancePolicies, Violations,
                                       Penalties, FeeSchedules,
                                       FeeScheduleItems, DepositRefunds,
-                                      Invoices, PaymentTransactions,
-                                      PaymentCallbackEvents)
+                                      Invoices, PayeeAccounts,
+                                      PaymentTransactions,
+                                      PaymentCallbackEvents,
+                                      PenaltyPaymentReceipts)
    6  Platform Admin & System .... 5  (FoodCategories, Notifications,
                                       AuditLogs, AIAssistanceLogs,
                                       ReportExports)
                                       -- FoodCategories is shared with Phase 2 menus/search
-   7  Phase 2 Marketplace ........ 17 (Storefronts, StorefrontBusinessHours,
-                                      MenuItems, FoodSafetyApplications,
+   7  Phase 2 Marketplace ........ 18 (Storefronts, StorefrontBusinessHours,
+                                      MenuItems, MenuItemPriceHistory,
+                                      FoodSafetyApplications,
                                       FoodSafetyApplicationItems,
                                       FoodSafetyEvidence, ShoppingCarts,
                                       ShoppingCartItems, Orders, OrderItems,
@@ -2282,8 +2834,12 @@ GO
                                       ChatMessages, ReportedContent)
    11 Assistant Persistence ...... 3  (ChatbotConversations, ChatbotMessages,
                                       ChatbotAudits)
+   12 Household Tax Support ...... 7  (TaxPolicies, TaxIndustryRates,
+                                      VendorTaxProfiles, RevenueEntries,
+                                      TaxDeclarations, TaxReferrals,
+                                      TaxAnnouncements)
    ------------------------------------------------------------
-   TOTAL: 62 tables (plus __EFMigrationsHistory), 5 triggers, 2 views
+   TOTAL: 72 tables (plus __EFMigrationsHistory), 6 triggers, 2 views
 
    Use-case coverage: the 70 Core and 31 Phase 2 use cases of the actor
    specification. AIAssistanceLogs backs AIC-01 (document check), AIC-02

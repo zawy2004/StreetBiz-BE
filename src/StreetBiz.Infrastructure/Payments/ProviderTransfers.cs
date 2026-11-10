@@ -6,10 +6,10 @@ using StreetBiz.Infrastructure.Persistence;
 namespace StreetBiz.Infrastructure.Payments;
 
 /// <summary>
-/// Telling a repeated report from new money. MoMo reports one checkout, so a second success for
+/// Telling a repeated report from new money, and who may report it. MoMo reports one checkout, so a second success for
 /// a settled transaction is the same report again. A bank transfer is different: the payer can
 /// send the same payment code twice, or pay after the order was cancelled, and each of those is
-/// real money. SePay gives every transfer its own id (<see cref="PaymentCallbackData.ProviderEventId"/>),
+/// real money. payOS gives every transfer its own bank reference (<see cref="PaymentCallbackData.ProviderEventId"/>),
 /// kept in the stored payload of the callback that settled the transaction.
 /// </summary>
 internal static class ProviderTransfers
@@ -37,6 +37,63 @@ internal static class ProviderTransfers
                 && row.processing_result == CallbackResults.Applied)
             .Select(row => row.raw_payload)
             .ToListAsync(cancellationToken);
-        return !applied.Any(raw => SePayGateway.EventIdIn(raw) == callback.ProviderEventId);
+        return !applied.Any(raw => EventIdIn(callback.Provider, raw) == callback.ProviderEventId);
+    }
+
+    /// <summary>
+    /// A payment to a payee (PAYOS) is settled only by that payee's own channel; a payment to no
+    /// payee is settled only by a report that names none.
+    /// </summary>
+    public static bool FromItsPayee(long? paymentPayeeAccountId, PaymentCallbackData callback) =>
+        paymentPayeeAccountId == callback.PayeeAccountId;
+
+    /// <summary>
+    /// The provider's id for the transfer inside a stored payload: payOS's bank reference, in a
+    /// webhook's "data.reference" or a status answer's "transactions[].reference". Other providers
+    /// report one checkout and carry no transfer id.
+    /// </summary>
+    public static string? EventIdIn(string provider, string? rawPayload)
+    {
+        if (provider != PaymentProviders.PayOs || string.IsNullOrWhiteSpace(rawPayload))
+        {
+            return null;
+        }
+
+        try
+        {
+            using var json = System.Text.Json.JsonDocument.Parse(rawPayload);
+            var root = json.RootElement;
+            if (root.ValueKind != System.Text.Json.JsonValueKind.Object)
+            {
+                return null;
+            }
+
+            if (root.TryGetProperty("data", out var data)
+                && data.ValueKind == System.Text.Json.JsonValueKind.Object
+                && data.TryGetProperty("reference", out var reference)
+                && reference.ValueKind == System.Text.Json.JsonValueKind.String)
+            {
+                return reference.GetString();
+            }
+
+            if (root.TryGetProperty("transactions", out var transactions)
+                && transactions.ValueKind == System.Text.Json.JsonValueKind.Array)
+            {
+                foreach (var transfer in transactions.EnumerateArray())
+                {
+                    if (transfer.ValueKind == System.Text.Json.JsonValueKind.Object
+                        && transfer.TryGetProperty("reference", out var item)
+                        && item.ValueKind == System.Text.Json.JsonValueKind.String)
+                    {
+                        return item.GetString();
+                    }
+                }
+            }
+        }
+        catch (System.Text.Json.JsonException)
+        {
+        }
+
+        return null;
     }
 }

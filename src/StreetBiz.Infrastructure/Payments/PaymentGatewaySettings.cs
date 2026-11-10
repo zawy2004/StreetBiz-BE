@@ -6,7 +6,7 @@ public sealed class PaymentGatewaySettings
     public bool SandboxEnabled { get; set; }
     public PaymentProviderSettings Momo { get; set; } = new();
     public PaymentProviderSettings ZaloPay { get; set; } = new();
-    public SePaySettings SePay { get; set; } = new();
+    public PayOsSettings PayOs { get; set; } = new();
 
     public PaymentProviderSettings For(string provider) => provider switch
     {
@@ -17,56 +17,36 @@ public sealed class PaymentGatewaySettings
 }
 
 /// <summary>
-/// SePay (https://developer.sepay.vn): the payer transfers to <c>AccountNumber</c> by VietQR
-/// with the payment code in the content, and SePay's webhook reports the money arriving.
-/// Secrets (<c>WebhookSecret</c>, <c>WebhookApiKey</c>, <c>ApiToken</c>) belong in user-secrets
-/// or environment variables, never in a committed appsettings file.
+/// payOS (https://payos.vn/docs/api/): every household and ward connects its own payOS channel,
+/// so the payer's VietQR transfer goes straight into the payee's account and StreetBiz never
+/// holds the money. The channel keys are stored per payee (encrypted with
+/// <see cref="CredentialKey"/>), not here.
 /// </summary>
-public sealed class SePaySettings
+public sealed class PayOsSettings
 {
-    /// <summary>The bank as SePay's QR service names it, e.g. "MBBank", "Vietcombank", "TPBank".</summary>
-    public string? BankName { get; set; }
+    /// <summary>Off switches PAYOS off everywhere, whatever the payees have connected.</summary>
+    public bool Enabled { get; set; } = true;
 
-    public string? AccountNumber { get; set; }
-
-    /// <summary>Shown to the payer so they can check who they are paying.</summary>
-    public string? AccountName { get; set; }
+    /// <summary>payOS's merchant API. Point it at scripts/payos-fake for a demo without real money.</summary>
+    public string ApiBaseUrl { get; set; } = "https://api-merchant.payos.vn";
 
     /// <summary>
-    /// The payment code is this prefix plus the transaction id (SBP42). Set the same prefix in
-    /// My SePay → Cấu hình công ty → Cấu trúc mã thanh toán so SePay fills the webhook's "code".
+    /// The public https origin payOS can reach (ngrok, the deployed API), e.g. https://abc.ngrok-free.app.
+    /// Empty: the webhook is not registered and payments are settled by asking payOS instead.
     /// </summary>
-    public string PaymentCodePrefix { get; set; } = "SBP";
+    public string? PublicWebhookBaseUrl { get; set; }
 
-    /// <summary>The transfer content; "{code}" is replaced by the payment code. Some banks need a fixed prefix.</summary>
-    public string TransferContentTemplate { get; set; } = "{code}";
+    /// <summary>Where payOS's hosted page sends the payer back (the web app), e.g. http://localhost:5173.</summary>
+    public string FrontendBaseUrl { get; set; } = "http://localhost:5173";
 
-    /// <summary>The webhook's HMAC-SHA256 secret key (recommended authentication).</summary>
-    public string? WebhookSecret { get; set; }
-
-    /// <summary>The webhook's API key, sent by SePay as "Authorization: Apikey {key}".</summary>
-    public string? WebhookApiKey { get; set; }
+    /// <summary>How long a payment link (and its QR) stays payable.</summary>
+    public int LinkLifetimeMinutes { get; set; } = 30;
 
     /// <summary>
-    /// A My SePay API token (Cấu hình công ty → API Access). Optional: with it, "Kiểm tra lại" and
-    /// the stale-payment sweep can ask SePay directly when the webhook cannot reach the server.
+    /// Base64 of 32 random bytes that encrypts the payees' keys (AES-GCM). User-secrets / App
+    /// Settings only. Outside Development, PAYOS stays off until it is set.
     /// </summary>
-    public string? ApiToken { get; set; }
-
-    public string ApiBaseUrl { get; set; } = "https://my.sepay.vn/userapi";
-
-    public string QrImageBaseUrl { get; set; } = "https://qr.sepay.vn/img";
-
-    /// <summary>How far X-SePay-Timestamp may be from now before an HMAC-signed webhook is refused.</summary>
-    public int SignatureToleranceSeconds { get; set; } = 300;
-
-    public bool IsConfigured =>
-        !string.IsNullOrWhiteSpace(BankName)
-        && !string.IsNullOrWhiteSpace(AccountNumber)
-        && !string.IsNullOrWhiteSpace(PaymentCodePrefix)
-        && (!string.IsNullOrWhiteSpace(WebhookSecret)
-            || !string.IsNullOrWhiteSpace(WebhookApiKey)
-            || !string.IsNullOrWhiteSpace(ApiToken));
+    public string? CredentialKey { get; set; }
 }
 
 public sealed class PaymentProviderSettings
@@ -111,6 +91,35 @@ public sealed class PaymentProviderSettings
 
     /// <summary>v2 request type; "captureWallet" opens the MoMo wallet / QR page.</summary>
     public string RequestType { get; set; } = "captureWallet";
+
+    // ---- ZaloPay Gateway v2 (https://docs.zalopay.vn). Switched off until Enabled is true AND every
+    // credential below is present, so a half-filled section never starts a checkout. Keys belong in
+    // user-secrets / environment variables, never in the committed appsettings.json.
+    // ApiBaseUrl, ReturnUrl, FeeReturnUrl and PenaltyReturnUrl are shared with MoMo's fields above.
+
+    /// <summary>The explicit switch for ZaloPay; false by default.</summary>
+    public bool Enabled { get; set; }
+
+    /// <summary>ZaloPay's numeric app_id (kept as text: it is only ever sent and compared as text).</summary>
+    public string? AppId { get; set; }
+
+    /// <summary>Signs create/query requests.</summary>
+    public string? Key1 { get; set; }
+
+    /// <summary>Verifies the callback ZaloPay sends back.</summary>
+    public string? Key2 { get; set; }
+
+    /// <summary>Public URL of POST /api/payments/zalopay/callback. ZaloPay cannot reach localhost, so locally the payment screen asks the backend to query ZaloPay instead.</summary>
+    public string? CallbackUrl { get; set; }
+
+    public bool IsZaloPayConfigured =>
+        Enabled
+        && !string.IsNullOrWhiteSpace(ApiBaseUrl)
+        && !string.IsNullOrWhiteSpace(AppId)
+        && !string.IsNullOrWhiteSpace(Key1)
+        && !string.IsNullOrWhiteSpace(Key2)
+        && !string.IsNullOrWhiteSpace(ReturnUrl)
+        && !string.IsNullOrWhiteSpace(CallbackUrl);
 
     public bool IsMomoConfigured =>
         !string.IsNullOrWhiteSpace(ApiBaseUrl)

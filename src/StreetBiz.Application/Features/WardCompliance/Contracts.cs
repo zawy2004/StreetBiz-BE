@@ -53,7 +53,10 @@ public sealed record WardEnrollmentDetailDto(
     string? IdentityVerificationNote,
     /// <summary>Server-recorded eKYC scores (CCCD OCR, face match) for this registration.
     /// Evidence for the officer's own decision -- never a substitute for it.</summary>
-    IReadOnlyList<KycCheckRecord> KycChecks);
+    IReadOnlyList<KycCheckRecord> KycChecks,
+    /// <summary>X01: the vendor filled this in with the voice assistant and accepted its draft
+    /// themselves before filing. Shown as "[AI] soạn từ lời kể — người bán đã xác nhận".</summary>
+    bool AssistedByAi = false);
 
 public sealed record WardOwnerProfileDto(
     DateOnly? DateOfBirth,
@@ -165,7 +168,10 @@ public sealed record InspectWardPermitResult(
     double? DistanceMeters,
     bool IsLocationMatched,
     string? LocationWarning,
-    AiEncroachmentResult? AiVisionResult);
+    AiEncroachmentResult? AiVisionResult,
+    /// <summary>False when the slot belongs to another ward: only the permit's validity is shown
+    /// (as the public check shows it) and the ids an officer would act on are left out.</summary>
+    bool IsOwnWard = true);
 
 public sealed record WardPermitActionRequest(
     string Action,
@@ -210,7 +216,11 @@ public sealed record RecordWardViolationRequest(
     string? ContainmentMeasures = null,
     /// <summary>Mẫu 01 mục 10 (Điều 61 Luật XLVPHC). WitnessRole/Method null unless True.</summary>
     bool ExplanationRequired = false,
-    string? ExplanationMethod = null);
+    string? ExplanationMethod = null,
+    /// <summary>WARD-19: the citizen report this record is raised from. It must be PENDING, in the
+    /// officer's ward and about the same vendor or slot; the record is then CUSTOMER_REPORT and the
+    /// report closes as VIOLATION_RECORDED in the same transaction. One record per report.</summary>
+    long? SourceReportId = null);
 
 public sealed record RecordExplanationRequest(string Content);
 
@@ -394,9 +404,9 @@ public sealed record WardRenewalListItemDto(
     bool IsFastTrackEligible,
     int ViolationCount,
     DateTime CreatedAt,
-    /// <summary>NĐ 241/2026 Điều 21 (sửa NĐ 165/2024): hạn xử lý hồ sơ 3 ngày làm việc. Tính
-    /// gần đúng bằng 3 ngày lịch kể từ khi nộp (hệ thống chưa có lịch ngày nghỉ/lễ để tính
-    /// đúng ngày làm việc) -- dùng để cảnh báo, không phải căn cứ pháp lý chính xác tuyệt đối.</summary>
+    /// <summary>NĐ 241/2026 Điều 21 (sửa NĐ 165/2024): hạn xử lý hồ sơ 3 ngày làm việc, tính từ
+    /// ngày kế tiếp ngày nộp đến hết ngày làm việc thứ ba (BusinessCalendar, có ngày nghỉ lễ). Ngày
+    /// lễ chưa công bố khi phát hành phải được thêm vào cấu hình BusinessCalendar.</summary>
     DateTime SlaDueAt,
     bool IsOverdue);
 
@@ -542,9 +552,12 @@ public interface IAiComplianceService
     /// against phone number -- the caller passes only the evidence file URLs to analyze.
     Task<AiIdExtractionResult> ExtractIdDocumentAsync(IReadOnlyList<WardEvidenceDto> evidence, CancellationToken ct);
 
-    /// Compares AI-extracted identity data against the vendor's self-declared profile.
+    /// Compares AI-extracted identity data against the vendor's self-declared profile (SRS AIC-02, "cross-check
+    /// registration authenticity"): the declared name and the declared CCCD number are both checked against what the
+    /// card says, and any difference is returned as a discrepancy for the officer. The declared id number is the one
+    /// the vendor typed in the registration, not the one OCR read.
     Task<AiDocumentCheckResult> CompareDeclaredProfileAsync(
-        string declaredName, string? extractedIdNumber, string declaredAddress,
+        string declaredName, string? declaredIdNumber, string declaredAddress,
         AiIdExtractionResult extraction, CancellationToken ct);
 
     /// Multimodal analysis of an on-site inspection photo against the permitted slot dimensions.

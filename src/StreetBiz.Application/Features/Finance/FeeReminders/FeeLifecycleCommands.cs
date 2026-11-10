@@ -59,7 +59,10 @@ public sealed record SettleStalePaymentsCommand : IRequest<StalePaymentSweepResu
 public sealed class SettleStalePaymentsCommandHandler(
     IFinanceRepository finance,
     IPaymentGateway paymentGateway,
-    TimeProvider clock) : IRequestHandler<SettleStalePaymentsCommand, StalePaymentSweepResult>
+    TimeProvider clock,
+    IPaymentTransactionRepository? transactions = null,
+    StreetBiz.Application.Features.PayoutAccounts.PayeeCheckouts? payeeCheckouts = null,
+    ICommerceRepository? commerce = null) : IRequestHandler<SettleStalePaymentsCommand, StalePaymentSweepResult>
 {
     public async Task<StalePaymentSweepResult> Handle(SettleStalePaymentsCommand request, CancellationToken cancellationToken)
     {
@@ -73,7 +76,13 @@ public sealed class SettleStalePaymentsCommandHandler(
                 PaymentGatewayCallback? state;
                 try
                 {
-                    state = await paymentGateway.QueryPaymentAsync(payment.Provider, reference, cancellationToken);
+                    // PAYOS: asked on the payee's own channel, with its own keys.
+                    var stored = payment.PayeeAccountId is not null && transactions is not null && payeeCheckouts is not null
+                        ? await transactions.GetAsync(payment.TransactionId, cancellationToken)
+                        : null;
+                    state = stored is not null
+                        ? await payeeCheckouts!.QueryAsync(stored, cancellationToken)
+                        : await paymentGateway.QueryPaymentAsync(payment.Provider, reference, cancellationToken);
                 }
                 catch (Exception exception) when (exception is HttpRequestException
                     || (exception is TaskCanceledException && !cancellationToken.IsCancellationRequested))
@@ -92,7 +101,10 @@ public sealed class SettleStalePaymentsCommandHandler(
                             state.Status,
                             state.RawPayload ?? "{}",
                             state.SignatureValid,
-                            state.ProviderEventId),
+                            state.ProviderEventId)
+                        {
+                            PayeeAccountId = payment.PayeeAccountId,
+                        },
                         cancellationToken);
                     settled++;
                     continue;
@@ -111,6 +123,59 @@ public sealed class SettleStalePaymentsCommandHandler(
             }
         }
 
+        settled += await SettleStaleOrderPaymentsAsync(now, cancellationToken);
         return new StalePaymentSweepResult(settled, closed);
+    }
+
+    /// <summary>
+    /// Orders paid to a household's own payOS channel whose webhook never arrived: asked with that
+    /// household's keys and applied like a callback once payOS reports them final. Never closed here;
+    /// an unpaid order keeps its own lifecycle.
+    /// </summary>
+    private async Task<int> SettleStaleOrderPaymentsAsync(DateTime now, CancellationToken cancellationToken)
+    {
+        if (transactions is null || payeeCheckouts is null || commerce is null)
+        {
+            return 0;
+        }
+
+        var settled = 0;
+        foreach (var payment in await transactions.ListStalePayeeOrderPaymentsAsync(
+            now - StalePaymentPolicy.CheckAfter, cancellationToken))
+        {
+            PaymentGatewayCallback? state;
+            try
+            {
+                state = await payeeCheckouts.QueryAsync(payment, cancellationToken);
+            }
+            catch (Exception exception) when (exception is HttpRequestException
+                || (exception is TaskCanceledException && !cancellationToken.IsCancellationRequested))
+            {
+                continue;
+            }
+
+            if (state?.Status is null)
+            {
+                continue;
+            }
+
+            await commerce.ApplyPaymentCallbackAsync(
+                new PaymentCallbackData(
+                    payment.Provider,
+                    state.ProviderReference ?? payment.ProviderReference,
+                    payment.IdempotencyKey,
+                    state.Amount,
+                    state.Status,
+                    state.RawPayload ?? "{}",
+                    state.SignatureValid,
+                    state.ProviderEventId)
+                {
+                    PayeeAccountId = payment.PayeeAccountId,
+                },
+                cancellationToken);
+            settled++;
+        }
+
+        return settled;
     }
 }

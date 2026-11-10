@@ -218,6 +218,7 @@ public sealed class ChatbotVoiceTests
         public Task SendAudioAsync(ReadOnlyMemory<byte> pcm16k, CancellationToken ct) { lock (AudioSent) AudioSent.Add(pcm16k.Length); return Task.CompletedTask; }
         public Task SendAudioEndAsync(CancellationToken ct) { AudioEnds++; return Task.CompletedTask; }
         public Task SendToolResponsesAsync(IReadOnlyList<ChatbotToolReply> replies, CancellationToken ct) { lock (Replies) Replies.AddRange(replies); return Task.CompletedTask; }
+        public Task SendTextAsync(string text, CancellationToken ct) => Task.CompletedTask;
         public async IAsyncEnumerable<ChatbotVoiceEvent> EventsAsync([System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct)
         {
             while (await events.Reader.WaitToReadAsync(ct))

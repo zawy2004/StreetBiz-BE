@@ -9,7 +9,11 @@ COPY ["src/StreetBiz.API/StreetBiz.API.csproj", "src/StreetBiz.API/"]
 RUN dotnet restore "src/StreetBiz.API/StreetBiz.API.csproj"
 
 COPY . .
-RUN dotnet publish "src/StreetBiz.API/StreetBiz.API.csproj" +    --configuration Release +    --output /app/publish +    --no-restore +    /p:UseAppHost=false
+RUN dotnet publish "src/StreetBiz.API/StreetBiz.API.csproj" \
+    --configuration Release \
+    --output /app/publish \
+    --no-restore \
+    /p:UseAppHost=false
 
 FROM mcr.microsoft.com/dotnet/aspnet:8.0 AS final
 WORKDIR /app

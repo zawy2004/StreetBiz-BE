@@ -11,3 +11,6 @@ TestResults/
 !.env.example
 README.md
 docs/
+# Real API keys and local uploads must never be baked into an image.
+**/appsettings.Development.json
+**/App_Data/

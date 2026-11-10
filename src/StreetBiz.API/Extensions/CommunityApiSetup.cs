@@ -20,6 +20,19 @@ public static class CommunityApiSetup
                         Window = TimeSpan.FromMinutes(1),
                         QueueLimit = 0,
                     }));
+            // BUY-05/07: every report lands in a ward officer's inbox and notifies the vendor. Five an
+            // hour per account is far above a real customer's need and well below a nuisance campaign.
+            options.AddPolicy("CommunityReport", context =>
+                RateLimitPartition.GetFixedWindowLimiter(
+                    context.User.FindFirstValue("sub")
+                    ?? context.Connection.RemoteIpAddress?.ToString()
+                    ?? "anonymous",
+                    _ => new FixedWindowRateLimiterOptions
+                    {
+                        PermitLimit = 5,
+                        Window = TimeSpan.FromHours(1),
+                        QueueLimit = 0,
+                    }));
         });
         return services;
     }

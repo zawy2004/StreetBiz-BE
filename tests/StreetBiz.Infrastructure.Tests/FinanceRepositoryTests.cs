@@ -453,24 +453,24 @@ public sealed class FinanceRepositoryTests
             (await f.Db.FeeScheduleItems.AsNoTracking().SingleAsync(i => i.fee_item_id == SupersededItem)).item_status);
     }
     [Fact]
-    public async Task A_second_sepay_transfer_for_a_paid_instalment_is_surplus_and_the_same_transfer_again_a_duplicate()
+    public async Task A_second_bank_transfer_for_a_paid_instalment_is_surplus_and_the_same_transfer_again_a_duplicate()
     {
         using var f = await Fixture.Create();
         var repository = f.Repository();
-        var checkout = await repository.CreateFeeCheckoutAsync(Vendor, PastDueItem, "SEPAY", "qr-1", default);
-        var code = $"SBP{checkout.TransactionId}";
+        var checkout = await repository.CreateFeeCheckoutAsync(Vendor, PastDueItem, "PAYOS", "qr-1", default);
+        var code = $"PAYOS-{checkout.TransactionId * 1000 + 1}";
         await repository.SetPaymentProviderReferenceAsync(checkout.TransactionId, code, default);
 
-        Task<FinanceCallbackMutationResult> Transfer(long sePayId) =>
+        Task<FinanceCallbackMutationResult> Transfer(string bankReference) =>
             repository.ApplyPaymentCallbackAsync(new PaymentCallbackData(
-                "SEPAY", code, null, checkout.Amount, PaymentStatuses.Success,
-                $$"""{"id":{{sePayId}},"content":"{{code}}","transferType":"in"}""", true, sePayId.ToString()), default);
+                "PAYOS", code, null, checkout.Amount, PaymentStatuses.Success,
+                $$$"""{"code":"00","data":{"reference":"{{{bankReference}}}"}}""", true, bankReference), default);
 
-        Assert.Equal(PaymentCallbackOutcome.Applied, (await Transfer(92704)).Outcome);
-        // SePay delivering the same webhook again changes nothing.
-        Assert.Equal(PaymentCallbackOutcome.Duplicate, (await Transfer(92704)).Outcome);
+        Assert.Equal(PaymentCallbackOutcome.Applied, (await Transfer("FT92704")).Outcome);
+        // payOS delivering the same webhook again changes nothing.
+        Assert.Equal(PaymentCallbackOutcome.Duplicate, (await Transfer("FT92704")).Outcome);
         // The payer sending the money a second time is new money: not applied, owed back.
-        var second = await Transfer(92705);
+        var second = await Transfer("FT92705");
 
         Assert.Equal(PaymentCallbackOutcome.Surplus, second.Outcome);
         Assert.Equal(CallbackResults.Rejected, (await f.Db.PaymentCallbackEvents.AsNoTracking()

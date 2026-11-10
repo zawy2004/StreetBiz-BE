@@ -15,7 +15,7 @@ public sealed class FinanceDocumentRendererTests
     {
         var renderer = new FinanceDocumentRenderer();
         var fee = new InvoiceDocumentRow(
-            "HD-2026-000004", "FEE", 1_040_000m, PaidAt, "Phường Hải Châu 1", "Phạm Thị Lan", "0905000101",
+            "HD-2026-000004", "FEE", 1_040_000m, PaidAt, "Phường Hải Châu", "Phạm Thị Lan", "0905000101",
             "Bánh mì & Xôi Cô Lan", "NVL-01", "Kỳ 3/3 · Tháng 10/2026", null, null, "MOMO", "SB-T9-a5f0b068", PaidAt);
         var penalty = fee with
         {
@@ -44,14 +44,14 @@ public sealed class FinanceDocumentRendererTests
         ];
 
         var bytes = new FinanceDocumentRenderer().RenderCollectionReportXlsx(new CollectionReportExport(
-            "Phường Hải Châu 1", new DateOnly(2026, 9, 1), new DateOnly(2026, 9, 27), report, receipts, PaidAt));
+            "Phường Hải Châu", new DateOnly(2026, 9, 1), new DateOnly(2026, 9, 27), report, receipts, PaidAt));
 
         using var workbook = new XLWorkbook(new MemoryStream(bytes));
         // No performance computed for this export, so no per-zone sheet; the debtor sheet is always there.
         Assert.Equal(["Tổng hợp", "Bảng kê thu", "Nợ phí", "Vi phạm gần đây"], workbook.Worksheets.Select(sheet => sheet.Name));
 
         var summary = workbook.Worksheet("Tổng hợp");
-        Assert.Equal("Phường Hải Châu 1", summary.Cell("A2").GetString());
+        Assert.Equal("Phường Hải Châu", summary.Cell("A2").GetString());
         Assert.Equal("Kỳ báo cáo: 01/09/2026 – 27/09/2026", summary.Cell("A3").GetString());
         Assert.Equal(3_670_000d, summary.Cell("B7").GetDouble());
         Assert.Equal(5_170_000d, summary.Cell("B9").GetDouble()); // SUM of the two collected lines
@@ -75,7 +75,7 @@ public sealed class FinanceDocumentRendererTests
     {
         var report = new CollectionReportRow(0m, 0m, 2_080_000m, 0m, 0m, 0, []);
         var export = new CollectionReportExport(
-            "Phường Hải Châu 1", new DateOnly(2026, 9, 1), new DateOnly(2026, 9, 30), report, [], PaidAt)
+            "Phường Hải Châu", new DateOnly(2026, 9, 1), new DateOnly(2026, 9, 30), report, [], PaidAt)
         {
             Debtors =
             [

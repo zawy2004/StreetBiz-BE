@@ -17,7 +17,8 @@ public sealed record SearchMarketplaceMenuQuery(
     decimal? MinPrice = null,
     decimal? MaxPrice = null,
     bool? OpenNow = null,
-    string? Sort = null) : IRequest<IReadOnlyList<MarketplaceMenuItemDto>>;
+    string? Sort = null,
+    decimal? MinRating = null) : IRequest<IReadOnlyList<MarketplaceMenuItemDto>>;
 
 public sealed class SearchMarketplaceMenuQueryValidator : AbstractValidator<SearchMarketplaceMenuQuery>
 {
@@ -33,6 +34,8 @@ public sealed class SearchMarketplaceMenuQueryValidator : AbstractValidator<Sear
             .WithMessage("minPrice must not be greater than maxPrice.");
         RuleFor(x => x.Sort).Must(sort => sort is null || MarketplaceMenuSorts.IsValid(sort))
             .WithMessage("sort must be name, price_asc or price_desc.");
+        RuleFor(x => x.MinRating).InclusiveBetween(1m, 5m).When(x => x.MinRating.HasValue)
+            .WithMessage("minRating must be between 1 and 5.");
     }
 }
 
@@ -52,7 +55,8 @@ public sealed class SearchMarketplaceMenuQueryHandler(
                 request.MinPrice,
                 request.MaxPrice,
                 request.OpenNow == true ? StorefrontHours.LocalNow(clock.UtcNow) : null,
-                request.Sort ?? MarketplaceMenuSorts.Name),
+                request.Sort ?? MarketplaceMenuSorts.Name,
+                request.MinRating),
             request.Take,
             cancellationToken))
         .Select(row => row.ToDto())

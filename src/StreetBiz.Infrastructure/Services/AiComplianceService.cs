@@ -242,7 +242,7 @@ public sealed class AiComplianceService : IAiComplianceService
 
     public Task<AiDocumentCheckResult> CompareDeclaredProfileAsync(
         string declaredName,
-        string? extractedIdNumber,
+        string? declaredIdNumber,
         string declaredAddress,
         AiIdExtractionResult extraction,
         CancellationToken ct)
@@ -276,6 +276,15 @@ public sealed class AiComplianceService : IAiComplianceService
             points -= 30;
         }
 
+        // The number the vendor typed must be the number on the card. Spaces and dashes are typing habits,
+        // not differences, so only the digits are compared; a declaration left empty is nothing to compare.
+        var declaredDigits = DigitsOnly(declaredIdNumber);
+        if (declaredDigits.Length > 0 && declaredDigits != DigitsOnly(extraction.IdNumber))
+        {
+            discrepancies.Add($"Số CCCD khai báo ('{declaredIdNumber}') khác số CCCD trên ảnh ('{extraction.IdNumber}').");
+            points -= 40;
+        }
+
         if (!string.IsNullOrWhiteSpace(extraction.TamperingAlert))
         {
             discrepancies.Add($"Cảnh báo thị giác: {extraction.TamperingAlert}");
@@ -304,6 +313,9 @@ public sealed class AiComplianceService : IAiComplianceService
         return Task.FromResult(new AiDocumentCheckResult(
             matchScore, matchScore >= LowConfidenceThreshold && string.IsNullOrWhiteSpace(extraction.TamperingAlert), needsManual, summary, discrepancies, IsAiGenerated: true));
     }
+
+    private static string DigitsOnly(string? value) =>
+        new((value ?? string.Empty).Where(char.IsDigit).ToArray());
     #endregion
 
     #region Gemini Vision: Encroachment Analysis
@@ -799,7 +811,11 @@ public sealed class AiComplianceService : IAiComplianceService
     {
         (string Type, string[] Keywords)[] rules =
         [
-            ("EXPIRED_OR_INVALID_PERMIT", ["HẾT HẠN", "KHÔNG PHÉP", "SAI NỘI DUNG", "EXPIRED", "INVALID"]),
+            // Price complaints first (BUY-07): their wording ("bán", "kinh doanh") would otherwise
+            // fall through to the encroachment rule below.
+            ("PRICE_ABOVE_POSTED", ["CAO HƠN GIÁ NIÊM YẾT", "BỊ TÍNH CAO", "BÁN CAO", "OVERCHARGE"]),
+            ("PRICE_NOT_POSTED", ["KHÔNG NIÊM YẾT", "KHÔNG TREO BẢNG GIÁ", "PRICE NOT POSTED"]),
+            ("EXPIRED_OR_INVALID_PERMIT",["HẾT HẠN", "KHÔNG PHÉP", "SAI NỘI DUNG", "EXPIRED", "INVALID"]),
             ("HYGIENE_LITTERING", ["RÁC", "VỆ SINH", "TRASH", "LITTER"]),
             ("OBSTRUCT_PUBLIC_ORDER", ["CẢN TRỞ", "AN NINH", "OBSTRUCT"]),
             ("STREET_VENDING_RESTRICTED", ["HÀNG RONG", "TUYẾN CẤM", "VENDING"]),
@@ -1056,15 +1072,28 @@ public sealed class ApiKeyPool
     }
 }
 
-/// <summary>Singleton home for both providers' key pools -- see ApiKeyPool's remarks.</summary>
+/// <summary>Singleton home for every provider's key pool -- see ApiKeyPool's remarks.</summary>
 public sealed class AiKeyPools
 {
     public ApiKeyPool Gemini { get; }
     public ApiKeyPool Groq { get; }
 
+    /// <summary>FPT.AI ID Recognition (CCCD OCR): AiCompliance:FptAi:ApiKeys, or the single ApiKey.</summary>
+    public ApiKeyPool FptIdRecognition { get; }
+
+    /// <summary>FPT.AI Facematch is a separate product with its own keys: AiCompliance:FptAi:FaceMatchApiKeys,
+    /// or the single FaceMatchApiKey.</summary>
+    public ApiKeyPool FptFaceMatch { get; }
+
+    /// <summary>Gemini model -> until when it is skipped after it was overloaded or timed out
+    /// (GeminiVisionClient). Lives here because this class is the singleton every caller shares.</summary>
+    public System.Collections.Concurrent.ConcurrentDictionary<string, DateTime> GeminiModelCooldowns { get; } = new();
+
     public AiKeyPools(IConfiguration configuration)
     {
         Gemini = new ApiKeyPool(configuration, "AiCompliance:Gemini:ApiKeys", "AiCompliance:Gemini:ApiKey");
         Groq = new ApiKeyPool(configuration, "AiCompliance:Groq:ApiKeys", "AiCompliance:Groq:ApiKey");
+        FptIdRecognition = new ApiKeyPool(configuration, "AiCompliance:FptAi:ApiKeys", "AiCompliance:FptAi:ApiKey");
+        FptFaceMatch = new ApiKeyPool(configuration, "AiCompliance:FptAi:FaceMatchApiKeys", "AiCompliance:FptAi:FaceMatchApiKey");
     }
 }
