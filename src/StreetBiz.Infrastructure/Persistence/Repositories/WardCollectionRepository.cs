@@ -113,13 +113,8 @@ public sealed class WardCollectionRepository(StreetBizDbContext db) : IWardColle
         DateTime notBeforeUtc,
         CancellationToken cancellationToken)
     {
-        var strategy = db.Database.CreateExecutionStrategy();
-        return await strategy.ExecuteAsync(async () =>
+        return await db.ExecuteInTransactionAsync(async transaction =>
         {
-            db.ChangeTracker.Clear();
-            await using var transaction = await db.Database.BeginTransactionAsync(
-                IsolationLevel.Serializable, cancellationToken);
-
             // Re-checked inside the write transaction: the handler's own read raced with any
             // other officer pressing "Nhắc nợ" for the same household.
             var earlier = await db.Notifications.AsNoTracking()
@@ -158,7 +153,7 @@ public sealed class WardCollectionRepository(StreetBizDbContext db) : IWardColle
             await db.SaveChangesAsync(cancellationToken);
             await transaction.CommitAsync(cancellationToken);
             return (DateTime?)null;
-        });
+        }, IsolationLevel.Serializable, cancellationToken);
     }
 
     public async Task<IReadOnlyList<WardRefundRow>> ListRefundsAsync(int wardUnitId, CancellationToken cancellationToken)
@@ -177,13 +172,8 @@ public sealed class WardCollectionRepository(StreetBizDbContext db) : IWardColle
     public async Task<WardRefundRow?> MarkRefundedAsync(
         int wardUnitId, long transactionId, long actorUserId, string? note, DateTime now, CancellationToken cancellationToken)
     {
-        var strategy = db.Database.CreateExecutionStrategy();
-        var marked = await strategy.ExecuteAsync(async () =>
+        var marked = await db.ExecuteInTransactionAsync(async transaction =>
         {
-            db.ChangeTracker.Clear();
-            await using var transaction = await db.Database.BeginTransactionAsync(
-                IsolationLevel.Serializable, cancellationToken);
-
             var row = (await RefundRowsAsync(
                     WardRefundPayments(wardUnitId).Where(payment => payment.transaction_id == transactionId),
                     cancellationToken))
@@ -224,7 +214,7 @@ public sealed class WardCollectionRepository(StreetBizDbContext db) : IWardColle
             await db.SaveChangesAsync(cancellationToken);
             await transaction.CommitAsync(cancellationToken);
             return true;
-        });
+        }, IsolationLevel.Serializable, cancellationToken);
 
         return marked
             ? (await ListRefundsAsync(wardUnitId, cancellationToken)).Single(row => row.TransactionId == transactionId)

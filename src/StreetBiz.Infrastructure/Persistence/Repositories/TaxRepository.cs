@@ -43,12 +43,8 @@ public sealed class TaxRepository(StreetBizDbContext db) : ITaxRepository
     public async Task<TaxPolicyRow> CreatePolicyAsync(
         long adminUserId, NewTaxPolicy policy, DateTime now, CancellationToken cancellationToken)
     {
-        var strategy = db.Database.CreateExecutionStrategy();
-        return await strategy.ExecuteAsync(async () =>
+        return await db.ExecuteInTransactionAsync(async transaction =>
         {
-            db.ChangeTracker.Clear();
-            await using var transaction = await db.Database.BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken);
-
             var latest = await db.TaxPolicies
                 .Where(row => row.tax_year == policy.TaxYear)
                 .MaxAsync(row => (int?)row.version_no, cancellationToken) ?? 0;
@@ -98,7 +94,7 @@ public sealed class TaxRepository(StreetBizDbContext db) : ITaxRepository
             await db.SaveChangesAsync(cancellationToken);
             await transaction.CommitAsync(cancellationToken);
             return ToRow(entity);
-        });
+        }, IsolationLevel.Serializable, cancellationToken);
     }
 
     private static TaxPolicyRow ToRow(TaxPolicy policy) => new(
@@ -551,12 +547,8 @@ public sealed class TaxRepository(StreetBizDbContext db) : ITaxRepository
     public async Task<TaxReferralRefreshResult> RefreshReferralsAsync(
         int? wardId, DateTime now, int lookbackDays, CancellationToken cancellationToken)
     {
-        var strategy = db.Database.CreateExecutionStrategy();
-        return await strategy.ExecuteAsync(async () =>
+        return await db.ExecuteInTransactionAsync(async transaction =>
         {
-            db.ChangeTracker.Clear();
-            await using var transaction = await db.Database.BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken);
-
             var since = now.AddDays(-lookbackDays);
             var today = BusinessCalendar.DateOf(now);
             var candidates = new List<Candidate>();
@@ -623,7 +615,7 @@ public sealed class TaxRepository(StreetBizDbContext db) : ITaxRepository
             await db.SaveChangesAsync(cancellationToken);
             await transaction.CommitAsync(cancellationToken);
             return new TaxReferralRefreshResult(created, closed);
-        });
+        }, IsolationLevel.Serializable, cancellationToken);
     }
 
     private async Task<List<Candidate>> ViolationCandidatesAsync(DateTime since, CancellationToken cancellationToken)
@@ -997,12 +989,8 @@ public sealed class TaxRepository(StreetBizDbContext db) : ITaxRepository
         DateTime now,
         CancellationToken cancellationToken)
     {
-        var strategy = db.Database.CreateExecutionStrategy();
-        return await strategy.ExecuteAsync(async () =>
+        return await db.ExecuteInTransactionAsync(async transaction =>
         {
-            db.ChangeTracker.Clear();
-            await using var transaction = await db.Database.BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken);
-
             var announcement = new TaxAnnouncement
             {
                 ward_unit_id = wardId,
@@ -1042,7 +1030,7 @@ public sealed class TaxRepository(StreetBizDbContext db) : ITaxRepository
                 .Select(user => user.full_name)
                 .FirstOrDefaultAsync(cancellationToken);
             return ToRow(announcement, creator);
-        });
+        }, IsolationLevel.Serializable, cancellationToken);
     }
 
     private static TaxAnnouncementRow ToRow(TaxAnnouncement row, string? creatorName) => new(

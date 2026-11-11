@@ -42,7 +42,7 @@ public sealed class LoginLockoutAndRefreshTests
     private LoginCommandHandler Login() => new(users.Object, hasher.Object, tokens.Object, clock.Object, events.Object);
 
     private RefreshTokenCommandHandler Refresh() =>
-        new(jwt.Object, sessions.Object, users.Object, clock.Object, tokens.Object);
+        new(jwt.Object, sessions.Object, users.Object, clock.Object, tokens.Object, new FakeUnitOfWork());
 
     [Fact]
     public async Task A_wrong_password_is_counted_against_the_account()
@@ -230,7 +230,7 @@ public sealed class SecurityEventTests
         hasher.Setup(h => h.Verify("old", "hash")).Returns(true);
         hasher.Setup(h => h.Hash("New#Pass123")).Returns("newhash");
         var handler = new StreetBiz.Application.Features.Authentication.ChangePassword.ChangePasswordCommandHandler(
-            currentUser.Object, users.Object, hasher.Object, new Mock<ISessionRepository>().Object, events.Object);
+            currentUser.Object, users.Object, hasher.Object, new Mock<ISessionRepository>().Object, events.Object, new FakeUnitOfWork());
         users.Setup(u => u.GetByIdAsync(1, default)).ReturnsAsync(
             new AppUser(1, Phone, "hash", "A", RoleCodes.Vendor, null, AccountStatuses.Active, null));
 

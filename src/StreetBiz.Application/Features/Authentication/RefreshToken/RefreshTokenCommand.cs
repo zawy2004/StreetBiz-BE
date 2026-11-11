@@ -1,3 +1,4 @@
+using System.Data;
 using FluentValidation;
 using MediatR;
 using StreetBiz.Application.Common.Exceptions;
@@ -22,7 +23,8 @@ public sealed class RefreshTokenCommandHandler(
     ISessionRepository sessionRepository,
     IUserAccountRepository userRepository,
     IDateTimeProvider clock,
-    IAuthTokenIssuer tokenIssuer) : IRequestHandler<RefreshTokenCommand, AuthResultDto>
+    IAuthTokenIssuer tokenIssuer,
+    IUnitOfWork unitOfWork) : IRequestHandler<RefreshTokenCommand, AuthResultDto>
 {
     /// <summary>A second presentation of an already-rotated token inside this window is a benign race (two tabs).</summary>
     private static readonly TimeSpan ReuseGrace = TimeSpan.FromSeconds(30);
@@ -63,12 +65,18 @@ public sealed class RefreshTokenCommandHandler(
             throw new AuthenticationException(AppMessages.AccountSuspended);
         }
 
-        // Rotate atomically: of two concurrent refreshes with the same token only one wins.
-        if (!await sessionRepository.TryRevokeAsync(session.Id, cancellationToken))
+        // Rotate atomically: of two concurrent refreshes with the same token only one wins, and
+        // the old session is only retired together with the new one being issued.
+        return await unitOfWork.ExecuteInTransactionAsync(async transaction =>
         {
-            throw new AuthenticationException(AppMessages.SessionExpired);
-        }
+            if (!await sessionRepository.TryRevokeAsync(session.Id, cancellationToken))
+            {
+                throw new AuthenticationException(AppMessages.SessionExpired);
+            }
 
-        return await tokenIssuer.RotateAsync(user, request.DeviceInfo, request.IpAddress, session.ExpiresAt, cancellationToken);
+            var result = await tokenIssuer.RotateAsync(user, request.DeviceInfo, request.IpAddress, session.ExpiresAt, cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
+            return result;
+        }, IsolationLevel.ReadCommitted, cancellationToken);
     }
 }
