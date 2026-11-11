@@ -52,6 +52,19 @@ public sealed class RegistrationRulesTests
         => new UpdateRegistrationCommandValidator().Validate(ValidUpdate()).IsValid.Should().BeTrue();
 
     [Fact]
+    public void A_missing_capital_or_labour_count_is_explained_in_vietnamese()
+    {
+        // WithMessage covers only the rule before it; the NotNull rules used to answer in English.
+        var errors = new UpdateRegistrationCommandValidator()
+            .Validate(ValidUpdate() with { CapitalAmount = null, LaborCount = null }).Errors;
+
+        errors.Should().ContainSingle(e => e.PropertyName == "CapitalAmount")
+            .Which.ErrorMessage.Should().Be(RegMessages.CapitalAmountRequired);
+        errors.Should().ContainSingle(e => e.PropertyName == "LaborCount")
+            .Which.ErrorMessage.Should().Be(RegMessages.LaborCountRequired);
+    }
+
+    [Fact]
     public void An_update_needs_the_food_safety_commitment_just_like_a_submission()
         => new UpdateRegistrationCommandValidator().Validate(ValidUpdate() with { FoodSafetyCommitment = false })
             .IsValid.Should().BeFalse();

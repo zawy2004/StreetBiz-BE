@@ -1068,6 +1068,54 @@ public sealed class WardComplianceServiceTests
         Assert.Equal(expectedValid, WardComplianceService.IsPermitEffectivelyValid(effectiveStatus));
     }
 
+    private static async Task SeedActiveContract(Fixture f, long contractId, long vendorId)
+    {
+        using var seed = f.NewDb();
+        seed.RentalContracts.Add(new RentalContract
+        {
+            contract_id = contractId, application_id = 1, slot_id = 100, vendor_id = vendorId,
+            start_date = DateOnly.FromDateTime(DateTime.UtcNow),
+            end_date = DateOnly.FromDateTime(DateTime.UtcNow).AddDays(30),
+            contract_status = "ACTIVE", created_at = DateTime.UtcNow
+        });
+        await seed.SaveChangesAsync();
+    }
+
+    [Fact]
+    public async Task A_violation_recorded_against_a_contract_carries_that_contracts_vendor_and_slot()
+    {
+        // Regression: a record naming only the contract was saved with vendor_id NULL, so its fine
+        // never reached the vendor's finance page and could not be paid.
+        using var f = await Fixture.Create();
+        await SeedActiveContract(f, 950, vendorId: 10);
+
+        await f.NewService().RecordViolationAsync(f.Actor, new RecordWardViolationRequest(
+            ContractId: 950, SlotId: null, VendorId: null,
+            ViolationType: "UNAUTHORIZED_BUSINESS_USE", Description: "Lấn lòng đường", EvidenceUrl: null), default);
+
+        using var read = f.NewDb();
+        var violation = await read.Violations.SingleAsync();
+        Assert.Equal(10, violation.vendor_id);
+        Assert.Equal(100, violation.slot_id);
+        Assert.Equal(950, violation.contract_id);
+    }
+
+    [Fact]
+    public async Task A_vendor_that_does_not_hold_the_contract_is_refused()
+    {
+        using var f = await Fixture.Create();
+        await SeedActiveContract(f, 951, vendorId: 10);
+
+        var ex = await Assert.ThrowsAsync<WardException>(() => f.NewService().RecordViolationAsync(f.Actor,
+            new RecordWardViolationRequest(
+                ContractId: 951, SlotId: null, VendorId: 30,
+                ViolationType: "UNAUTHORIZED_BUSINESS_USE", Description: "Lấn lòng đường", EvidenceUrl: null), default));
+
+        Assert.Equal("contract_mismatch", ex.ErrorCode);
+        using var read = f.NewDb();
+        Assert.False(await read.Violations.AnyAsync());
+    }
+
     [Fact]
     public async Task Approving_an_application_is_blocked_when_the_slots_existing_contract_is_only_suspended()
     {

@@ -2018,20 +2018,35 @@ public sealed class WardComplianceService(
             throw new WardException(400, "violation_type_inactive", "Loại vi phạm không tồn tại hoặc đã ngừng sử dụng.");
         }
 
+        // A contract names its vendor and slot. Take them from it when the request leaves them out,
+        // so the fine lands on that vendor's finance page (a record with no vendor_id is a fine no
+        // one can see or pay); refuse a request whose vendor or slot contradicts the contract.
+        var vendorId = request.VendorId;
+        var slotIdForRecord = request.SlotId;
+        if (request.ContractId is { } contractId)
+        {
+            var contract = await db.RentalContracts.AsNoTracking()
+                .Where(c => c.contract_id == contractId && c.slot.zone.ward_unit_id == actor.WardId)
+                .Select(c => new { c.vendor_id, c.slot_id })
+                .SingleOrDefaultAsync(ct)
+                ?? throw new NotFoundException("Không tìm thấy hợp đồng tại địa bàn phường của bạn.");
+            if ((vendorId is { } v && v != contract.vendor_id) || (slotIdForRecord is { } s && s != contract.slot_id))
+            {
+                throw new WardException(400, "contract_mismatch", "Hộ kinh doanh hoặc ô sạp không khớp với hợp đồng đã chọn.");
+            }
+
+            vendorId = contract.vendor_id;
+            slotIdForRecord = contract.slot_id;
+        }
+
         string? slotLocation = null;
-        if (request.SlotId is { } slotId)
+        if (slotIdForRecord is { } slotId)
         {
             slotLocation = await db.SidewalkSlots.AsNoTracking()
                 .Where(s => s.slot_id == slotId && s.zone.ward_unit_id == actor.WardId)
                 .Select(s => s.slot_code + " - " + s.zone.zone_name)
                 .SingleOrDefaultAsync(ct)
                 ?? throw new NotFoundException("Không tìm thấy ô sạp tại địa bàn phường của bạn.");
-        }
-
-        if (request.ContractId is { } contractId
-            && !await db.RentalContracts.AnyAsync(c => c.contract_id == contractId && c.slot.zone.ward_unit_id == actor.WardId, ct))
-        {
-            throw new NotFoundException("Không tìm thấy hợp đồng tại địa bàn phường của bạn.");
         }
 
         // Mẫu 01's violator identity block is frozen from the vendor's own registration at this
@@ -2043,13 +2058,13 @@ public sealed class WardComplianceService(
                 .Where(c => c.contract_id == cid)
                 .Select(c => c.application.registration)
                 .SingleOrDefaultAsync(ct)
-            : request.VendorId is { } vid
+            : vendorId is { } vid
                 ? await db.BusinessRegistrations.AsNoTracking()
                     .Where(r => r.vendor_id == vid && r.registration_status == "APPROVED")
                     .OrderByDescending(r => r.reviewed_at)
                     .FirstOrDefaultAsync(ct)
                 : null;
-        var violatorName = request.VendorId is { } vendorForName
+        var violatorName = vendorId is { } vendorForName
             ? await db.Vendors.AsNoTracking().Where(v => v.vendor_id == vendorForName)
                 .Select(v => v.user.full_name).SingleOrDefaultAsync(ct)
             : null;
@@ -2073,8 +2088,8 @@ public sealed class WardComplianceService(
             var violation = new Violation
             {
                 contract_id = request.ContractId,
-                slot_id = request.SlotId,
-                vendor_id = request.VendorId,
+                slot_id = slotIdForRecord,
+                vendor_id = vendorId,
                 violation_type = request.ViolationType,
                 description = request.Description.Trim(),
                 evidence_url = request.EvidenceUrl,

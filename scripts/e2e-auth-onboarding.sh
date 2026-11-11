@@ -31,6 +31,9 @@ up() { CODE=$(curl -s -o "$TMP/body" -w "%{http_code}" -H "Authorization: Bearer
 
 STAMP=$(date +%s | tail -c 9)
 PHONE="09$STAMP"; P2="08$STAMP"; PW='Str0ng!Pass'
+# Owner, ID and business fields every registration needs (RegistrationFieldsValidator).
+# ASCII only: Git Bash on Windows does not pass accented command-line text to curl as UTF-8.
+OWNER='"ownerDateOfBirth":"1990-01-01","ownerGender":"MALE","ownerNationality":"Viet Nam","idType":"CCCD","idIssuedDate":"2021-01-01","idIssuedPlace":"Cuc CSQLHC ve TTXH","permanentAddress":"1 Le Loi, Da Nang","businessLine":"Ban do an","capitalAmount":10000000,"laborCount":1,"plannedStartDate":"2027-01-01","foodSafetyCommitment":true'
 # Ward review needs a real WARD_AUTHORITY account; db/StreetBiz_Demo_Seed.sql seeds these.
 WARD_PHONE=${WARD_PHONE:-0983000001}; WARD_PW=${WARD_PW:-Password123!}
 ORIGIN=${API%/api}
@@ -89,9 +92,9 @@ up "$T1" "$TMP/big.jpg"; check "upload over 5 MB rejected (400/413)" true "$( { 
 CODE=$(curl -s -o /dev/null -w "%{http_code}" -F "file=@$TMP/id.jpg" "$API/uploads/evidence"); check "upload without token" 401 "$CODE"
 
 echo "== REG-01 / REG-02 / REG-03"
-req POST /vendor/registrations "$T1" '{"vendorType":"FIXED_STOREFRONT","displayName":"E2E Shop","declaredAddress":"1 Le Duan","addressLatitude":16.0678,"addressLongitude":108.2208,"wardUnitId":999}'
+req POST /vendor/registrations "$T1" '{"vendorType":"FIXED_STOREFRONT","displayName":"E2E Shop","declaredAddress":"1 Le Duan","addressLatitude":16.0678,"addressLongitude":108.2208,"wardUnitId":999,'"$OWNER"'}'
 check "submit unknown ward -> 400" 400 "$CODE"
-req POST /vendor/registrations "$T1" '{"vendorType":"FIXED_STOREFRONT","displayName":"E2E Shop","declaredAddress":"1 Le Duan","addressLatitude":16.0678,"addressLongitude":108.2208,"wardUnitId":10}'
+req POST /vendor/registrations "$T1" '{"vendorType":"FIXED_STOREFRONT","displayName":"E2E Shop","declaredAddress":"1 Le Duan","addressLatitude":16.0678,"addressLongitude":108.2208,"wardUnitId":10,'"$OWNER"'}'
 check "submit" 200 "$CODE"; RID=$(echo "$BODY" | json o.data.registrationId)
 req POST "/vendor/registrations/$RID/evidence" "$T1" '{"evidenceType":"IDENTITY_DOCUMENT","fileUrl":"blob:http://localhost:5173/x","ocrExtractedData":null}'
 check "evidence with blob: URL -> 400" 400 "$CODE"
@@ -101,13 +104,23 @@ req GET "/vendor/registrations/$RID" "$T1"; check "detail" 200 "$CODE"
 check "detail lists evidence" 1 "$(echo "$BODY" | json o.evidence.length)"
 check "detail returns coordinates" 16.0678 "$(echo "$BODY" | json o.registration.addressLatitude)"
 CODE=$(curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Bearer $T1" "$ORIGIN$URL"); check "owner downloads file" 200 "$CODE"
+# A new registration is a draft; it is filed with the ward once the documents the vendor
+# type requires are attached (BR-07: both CCCD sides, plus the licence for a storefront).
+attach() { # token registrationId evidenceType -> uploads a fresh file and attaches it
+  up "$1" "$TMP/id.jpg"; local u; u=$(echo "$BODY" | json o.fileUrl)
+  req POST "/vendor/registrations/$2/evidence" "$1" "{\"evidenceType\":\"$3\",\"fileUrl\":\"$u\",\"ocrExtractedData\":null}"; }
+req POST "/vendor/registrations/$RID/submit" "$T1"; check "filing without the required documents -> 422" 422 "$CODE"
+attach "$T1" "$RID" IDENTITY_DOCUMENT_BACK; check "attach CCCD back" 200 "$CODE"
+attach "$T1" "$RID" BUSINESS_LICENSE; check "attach business licence" 200 "$CODE"
+req POST "/vendor/registrations/$RID/submit" "$T1"; check "file the registration" 200 "$CODE"
+check "status is SUBMITTED" SUBMITTED "$(echo "$BODY" | json o.data.registrationStatus)"
 
 echo "== Another vendor cannot read or reuse the file"
 req POST /auth/send-otp "" "{\"phoneNumber\":\"$P2\",\"purpose\":\"REGISTRATION\"}"; O2=$(otp_for "$P2")
 req POST /auth/register "" "{\"phoneNumber\":\"$P2\",\"password\":\"$PW\",\"fullName\":\"Other\",\"roleCode\":\"VENDOR\",\"wardUnitId\":10,\"otp\":\"$O2\"}"
 TO=$(echo "$BODY" | json o.accessToken)
 CODE=$(curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Bearer $TO" "$ORIGIN$URL"); check "other vendor download -> 403" 403 "$CODE"
-req POST /vendor/registrations "$TO" '{"vendorType":"ITINERANT","displayName":"Other","declaredAddress":null,"wardUnitId":10}'
+req POST /vendor/registrations "$TO" '{"vendorType":"ITINERANT","displayName":"Other","declaredAddress":null,"wardUnitId":10,'"$OWNER"'}'
 RO=$(echo "$BODY" | json o.data.registrationId)
 req POST "/vendor/registrations/$RO/evidence" "$TO" "{\"evidenceType\":\"IDENTITY_DOCUMENT\",\"fileUrl\":\"$URL\",\"ocrExtractedData\":null}"
 check "attach someone else's file -> 400" 400 "$CODE"
@@ -116,24 +129,28 @@ req GET "/vendor/registrations/$RID" "$TO"; check "read someone else's registrat
 echo "== WARD review of the registration (REG-06 / SRS 3.3.1)"
 req POST /auth/login "" "{\"phoneNumber\":\"$WARD_PHONE\",\"password\":\"$WARD_PW\"}"
 check "ward officer signs in" 200 "$CODE"; WT=$(echo "$BODY" | json o.accessToken)
-req GET "/ward/cases/registrations/$RID" "$WT"; check "officer opens the case" 200 "$CODE"
+# Registration review lives on /ward/enrollments (it carries the BR-41 identity gate).
+req GET "/ward/enrollments/$RID" "$WT"; check "officer opens the case" 200 "$CODE"
 check "case is waiting for review" SUBMITTED "$(echo "$BODY" | json o.status)"
-req GET "/ward/cases/registrations/$RID" "$T1"; check "vendor cannot use the ward queue -> 403" 403 "$CODE"
-req POST "/ward/cases/registrations/$RID/decision" "$WT" \
-  '{"decision":"REQUEST_INFO","reason":"Bo sung giay phep kinh doanh","expectedStatus":"SUBMITTED"}'
+req GET "/ward/enrollments/$RID" "$T1"; check "vendor cannot use the ward queue -> 403" 403 "$CODE"
+req POST "/ward/enrollments/$RID/decision" "$WT" \
+  '{"decision":"MORE_INFO","reason":"Bo sung giay phep kinh doanh","expectedStatus":"SUBMITTED"}'
 check "officer asks for more evidence" 200 "$CODE"
 check "status is MORE_INFORMATION_REQUIRED" MORE_INFORMATION_REQUIRED "$(echo "$BODY" | json o.status)"
-req POST "/ward/cases/registrations/$RID/decision" "$WT" \
-  '{"decision":"REQUEST_INFO","reason":"Lap lai","expectedStatus":"SUBMITTED"}'
+req POST "/ward/enrollments/$RID/decision" "$WT" \
+  '{"decision":"MORE_INFO","reason":"Lap lai","expectedStatus":"SUBMITTED"}'
 check "stale expectedStatus is rejected -> 409" 409 "$CODE"
 
 echo "== BR-09 on re-submit (REG-04)"
-req POST /vendor/registrations "$T1" '{"vendorType":"ITINERANT","displayName":"Second","declaredAddress":null,"wardUnitId":10}'
-check "new application allowed while first needs info" 200 "$CODE"; RID2=$(echo "$BODY" | json o.data.registrationId)
-req PUT "/vendor/registrations/$RID" "$T1" '{"vendorType":"FIXED_STOREFRONT","displayName":"E2E Shop","declaredAddress":"1 Le Duan","addressLatitude":16.0678,"addressLongitude":108.2208,"wardUnitId":10}'
+req POST /vendor/registrations "$T1" '{"vendorType":"ITINERANT","displayName":"Second","declaredAddress":null,"wardUnitId":10,'"$OWNER"'}'
+RID2=$(echo "$BODY" | json o.data.registrationId)
+attach "$T1" "$RID2" IDENTITY_DOCUMENT; attach "$T1" "$RID2" IDENTITY_DOCUMENT_BACK
+# A file waiting for more information is not pending, so a second one may be filed meanwhile.
+req POST "/vendor/registrations/$RID2/submit" "$T1"; check "new application allowed while first needs info" 200 "$CODE"
+req PUT "/vendor/registrations/$RID" "$T1" '{"vendorType":"FIXED_STOREFRONT","displayName":"E2E Shop","declaredAddress":"1 Le Duan","addressLatitude":16.0678,"addressLongitude":108.2208,"wardUnitId":10,'"$OWNER"'}'
 check "re-submit while another is pending -> 409" 409 "$CODE"
 req POST "/vendor/registrations/$RID2/withdraw" "$T1"; check "withdraw the second one" 200 "$CODE"
-req PUT "/vendor/registrations/$RID" "$T1" '{"vendorType":"FIXED_STOREFRONT","displayName":"E2E Shop v2","declaredAddress":"1 Le Duan","addressLatitude":16.0678,"addressLongitude":108.2208,"wardUnitId":10}'
+req PUT "/vendor/registrations/$RID" "$T1" '{"vendorType":"FIXED_STOREFRONT","displayName":"E2E Shop v2","declaredAddress":"1 Le Duan","addressLatitude":16.0678,"addressLongitude":108.2208,"wardUnitId":10,'"$OWNER"'}'
 check "re-submit now allowed" 200 "$CODE"
 check "status back to SUBMITTED" SUBMITTED "$(echo "$BODY" | json o.registrationStatus)"
 req POST "/vendor/registrations/$RID2/evidence" "$T1" "{\"evidenceType\":\"OTHER\",\"fileUrl\":\"$URL\",\"ocrExtractedData\":null}"
