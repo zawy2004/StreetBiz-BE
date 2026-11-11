@@ -20,6 +20,7 @@ public static class DependencyInjection
         services.AddMediatR(configuration =>
             configuration.RegisterServicesFromAssembly(assembly));
         services.AddValidatorsFromAssembly(assembly);
+        UseVietnameseValidationMessages();
         services.AddAutoMapper(_ => { }, assembly);
 
         services.AddTransient(typeof(IPipelineBehavior<,>), typeof(ValidationBehavior<,>));
@@ -45,4 +46,13 @@ public static class DependencyInjection
 
         return services;
     }
+
+    /// <summary>
+    /// Rules without their own <c>WithMessage</c> (and the first rules of a chain whose
+    /// <c>WithMessage</c> only covers the last one) fall back to FluentValidation's built-in text.
+    /// Use its Vietnamese set so such a message never reaches a user in English, whatever the
+    /// server's culture. Messages written in the validators are unaffected.
+    /// </summary>
+    public static void UseVietnameseValidationMessages() =>
+        ValidatorOptions.Global.LanguageManager.Culture = new System.Globalization.CultureInfo("vi");
 }

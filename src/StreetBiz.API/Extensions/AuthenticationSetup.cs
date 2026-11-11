@@ -108,6 +108,26 @@ public static class AuthenticationSetup
         var clock = services.GetRequiredService<IDateTimeProvider>();
         var cancellationToken = context.HttpContext.RequestAborted;
 
+        try
+        {
+            await CheckSessionAsync(context, services, sessions, clock, sessionId, cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            // The client left mid-request: fail quietly instead of letting JwtBearer log an error
+            // with a stack trace for every tab closed while a page was loading.
+            context.Fail("The request was cancelled by the client.");
+        }
+    }
+
+    private static async Task CheckSessionAsync(
+        TokenValidatedContext context,
+        IServiceProvider services,
+        ISessionRepository sessions,
+        IDateTimeProvider clock,
+        long sessionId,
+        CancellationToken cancellationToken)
+    {
         var session = await sessions.GetByIdAsync(sessionId, cancellationToken);
         var now = clock.UtcNow;
         if (session is null || session.RevokedAt is not null || session.ExpiresAt <= now)

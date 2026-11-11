@@ -21,7 +21,8 @@ builder.Host.UseSerilog((context, services, configuration) =>
 {
     configuration
         .ReadFrom.Configuration(context.Configuration)
-        .ReadFrom.Services(services);
+        .ReadFrom.Services(services)
+        .Filter.ByExcluding(LogNoiseFilter.IsCancelledDatabaseCall);
 });
 
 var databaseConnectionString =

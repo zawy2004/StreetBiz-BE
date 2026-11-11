@@ -99,10 +99,11 @@ public class RegistrationFieldsValidator<T> : AbstractValidator<T> where T : IRe
             .NotEmpty().WithMessage(RegMessages.BusinessLineRequired)
             .MaximumLength(RegistrationFieldLimits.BusinessLine).WithMessage(RegMessages.FieldTooLong);
         RuleFor(x => x.BusinessLineCode).MaximumLength(RegistrationFieldLimits.BusinessLineCode).WithMessage(RegMessages.FieldTooLong);
-        RuleFor(x => x.CapitalAmount).NotNull().GreaterThanOrEqualTo(0)
-            .WithMessage(RegMessages.CapitalAmountRequired);
-        RuleFor(x => x.LaborCount).NotNull().GreaterThanOrEqualTo(0)
-            .WithMessage(RegMessages.LaborCountRequired);
+        // WithMessage covers only the rule just before it, so each rule carries its own.
+        RuleFor(x => x.CapitalAmount).NotNull().WithMessage(RegMessages.CapitalAmountRequired)
+            .GreaterThanOrEqualTo(0).WithMessage(RegMessages.CapitalAmountRequired);
+        RuleFor(x => x.LaborCount).NotNull().WithMessage(RegMessages.LaborCountRequired)
+            .GreaterThanOrEqualTo(0).WithMessage(RegMessages.LaborCountRequired);
         RuleFor(x => x.PlannedStartDate).NotNull().WithMessage(RegMessages.PlannedStartDateRequired);
 
         // ---- Cam kết ATTP: bắt buộc riêng biệt, không gộp vào điều khoản chung. ----
