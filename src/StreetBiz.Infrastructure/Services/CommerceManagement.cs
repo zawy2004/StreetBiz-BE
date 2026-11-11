@@ -430,12 +430,10 @@ public sealed class CommerceManagement(StreetBizDbContext db, IVendorContext ven
     {
         if (text?.Length > max) throw new DomainRuleException($"Mô tả tối đa {max} ký tự.");
     }
-    private Task<T> Write<T>(Func<Task<T>> action, CancellationToken ct) => db.Database.CreateExecutionStrategy().ExecuteAsync(async () =>
+    private Task<T> Write<T>(Func<Task<T>> action, CancellationToken ct) => db.ExecuteInTransactionAsync(async transaction =>
     {
-        db.ChangeTracker.Clear();
-        await using var transaction = await db.Database.BeginTransactionAsync(IsolationLevel.Serializable, ct);
         var result = await action();
         await transaction.CommitAsync(ct);
         return result;
-    });
+    }, IsolationLevel.Serializable, ct);
 }

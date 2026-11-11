@@ -34,7 +34,7 @@ public sealed class RegisterCommandHandlerTests
         users.Setup(u => u.CreateAsync(It.IsAny<NewUser>(), It.IsAny<CancellationToken>())).ReturnsAsync(77);
     }
 
-    private RegisterCommandHandler Handler() => new(otp.Object, users.Object, hasher.Object, clock.Object, tokens.Object, units.Object);
+    private RegisterCommandHandler Handler() => new(otp.Object, users.Object, hasher.Object, clock.Object, tokens.Object, units.Object, new FakeUnitOfWork());
 
     private static RegisterCommand Command(string role = RoleCodes.Vendor, int? ward = 10) =>
         new(Phone, "Str0ng!Pass", "Chị Lan", role, ward, "123456", "Chrome", "127.0.0.1");
@@ -178,7 +178,7 @@ public sealed class PasswordAndOtpSignInHandlerTests
     [Fact]
     public async Task A_reset_sets_the_new_hash_signs_out_every_device_and_tells_the_user()
     {
-        await new ResetPasswordCommandHandler(otp.Object, users.Object, hasher.Object, sessions.Object, events.Object)
+        await new ResetPasswordCommandHandler(otp.Object, users.Object, hasher.Object, sessions.Object, events.Object, new FakeUnitOfWork())
             .Handle(new ResetPasswordCommand(Phone, "111222", "N3w!Passw0rd"), default);
 
         otp.Verify(o => o.ConsumeAsync(Phone, OtpPurposes.PasswordReset, "111222", It.IsAny<CancellationToken>()));
@@ -193,7 +193,7 @@ public sealed class PasswordAndOtpSignInHandlerTests
         otp.Setup(o => o.ConsumeAsync(Phone, OtpPurposes.PasswordReset, "000000", It.IsAny<CancellationToken>()))
             .ThrowsAsync(new AuthenticationException(AppMessages.OtpIncorrect));
 
-        var act = () => new ResetPasswordCommandHandler(otp.Object, users.Object, hasher.Object, sessions.Object, events.Object)
+        var act = () => new ResetPasswordCommandHandler(otp.Object, users.Object, hasher.Object, sessions.Object, events.Object, new FakeUnitOfWork())
             .Handle(new ResetPasswordCommand(Phone, "000000", "N3w!Passw0rd"), default);
 
         await act.Should().ThrowAsync<AuthenticationException>();
@@ -217,7 +217,7 @@ public sealed class PasswordAndOtpSignInHandlerTests
         current.Setup(c => c.SessionId).Returns(40);
         hasher.Setup(h => h.Verify("Old!Passw0rd", "old-hash")).Returns(true);
 
-        await new ChangePasswordCommandHandler(current.Object, users.Object, hasher.Object, sessions.Object, events.Object)
+        await new ChangePasswordCommandHandler(current.Object, users.Object, hasher.Object, sessions.Object, events.Object, new FakeUnitOfWork())
             .Handle(new ChangePasswordCommand("Old!Passw0rd", "N3w!Passw0rd"), default);
 
         users.Verify(u => u.UpdatePasswordHashAsync(5, "hash:N3w!Passw0rd", It.IsAny<CancellationToken>()));
@@ -230,7 +230,7 @@ public sealed class PasswordAndOtpSignInHandlerTests
     {
         current.Setup(c => c.UserId).Returns((long?)null);
 
-        var act = () => new ChangePasswordCommandHandler(current.Object, users.Object, hasher.Object, sessions.Object, events.Object)
+        var act = () => new ChangePasswordCommandHandler(current.Object, users.Object, hasher.Object, sessions.Object, events.Object, new FakeUnitOfWork())
             .Handle(new ChangePasswordCommand("Old!Passw0rd", "N3w!Passw0rd"), default);
 
         await act.Should().ThrowAsync<AuthenticationException>().WithMessage(AppMessages.SessionExpired);

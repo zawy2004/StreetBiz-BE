@@ -206,7 +206,7 @@ public sealed class PlatformAccountUseCaseTests
             .ReturnsAsync(new AppSession(9, 1, null, null, Now, Now, Now.AddDays(5), null));
         users.Setup(u => u.GetByIdAsync(1, default)).ReturnsAsync(Suspended());
 
-        var act = () => new RefreshTokenCommandHandler(jwt.Object, sessions.Object, users.Object, clock.Object, tokens.Object)
+        var act = () => new RefreshTokenCommandHandler(jwt.Object, sessions.Object, users.Object, clock.Object, tokens.Object, new FakeUnitOfWork())
             .Handle(new RefreshTokenCommand("refresh", null, null), default);
 
         await act.Should().ThrowAsync<AuthenticationException>().WithMessage(AppMessages.AccountSuspended);

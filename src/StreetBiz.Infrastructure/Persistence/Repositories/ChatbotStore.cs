@@ -91,10 +91,9 @@ public sealed class ChatbotStore(StreetBizDbContext db, TimeProvider clock, Chat
     {
         await RequireAsync(actor, id, ct);
         var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(ChatbotJson.Serialize(request))));
-        return await db.Database.CreateExecutionStrategy().ExecuteAsync(async () =>
+        return await db.ExecuteInTransactionAsync(async transaction =>
         {
             foreach (var entry in db.ChangeTracker.Entries().Where(e => e.Entity is ChatbotMessageRecord or ChatbotAuditRecord).ToArray()) entry.State = EntityState.Detached;
-            await using var transaction = await db.Database.BeginTransactionAsync(IsolationLevel.Serializable, ct);
             var replay = await db.ChatbotMessages.AsNoTracking().Where(m => m.conversation_id == id && m.request_id == request.ClientRequestId).ToListAsync(ct);
             if (replay.Count > 0)
             {
@@ -139,7 +138,7 @@ public sealed class ChatbotStore(StreetBizDbContext db, TimeProvider clock, Chat
             await db.SaveChangesAsync(ct);
             await transaction.CommitAsync(ct);
             return new ChatbotStart(new(user, assistant), false);
-        });
+        }, IsolationLevel.Serializable, ct, clearTracker: false);
     }
 
     public Task<bool> IsGeneratingAsync(string id, string messageId, CancellationToken ct) => db.ChatbotConversations.AsNoTracking()
@@ -147,9 +146,8 @@ public sealed class ChatbotStore(StreetBizDbContext db, TimeProvider clock, Chat
 
     public async Task SaveAsync(ChatbotActor actor, ChatbotMessage message, string? provider, string? model, ChatbotUsage usage, CancellationToken ct)
     {
-        await db.Database.CreateExecutionStrategy().ExecuteAsync(async () =>
+        await db.ExecuteInTransactionAsync(async tx =>
         {
-        await using var tx = await db.Database.BeginTransactionAsync(ct);
         var terminal = message.Status != "GENERATING";
         var payload = ChatbotJson.Serialize(message);
         var changed = await db.ChatbotMessages.Where(m => m.message_id == message.Id && m.actor_id == actor.UserId && m.status == "GENERATING" && m.version < message.Version)
@@ -166,7 +164,7 @@ public sealed class ChatbotStore(StreetBizDbContext db, TimeProvider clock, Chat
             await AuditToolAsync(actor, message.Id, "turn", message.Status, ct);
         }
         await tx.CommitAsync(ct);
-        });
+        }, IsolationLevel.ReadCommitted, ct, clearTracker: false);
     }
 
     public async Task CancelAsync(ChatbotActor actor, string id, string messageId, CancellationToken ct)
@@ -179,9 +177,8 @@ public sealed class ChatbotStore(StreetBizDbContext db, TimeProvider clock, Chat
     public async Task DeleteAsync(ChatbotActor actor, string id, CancellationToken ct)
     {
         await RequireAsync(actor, id, ct);
-        await db.Database.CreateExecutionStrategy().ExecuteAsync(async () =>
+        await db.ExecuteInTransactionAsync(async tx =>
         {
-            await using var tx = await db.Database.BeginTransactionAsync(ct);
             await db.ChatbotConversations.Where(c => c.conversation_id == id && c.owner_user_id == actor.UserId)
                 .ExecuteUpdateAsync(p => p.SetProperty(c => c.deleted_at, Now).SetProperty(c => c.active_message_id, (string?)null)
                     .SetProperty(c => c.title, "Đã xóa").SetProperty(c => c.actor_id, actor.UserId).SetProperty(c => c.updated_at, Now), ct);
@@ -194,7 +191,7 @@ public sealed class ChatbotStore(StreetBizDbContext db, TimeProvider clock, Chat
                     .SetProperty(m => m.reserved_tokens, 0).SetProperty(m => m.version, m => m.version + 1), ct);
             await AuditToolAsync(actor, id, "conversation", "DELETED", ct);
             await tx.CommitAsync(ct);
-        });
+        }, IsolationLevel.ReadCommitted, ct, clearTracker: false);
     }
 
     public async Task FeedbackAsync(ChatbotActor actor, string id, string messageId, bool helpful, string? reason, CancellationToken ct)

@@ -1,3 +1,4 @@
+using System.Data;
 using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
 using StreetBiz.Application.Common.Exceptions;
@@ -53,10 +54,8 @@ public sealed class UserAccountRepository(
         // The account and its Vendor row are one unit: a failure between the two saves must not
         // leave a VENDOR account without a Vendor row. The execution strategy is required because
         // the context is configured with EnableRetryOnFailure.
-        var strategy = dbContext.Database.CreateExecutionStrategy();
-        return await strategy.ExecuteAsync(async () =>
+        return await dbContext.ExecuteInTransactionAsync(async transaction =>
         {
-            await using var transaction = await dbContext.Database.BeginTransactionAsync(cancellationToken);
             dbContext.UserAccounts.Add(entity);
 
             try
@@ -85,7 +84,7 @@ public sealed class UserAccountRepository(
 
             await transaction.CommitAsync(cancellationToken);
             return entity.user_id;
-        });
+        }, IsolationLevel.ReadCommitted, cancellationToken, clearTracker: false);
     }
 
     public async Task UpdatePasswordHashAsync(long userId, string passwordHash, CancellationToken cancellationToken)

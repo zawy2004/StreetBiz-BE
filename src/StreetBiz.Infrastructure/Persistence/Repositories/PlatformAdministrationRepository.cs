@@ -42,12 +42,8 @@ public sealed partial class PlatformAdministrationRepository(
         long actorUserId,
         CancellationToken cancellationToken)
     {
-        var strategy = db.Database.CreateExecutionStrategy();
-        var categoryId = await strategy.ExecuteAsync(async () =>
+        var categoryId = await db.ExecuteInTransactionAsync(async transaction =>
         {
-            db.ChangeTracker.Clear();
-            await using var transaction = await db.Database.BeginTransactionAsync(
-                IsolationLevel.Serializable, cancellationToken);
             if (await db.FoodCategories.AnyAsync(
                     category => category.category_name == name,
                     cancellationToken))
@@ -62,7 +58,7 @@ public sealed partial class PlatformAdministrationRepository(
             await db.SaveChangesAsync(cancellationToken);
             await transaction.CommitAsync(cancellationToken);
             return entity.category_id;
-        });
+        }, IsolationLevel.Serializable, cancellationToken);
 
         return categoryId.HasValue
             ? await CategoryQuery(categoryId).SingleAsync(cancellationToken)
@@ -75,12 +71,8 @@ public sealed partial class PlatformAdministrationRepository(
         long actorUserId,
         CancellationToken cancellationToken)
     {
-        var strategy = db.Database.CreateExecutionStrategy();
-        var updated = await strategy.ExecuteAsync(async () =>
+        var updated = await db.ExecuteInTransactionAsync(async transaction =>
         {
-            db.ChangeTracker.Clear();
-            await using var transaction = await db.Database.BeginTransactionAsync(
-                IsolationLevel.Serializable, cancellationToken);
             var category = await db.FoodCategories.SingleOrDefaultAsync(
                 row => row.category_id == categoryId, cancellationToken);
             if (category is null)
@@ -102,7 +94,7 @@ public sealed partial class PlatformAdministrationRepository(
             await db.SaveChangesAsync(cancellationToken);
             await transaction.CommitAsync(cancellationToken);
             return true;
-        });
+        }, IsolationLevel.Serializable, cancellationToken);
 
         return updated
             ? await CategoryQuery(categoryId).SingleAsync(cancellationToken)
@@ -114,12 +106,8 @@ public sealed partial class PlatformAdministrationRepository(
         long actorUserId,
         CancellationToken cancellationToken)
     {
-        var strategy = db.Database.CreateExecutionStrategy();
-        return await strategy.ExecuteAsync(async () =>
+        return await db.ExecuteInTransactionAsync(async transaction =>
         {
-            db.ChangeTracker.Clear();
-            await using var transaction = await db.Database.BeginTransactionAsync(
-                IsolationLevel.Serializable, cancellationToken);
             var category = await db.FoodCategories.SingleOrDefaultAsync(
                 row => row.category_id == categoryId, cancellationToken);
             if (category is null)
@@ -138,7 +126,7 @@ public sealed partial class PlatformAdministrationRepository(
             await db.SaveChangesAsync(cancellationToken);
             await transaction.CommitAsync(cancellationToken);
             return CategoryDeleteOutcome.Deleted;
-        });
+        }, IsolationLevel.Serializable, cancellationToken);
     }
 
     public async Task<PlatformPage<ReportedContentRow>> ListReportedContentAsync(
@@ -209,12 +197,8 @@ public sealed partial class PlatformAdministrationRepository(
         long actorUserId,
         CancellationToken cancellationToken)
     {
-        var strategy = db.Database.CreateExecutionStrategy();
-        var outcome = await strategy.ExecuteAsync(async () =>
+        var outcome = await db.ExecuteInTransactionAsync(async transaction =>
         {
-            db.ChangeTracker.Clear();
-            await using var transaction = await db.Database.BeginTransactionAsync(
-                IsolationLevel.Serializable, cancellationToken);
             var report = await db.ReportedContents.SingleOrDefaultAsync(
                 row => row.content_report_id == reportId, cancellationToken);
             if (report is null)
@@ -274,7 +258,7 @@ public sealed partial class PlatformAdministrationRepository(
             await db.SaveChangesAsync(cancellationToken);
             await transaction.CommitAsync(cancellationToken);
             return ContentDecisionOutcome.Updated;
-        });
+        }, IsolationLevel.Serializable, cancellationToken);
 
         var row = outcome == ContentDecisionOutcome.Updated
             ? await GetReportedContentAsync(reportId, cancellationToken)
@@ -288,12 +272,8 @@ public sealed partial class PlatformAdministrationRepository(
         long actorUserId,
         CancellationToken cancellationToken)
     {
-        var strategy = db.Database.CreateExecutionStrategy();
-        var outcome = await strategy.ExecuteAsync(async () =>
+        var outcome = await db.ExecuteInTransactionAsync(async transaction =>
         {
-            db.ChangeTracker.Clear();
-            await using var transaction = await db.Database.BeginTransactionAsync(
-                IsolationLevel.Serializable, cancellationToken);
             var report = await db.ReportedContents.SingleOrDefaultAsync(
                 row => row.content_report_id == reportId, cancellationToken);
             if (report is null)
@@ -339,7 +319,7 @@ public sealed partial class PlatformAdministrationRepository(
             await db.SaveChangesAsync(cancellationToken);
             await transaction.CommitAsync(cancellationToken);
             return ContentDecisionOutcome.Updated;
-        });
+        }, IsolationLevel.Serializable, cancellationToken);
 
         var row = outcome == ContentDecisionOutcome.Updated
             ? await GetReportedContentAsync(reportId, cancellationToken)
@@ -424,12 +404,8 @@ public sealed partial class PlatformAdministrationRepository(
         long actorUserId,
         CancellationToken cancellationToken)
     {
-        var strategy = db.Database.CreateExecutionStrategy();
-        var outcome = await strategy.ExecuteAsync(async () =>
+        var outcome = await db.ExecuteInTransactionAsync(async transaction =>
         {
-            db.ChangeTracker.Clear();
-            await using var transaction = await db.Database.BeginTransactionAsync(
-                IsolationLevel.Serializable, cancellationToken);
             var complaint = await db.Complaints.SingleOrDefaultAsync(
                 row => row.complaint_id == complaintId, cancellationToken);
             if (complaint is null)
@@ -516,7 +492,7 @@ public sealed partial class PlatformAdministrationRepository(
             await db.SaveChangesAsync(cancellationToken);
             await transaction.CommitAsync(cancellationToken);
             return ComplaintDecisionOutcome.Updated;
-        });
+        }, IsolationLevel.Serializable, cancellationToken);
 
         var row = outcome == ComplaintDecisionOutcome.Updated
             ? await GetOrderComplaintAsync(complaintId, cancellationToken)

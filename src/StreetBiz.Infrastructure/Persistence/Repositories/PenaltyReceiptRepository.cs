@@ -70,11 +70,8 @@ public sealed class PenaltyReceiptRepository(StreetBizDbContext db) : IPenaltyRe
     public async Task<PenaltyReceiptRow> SubmitAsync(
         long vendorId, long userId, long penaltyId, SubmitPenaltyReceipt receipt, DateTime now, CancellationToken cancellationToken)
     {
-        var strategy = db.Database.CreateExecutionStrategy();
-        return await strategy.ExecuteAsync(async () =>
+        return await db.ExecuteInTransactionAsync(async transaction =>
         {
-            db.ChangeTracker.Clear();
-            await using var transaction = await db.Database.BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken);
             var penalty = await PenaltiesWithViolation()
                 .SingleOrDefaultAsync(p => p.penalty_id == penaltyId && p.violation.vendor_id == vendorId, cancellationToken)
                 ?? throw new NotFoundException(PenaltyReceiptMessages.PenaltyNotFound);
@@ -123,7 +120,7 @@ public sealed class PenaltyReceiptRepository(StreetBizDbContext db) : IPenaltyRe
             await db.SaveChangesAsync(cancellationToken);
             await transaction.CommitAsync(cancellationToken);
             return ToRow(row);
-        });
+        }, IsolationLevel.Serializable, cancellationToken);
     }
 
     // --------------------------------------------------------------------------------- ward
@@ -212,11 +209,8 @@ public sealed class PenaltyReceiptRepository(StreetBizDbContext db) : IPenaltyRe
     public async Task<PenaltyReceiptRow> DecideAsync(
         int wardId, long officerUserId, long receiptId, bool accepted, string? note, DateTime now, CancellationToken cancellationToken)
     {
-        var strategy = db.Database.CreateExecutionStrategy();
-        return await strategy.ExecuteAsync(async () =>
+        return await db.ExecuteInTransactionAsync(async transaction =>
         {
-            db.ChangeTracker.Clear();
-            await using var transaction = await db.Database.BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken);
             var receipt = await db.PenaltyPaymentReceipts.SingleOrDefaultAsync(r => r.receipt_id == receiptId, cancellationToken)
                 ?? throw new NotFoundException(PenaltyReceiptMessages.ReceiptNotFound);
             var penalty = await PenaltiesWithViolation().SingleAsync(p => p.penalty_id == receipt.penalty_id, cancellationToken);
@@ -263,17 +257,14 @@ public sealed class PenaltyReceiptRepository(StreetBizDbContext db) : IPenaltyRe
             await db.SaveChangesAsync(cancellationToken);
             await transaction.CommitAsync(cancellationToken);
             return ToRow(receipt);
-        });
+        }, IsolationLevel.Serializable, cancellationToken);
     }
 
     public async Task<string> AnnulPaidPenaltyAsync(
         int wardId, long officerUserId, long penaltyId, string reason, DateTime now, CancellationToken cancellationToken)
     {
-        var strategy = db.Database.CreateExecutionStrategy();
-        return await strategy.ExecuteAsync(async () =>
+        return await db.ExecuteInTransactionAsync(async transaction =>
         {
-            db.ChangeTracker.Clear();
-            await using var transaction = await db.Database.BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken);
             var penalty = await PenaltiesWithViolation().SingleOrDefaultAsync(p => p.penalty_id == penaltyId, cancellationToken);
             if (penalty is null || WardOf(penalty) != wardId)
             {
@@ -328,7 +319,7 @@ public sealed class PenaltyReceiptRepository(StreetBizDbContext db) : IPenaltyRe
             await transaction.CommitAsync(cancellationToken);
             return $"Đã ghi nhận huỷ quyết định xử phạt {Vnd(penalty.amount)}. Số tiền đã nộp do Kho bạc hoàn trả; " +
                 "khi Kho bạc đã hoàn, ghi nhận ở mục Báo cáo thu → Cần hoàn tiền.";
-        });
+        }, IsolationLevel.Serializable, cancellationToken);
     }
 
     // ------------------------------------------------------------------------------- helpers

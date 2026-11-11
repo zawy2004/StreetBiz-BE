@@ -17,10 +17,8 @@ public sealed class OrderPaymentTesting(StreetBizDbContext db, ICustomerContext 
     private async Task Mutate(long orderId, bool refund, CancellationToken ct)
     {
         var customer = await customers.RequireCustomerUserIdAsync(ct);
-        await db.Database.CreateExecutionStrategy().ExecuteAsync(async () =>
+        await db.ExecuteInTransactionAsync(async transaction =>
         {
-            db.ChangeTracker.Clear();
-            await using var transaction = await db.Database.BeginTransactionAsync(IsolationLevel.Serializable, ct);
             var order = await db.Orders.SingleOrDefaultAsync(x => x.order_id == orderId && x.customer_user_id == customer, ct)
                 ?? throw new NotFoundException("Không tìm thấy đơn hàng.");
             var payment = await db.PaymentTransactions.Where(x => x.order_id == orderId && x.payment_purpose == "ORDER")
@@ -92,6 +90,6 @@ public sealed class OrderPaymentTesting(StreetBizDbContext db, ICustomerContext 
                 action = refund ? "ORD_SANDBOX_REFUND" : "ORD_SANDBOX_FAILED", created_at = now });
             await db.SaveChangesAsync(ct);
             await transaction.CommitAsync(ct);
-        });
+        }, IsolationLevel.Serializable, ct);
     }
 }

@@ -14,13 +14,8 @@ public sealed class ContentReportRepository(StreetBizDbContext db, TimeProvider 
 
     public async Task<ContentReportResult> CreateAsync(ContentReportDraft draft, CancellationToken cancellationToken)
     {
-        var strategy = db.Database.CreateExecutionStrategy();
-        return await strategy.ExecuteAsync(async () =>
+        return await db.ExecuteInTransactionAsync(async transaction =>
         {
-            db.ChangeTracker.Clear();
-            await using var transaction = await db.Database.BeginTransactionAsync(
-                IsolationLevel.Serializable, cancellationToken);
-
             var ownerUserId = await ReportableOwnerAsync(draft, cancellationToken);
             if (ownerUserId is null)
             {
@@ -80,7 +75,7 @@ public sealed class ContentReportRepository(StreetBizDbContext db, TimeProvider 
             await db.SaveChangesAsync(cancellationToken);
             await transaction.CommitAsync(cancellationToken);
             return new ContentReportResult(ContentReportOutcome.Created, report.content_report_id);
-        });
+        }, IsolationLevel.Serializable, cancellationToken);
     }
 
     /// <summary>The seller's user id when the content exists and is still visible, otherwise null.</summary>

@@ -21,11 +21,8 @@ public sealed class VendorReportDecisions(StreetBizDbContext db, TimeProvider cl
         ResolveVendorReportRequest request,
         CancellationToken cancellationToken)
     {
-        var strategy = db.Database.CreateExecutionStrategy();
-        await strategy.ExecuteAsync(async () =>
+        await db.ExecuteInTransactionAsync(async transaction =>
         {
-            db.ChangeTracker.Clear();
-            await using var transaction = await db.Database.BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken);
             // Another ward's report answers exactly like a missing one (BR-44/45 scoping).
             if (!await VendorReportRecords.InWard(db, actor.WardId).AnyAsync(report => report.report_id == reportId, cancellationToken))
             {
@@ -58,6 +55,6 @@ public sealed class VendorReportDecisions(StreetBizDbContext db, TimeProvider cl
                 clock.GetUtcNow().UtcDateTime, violationId: null, cancellationToken);
             await db.SaveChangesAsync(cancellationToken);
             await transaction.CommitAsync(cancellationToken);
-        });
+        }, IsolationLevel.Serializable, cancellationToken);
     }
 }
