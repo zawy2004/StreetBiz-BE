@@ -272,12 +272,8 @@ public sealed partial class PlatformAdministrationRepository(
         long actorUserId,
         CancellationToken cancellationToken)
     {
-        var strategy = db.Database.CreateExecutionStrategy();
-        var outcome = await strategy.ExecuteAsync(async () =>
+        var outcome = await db.ExecuteInTransactionAsync(async transaction =>
         {
-            db.ChangeTracker.Clear();
-            await using var transaction = await db.Database.BeginTransactionAsync(
-                IsolationLevel.Serializable, cancellationToken);
             var report = await db.ReportedContents.SingleOrDefaultAsync(
                 row => row.content_report_id == reportId, cancellationToken);
             if (report is null)
@@ -323,7 +319,7 @@ public sealed partial class PlatformAdministrationRepository(
             await db.SaveChangesAsync(cancellationToken);
             await transaction.CommitAsync(cancellationToken);
             return ContentDecisionOutcome.Updated;
-        });
+        }, IsolationLevel.Serializable, cancellationToken);
 
         var row = outcome == ContentDecisionOutcome.Updated
             ? await GetReportedContentAsync(reportId, cancellationToken)

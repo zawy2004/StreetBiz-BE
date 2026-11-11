@@ -242,15 +242,10 @@ public sealed class CommunityVendorRepository(
         NewVendorReportNotices notices,
         CancellationToken cancellationToken)
     {
-        var strategy = dbContext.Database.CreateExecutionStrategy();
         try
         {
-            return await strategy.ExecuteAsync(async () =>
+            return await dbContext.ExecuteInTransactionAsync(async transaction =>
             {
-                dbContext.ChangeTracker.Clear();
-                await using var transaction = await dbContext.Database.BeginTransactionAsync(
-                    IsolationLevel.Serializable,
-                    cancellationToken);
                 var now = clock.GetUtcNow().UtcDateTime;
                 var entity = new VendorReport
                 {
@@ -300,7 +295,7 @@ public sealed class CommunityVendorRepository(
                 await dbContext.SaveChangesAsync(cancellationToken);
                 await transaction.CommitAsync(cancellationToken);
                 return entity.report_id;
-            });
+            }, IsolationLevel.Serializable, cancellationToken);
         }
         catch (DbUpdateException)
         {

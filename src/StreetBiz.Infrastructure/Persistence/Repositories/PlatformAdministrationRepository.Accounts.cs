@@ -93,12 +93,8 @@ public sealed partial class PlatformAdministrationRepository
         CancellationToken cancellationToken)
     {
         var suspending = targetStatus == AccountStatuses.Suspended;
-        var strategy = db.Database.CreateExecutionStrategy();
-        var outcome = await strategy.ExecuteAsync(async () =>
+        var outcome = await db.ExecuteInTransactionAsync(async transaction =>
         {
-            db.ChangeTracker.Clear();
-            await using var transaction = await db.Database.BeginTransactionAsync(
-                IsolationLevel.Serializable, cancellationToken);
             var user = await db.UserAccounts.SingleOrDefaultAsync(
                 row => row.user_id == userId, cancellationToken);
             if (user is null)
@@ -167,7 +163,7 @@ public sealed partial class PlatformAdministrationRepository
             await db.SaveChangesAsync(cancellationToken);
             await transaction.CommitAsync(cancellationToken);
             return AccountStatusChangeOutcome.Updated;
-        });
+        }, IsolationLevel.Serializable, cancellationToken);
 
         var detail = outcome == AccountStatusChangeOutcome.Updated
             ? await GetAccountAsync(userId, cancellationToken)
