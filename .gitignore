@@ -27,3 +27,7 @@ App_Data/
 
 # API console log captured for OTP codes (scripts/e2e-auth-onboarding.sh)
 api.log
+
+# VPS deploy: real secrets and backups never go to git (the *.example files do).
+deploy/vps/api.env
+deploy/vps/backups/

@@ -13,7 +13,7 @@ namespace StreetBiz.Infrastructure.Services.Chatbot;
 /// database recreation. Audit retention contains no message text.
 /// <para>
 /// Runs every <see cref="ChatbotSettings.RetentionSweepMinutes"/> (6 hours by default). It used to run
-/// every 15 minutes, which woke a serverless Azure SQL database four times an hour so it never paused.
+/// every 15 minutes, which woke a serverless (auto-pausing) database four times an hour so it never paused.
 /// Each run now keeps deleting batch after batch until nothing is left, so a longer interval does not
 /// leave a backlog behind.
 /// </para>

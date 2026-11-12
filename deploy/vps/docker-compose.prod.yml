@@ -1,0 +1,81 @@
+# Production stack on one VPS: Caddy (HTTPS) -> API -> SQL Server.
+# Lives in /opt/streetbiz on the server next to .env, api.env, Caddyfile and the scripts; the deploy
+# workflow copies this folder there on every deploy. See docs/deploy-vps.md.
+name: streetbiz
+
+services:
+  sqlserver:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    environment:
+      ACCEPT_EULA: "Y"
+      # Express is free for production use (10 GB per database). Developer is NOT licensed for
+      # production; set MSSQL_PID to your own edition/product key if you buy one.
+      MSSQL_PID: ${MSSQL_PID:-Express}
+      MSSQL_SA_PASSWORD: ${SQLSERVER_SA_PASSWORD:?Set SQLSERVER_SA_PASSWORD in .env}
+      # Leave room for the API and the OS on a small VPS.
+      MSSQL_MEMORY_LIMIT_MB: ${MSSQL_MEMORY_LIMIT_MB:-1536}
+    volumes:
+      - sqlserver-data:/var/opt/mssql
+      - ./backups:/var/opt/mssql/backups
+      - ./db:/scripts:ro
+    # No published port: only the API reaches the database, over the internal network.
+    networks: [backend]
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - /opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P "$$MSSQL_SA_PASSWORD" -C -Q "SELECT 1" || exit 1
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 40s
+    restart: unless-stopped
+
+  api:
+    image: ${API_IMAGE:-ghcr.io/zawy2004/streetbiz-api}:${IMAGE_TAG:?Set IMAGE_TAG in .env}
+    # Signing keys, SMS, payment and AI settings (see api.env.example). Never committed.
+    env_file: api.env
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      ASPNETCORE_HTTP_PORTS: "8080"
+      # Caddy terminates TLS: trust its X-Forwarded-For/Proto so rate limits see the real client IP.
+      ASPNETCORE_FORWARDEDHEADERS_ENABLED: "true"
+      # The app's own least-privilege login (created by init-db.sh), never sa.
+      STREETBIZ_DB_CONNECTION: "Server=sqlserver,1433;Database=StreetBizDB;User Id=${DB_APP_USER:-streetbiz_app};Password=${DB_APP_PASSWORD:?Set DB_APP_PASSWORD in .env};Encrypt=True;TrustServerCertificate=True;MultipleActiveResultSets=True"
+      # Uploads (menu photos, slot photos, KYC and evidence files) on a named volume, so they
+      # survive every deploy and restart.
+      Storage__Provider: Local
+    volumes:
+      - uploads:/app/App_Data/uploads
+    depends_on:
+      sqlserver:
+        condition: service_healthy
+    networks: [backend, web]
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2.8.4
+    environment:
+      API_DOMAIN: ${API_DOMAIN:?Set API_DOMAIN in .env}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on: [api]
+    networks: [web]
+    restart: unless-stopped
+
+networks:
+  # internal: the database has no route to or from the Internet.
+  backend:
+    internal: true
+  web: {}
+
+volumes:
+  sqlserver-data:
+  uploads:
+  caddy-data:
+  caddy-config:
