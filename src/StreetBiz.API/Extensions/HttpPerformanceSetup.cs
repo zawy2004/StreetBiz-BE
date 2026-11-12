@@ -43,7 +43,7 @@ public static class HttpPerformanceSetup
     {
         services.AddOutputCache(options =>
         {
-            // Bounded for a small App Service plan (the default is 100 MB); the least used entries go first.
+            // Bounded for a small VPS (the default is 100 MB); the least used entries go first.
             options.SizeLimit = 32 * 1024 * 1024;
             // A listing is a few hundred KB at most; anything bigger is not worth holding.
             options.MaximumBodySize = 1024 * 1024;
@@ -54,7 +54,7 @@ public static class HttpPerformanceSetup
 
         services.AddResponseCompression(options =>
         {
-            // Azure terminates TLS in front of the app; every client request is HTTPS.
+            // Caddy terminates TLS in front of the app; every client request is HTTPS.
             options.EnableForHttps = true;
             options.Providers.Add<BrotliCompressionProvider>();
             options.Providers.Add<GzipCompressionProvider>();

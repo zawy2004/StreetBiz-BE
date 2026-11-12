@@ -1,7 +1,7 @@
 name: CI
 
 # Checks every pull request before it can be merged. Nothing here deploys or pushes an image:
-# deploy-azure.yml stays the only workflow that touches Azure, and only on a push to main.
+# deploy-vps.yml stays the only workflow that touches the server, and only on a push to main.
 on:
   pull_request:
     branches: [develop, main]

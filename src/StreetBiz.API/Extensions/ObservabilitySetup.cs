@@ -5,10 +5,10 @@ namespace StreetBiz.API.Extensions;
 /// <summary>
 /// Application Insights through OpenTelemetry, switched on only by a connection string.
 /// <para>
-/// Set <c>APPLICATIONINSIGHTS_CONNECTION_STRING</c> in the App Service settings (Azure fills it in when
-/// Application Insights is enabled on the app) to send requests, dependencies (SQL, HTTP calls to
-/// Gemini/payOS/eSMS) and failures to Azure Monitor. Without it nothing is registered, so local runs,
-/// tests and a deployment that has not enabled it behave exactly as before.
+/// Set <c>APPLICATIONINSIGHTS_CONNECTION_STRING</c> (in <c>api.env</c> on the VPS; it works from any host)
+/// to send requests, dependencies (SQL, HTTP calls to Gemini/payOS/eSMS) and failures to Azure Monitor.
+/// Without it nothing is registered, so local runs, tests and a deployment that has not enabled it
+/// behave exactly as before.
 /// </para>
 /// <para>
 /// Logs keep going to Serilog only (Serilog replaces the logging providers), so nothing logged is sent
