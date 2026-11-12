@@ -2085,6 +2085,16 @@ public sealed class WardComplianceService(
             var source = request.SourceReportId is { } reportId
                 ? await RequireReportForViolationAsync(actor, reportId, request, ct)
                 : null;
+            // The photo is opened by the vendor and other officers: it must be a file the officer
+            // uploaded, or the citizen report's own photo when the record is raised from it --
+            // never a planted link (javascript:, another host, someone else's file).
+            if (request.EvidenceUrl is { Length: > 0 } evidenceUrl
+                && !EvidenceFiles.IsOwnUpload(evidenceUrl, actor.UserId)
+                && !(source?.evidence_url is { } reportPhoto && reportPhoto == evidenceUrl && EvidenceFiles.TryParseUrl(evidenceUrl, out _, out _)))
+            {
+                throw new WardException(400, "evidence_invalid", "Ảnh hiện trường không hợp lệ; vui lòng tải ảnh lên lại.");
+            }
+
             var violation = new Violation
             {
                 contract_id = request.ContractId,

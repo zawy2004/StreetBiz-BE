@@ -151,7 +151,7 @@ public sealed class CommunityVendorUseCaseTests
                 7,
                 It.Is<CustomerVendorReport>(report =>
                     report.Reason == "Wrong location"
-                    && report.EvidenceUrl == "/uploads/evidence/photo.jpg"
+                    && report.EvidenceUrl == "/api/uploads/evidence/7/0123456789abcdef0123456789abcdef.jpg"
                     && report.SlotId == 1
                     && report.ScannedPermitId == 3
                     && report.ReportType == VendorReportTypes.General
@@ -165,13 +165,32 @@ public sealed class CommunityVendorUseCaseTests
             .Handle(new ReportSuspiciousVendorCommand(
                 2,
                 " Wrong location ",
-                " /uploads/evidence/photo.jpg ",
+                " /api/uploads/evidence/7/0123456789abcdef0123456789abcdef.jpg ",
                 1,
                 3), CancellationToken.None);
 
         result.ReportId.Should().Be(41);
         result.Status.Should().Be(VendorReportStatuses.Pending);
         repository.VerifyAll();
+    }
+
+    [Theory]
+    [InlineData("javascript:alert(document.domain)")]
+    [InlineData("https://evil.example/steal.jpg")]
+    [InlineData("/api/uploads/evidence/8/0123456789abcdef0123456789abcdef.jpg")] // another user's file
+    [InlineData("/api/uploads/evidence/7/../../auth/sessions")]
+    public async Task Report_photo_that_is_not_the_customers_own_upload_is_refused(string url)
+    {
+        // The ward officer's screen downloads this file with the officer's token: a planted link
+        // would hand the token to another host or open a script.
+        var customer = new Mock<ICustomerContext>();
+        customer.Setup(x => x.RequireCustomerUserIdAsync(It.IsAny<CancellationToken>())).ReturnsAsync(7);
+        var repository = new Mock<ICommunityVendorRepository>(MockBehavior.Strict);
+
+        var act = () => ReportHandler(customer.Object, repository.Object)
+            .Handle(new ReportSuspiciousVendorCommand(2, "Lấn lối đi", url, 1, 3), CancellationToken.None);
+
+        (await act.Should().ThrowAsync<ValidationAppException>()).Which.Errors.Should().ContainKey("EvidenceUrl");
     }
 
     [Theory]

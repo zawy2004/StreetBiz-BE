@@ -34,7 +34,8 @@ public sealed class ProposeSlotCommandValidator : AbstractValidator<ProposeSlotC
 
 public sealed class ProposeSlotCommandHandler(
     IVendorContext vendorContext,
-    ISidewalkSlotRepository slots)
+    ISidewalkSlotRepository slots,
+    ICurrentUser currentUser)
     : IRequestHandler<ProposeSlotCommand, SlotProposalDto>
 {
     private const int MaxSlotCodeAttempts = 5;
@@ -42,6 +43,16 @@ public sealed class ProposeSlotCommandHandler(
     public async Task<SlotProposalDto> Handle(ProposeSlotCommand request, CancellationToken cancellationToken)
     {
         await vendorContext.RequireOwnedRegistrationAsync(request.RegistrationId, cancellationToken);
+
+        // The officer reviewing the proposal opens this photo: only a file the vendor uploaded is
+        // accepted, never a planted link (javascript:, another host, someone else's file).
+        if (currentUser.UserId is not { } userId || !EvidenceFiles.IsOwnUpload(request.ProposalPhotoUrl, userId))
+        {
+            throw new ValidationAppException(new Dictionary<string, string[]>
+            {
+                ["ProposalPhotoUrl"] = [SideMessages.ProposalPhotoInvalid],
+            });
+        }
 
         if (!await slots.ZoneExistsAsync(request.ZoneId, cancellationToken))
         {

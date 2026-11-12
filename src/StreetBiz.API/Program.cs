@@ -174,6 +174,8 @@ if (signDemoPermits)
 
 // Request logging wraps the exception handler so it records the status the client
 // actually received (a validation failure is a 400, not a 500).
+// First, so every response -- errors and cached answers included -- carries the security headers.
+app.UseSecurityHeaders();
 app.UseSerilogRequestLogging();
 app.UseExceptionHandler();
 app.UseResponseCompressionExceptSensitive();

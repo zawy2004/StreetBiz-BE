@@ -95,6 +95,25 @@ public sealed class HttpPerformanceApiTests
         Assert.Equal("http://localhost:5173", AllowedOrigin(third));
     }
 
+    [Theory]
+    [InlineData("/api/community/vendors?take=20")] // a normal answer (twice: the second from the cache)
+    [InlineData("/api/community/vendors?take=0")] // a validation error
+    [InlineData("/api/does-not-exist")] // a 404
+    public async Task Every_response_forbids_framing_sniffing_and_active_content(string path)
+    {
+        await using var host = Host(Community().Object);
+        using var client = host.CreateClient(new() { BaseAddress = new("https://localhost") });
+
+        foreach (var response in new[] { await client.GetAsync(path), await client.GetAsync(path) })
+        {
+            Assert.Equal("DENY", response.Headers.GetValues("X-Frame-Options").Single());
+            Assert.Equal("nosniff", response.Headers.GetValues("X-Content-Type-Options").Single());
+            var csp = response.Headers.GetValues("Content-Security-Policy").Single();
+            Assert.Contains("default-src 'none'", csp);
+            Assert.Contains("frame-ancestors 'none'", csp);
+        }
+    }
+
     [Fact]
     public async Task An_error_response_is_not_cached()
     {
