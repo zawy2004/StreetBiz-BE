@@ -130,6 +130,7 @@ public static class CommunityMessages
     public const string DuplicatePendingReport =
         "Bạn đã có một phản ánh về người bán này đang chờ phường xử lý. Hãy chờ kết quả trước khi gửi phản ánh mới.";
     public const string MenuItemNotFound = "Không tìm thấy món này trong thực đơn của người bán.";
+    public const string InvalidEvidencePhoto = "Ảnh minh chứng không hợp lệ; vui lòng tải ảnh lên lại.";
     public const string NotListedAtPurchase = "Món này không có trên bảng giá của quầy vào thời điểm bạn mua.";
     public const string NotAbovePostedPrice =
         "Số tiền bị tính không cao hơn giá niêm yết lúc mua. Nếu có vấn đề khác, hãy chọn \"Phản ánh khác\".";

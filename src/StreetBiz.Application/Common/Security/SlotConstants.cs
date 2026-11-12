@@ -268,6 +268,7 @@ public static class SideMessages
     public const string ContractCancelled = "Your rental slot has been returned successfully.";
     public const string PermitNotFound = "No digital permit has been issued for this contract yet.";
     public const string ProposalPhotoRequired = "A photo of the proposed location is required."; // WARD-16 evidence
+    public const string ProposalPhotoInvalid = "Ảnh vị trí đề xuất không hợp lệ; vui lòng tải ảnh lên lại.";
     public const string ZoneNotFound = "Please select a valid pricing zone.";
     public const string SlotCodeGenerationFailed = "Could not generate a unique slot code. Please try again.";
     public const string SlotProposed = "Your proposed slot has been submitted for review.";

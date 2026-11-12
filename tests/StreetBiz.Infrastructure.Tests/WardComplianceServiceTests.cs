@@ -4,6 +4,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Metadata;
 using Microsoft.Extensions.Options;
 using StreetBiz.Application.Common.Exceptions;
+using StreetBiz.Application.Common.Security;
 using StreetBiz.Application.Features.AiAssistance;
 using StreetBiz.Application.Common.Models;
 using StreetBiz.Application.Features.WardCompliance;
@@ -1905,6 +1906,54 @@ public sealed class WardComplianceServiceTests
         Assert.Equal(960, result.PermitId);
         using var verify = f.NewDb();
         Assert.Equal(link, (await verify.PermitScanLogs.SingleAsync()).qr_payload);
+    }
+
+    [Theory]
+    [InlineData("javascript:alert(document.domain)")]
+    [InlineData("https://evil.example/steal.jpg")]
+    [InlineData("/api/uploads/evidence/99/0123456789abcdef0123456789abcdef.jpg")] // another user's file
+    public async Task A_violation_photo_that_is_not_an_own_upload_is_refused(string url)
+    {
+        using var f = await Fixture.Create();
+
+        var ex = await Assert.ThrowsAsync<WardException>(() => f.NewService().RecordViolationAsync(f.Actor,
+            new RecordWardViolationRequest(null, 100, 10, "UNAUTHORIZED_BUSINESS_USE", "Lấn vỉa hè", url), default));
+
+        Assert.Equal("evidence_invalid", ex.ErrorCode);
+        using var read = f.NewDb();
+        Assert.False(await read.Violations.AnyAsync());
+    }
+
+    [Fact]
+    public async Task A_violation_photo_the_officer_uploaded_is_kept()
+    {
+        using var f = await Fixture.Create();
+        var own = EvidenceFiles.BuildUrl(f.Actor.UserId, "0123456789abcdef0123456789abcdef.jpg");
+
+        await f.NewService().RecordViolationAsync(f.Actor,
+            new RecordWardViolationRequest(null, 100, 10, "UNAUTHORIZED_BUSINESS_USE", "Lấn vỉa hè", own), default);
+
+        using var read = f.NewDb();
+        Assert.Equal(own, (await read.Violations.SingleAsync()).evidence_url);
+    }
+
+    [Fact]
+    public async Task A_violation_raised_from_a_report_may_reuse_that_reports_photo()
+    {
+        using var f = await Fixture.Create();
+        var reportId = await SeedCitizenReport(f, vendorId: 10, slotId: 100);
+        var reporterPhoto = EvidenceFiles.BuildUrl(20, "fedcba9876543210fedcba9876543210.jpg");
+        using (var seed = f.NewDb())
+        {
+            (await seed.VendorReports.SingleAsync(r => r.report_id == reportId)).evidence_url = reporterPhoto;
+            await seed.SaveChangesAsync();
+        }
+
+        await f.NewService().RecordViolationAsync(f.Actor, new RecordWardViolationRequest(
+            null, 100, 10, "UNAUTHORIZED_BUSINESS_USE", "Lấn vỉa hè", reporterPhoto, SourceReportId: reportId), default);
+
+        using var read = f.NewDb();
+        Assert.Equal(reporterPhoto, (await read.Violations.SingleAsync()).evidence_url);
     }
 
     [Fact]

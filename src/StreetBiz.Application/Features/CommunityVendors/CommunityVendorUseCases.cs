@@ -294,6 +294,17 @@ public sealed class ReportSuspiciousVendorCommandHandler(
         CancellationToken cancellationToken)
     {
         var customerUserId = await customer.RequireCustomerUserIdAsync(cancellationToken);
+        // The photo must be one this customer uploaded: the ward officer's screen downloads it
+        // with the officer's own token, so a planted link (javascript:, another host, someone
+        // else's file) must never be stored.
+        if (request.EvidenceUrl?.Trim() is { Length: > 0 } evidenceUrl && !EvidenceFiles.IsOwnUpload(evidenceUrl, customerUserId))
+        {
+            throw new ValidationAppException(new Dictionary<string, string[]>
+            {
+                ["EvidenceUrl"] = [CommunityMessages.InvalidEvidencePhoto],
+            });
+        }
+
         var target = await vendors.GetReportTargetAsync(request.VendorId, request.ScannedPermitId, cancellationToken)
             ?? throw new NotFoundException(CommunityMessages.VendorNotFound);
 
