@@ -12,11 +12,10 @@ services:
       # production; set MSSQL_PID to your own edition/product key if you buy one.
       MSSQL_PID: ${MSSQL_PID:-Express}
       MSSQL_SA_PASSWORD: ${SQLSERVER_SA_PASSWORD:?Set SQLSERVER_SA_PASSWORD in .env}
-      # Leave room for the API and the OS on a small VPS.
-      MSSQL_MEMORY_LIMIT_MB: ${MSSQL_MEMORY_LIMIT_MB:-1536}
+      # Caps SQL Server so the API and the OS keep the rest; it will not start below 2048.
+      MSSQL_MEMORY_LIMIT_MB: ${MSSQL_MEMORY_LIMIT_MB:-2048}
     volumes:
       - sqlserver-data:/var/opt/mssql
-      - ./backups:/var/opt/mssql/backups
       - ./db:/scripts:ro
     # No published port: only the API reaches the database, over the internal network.
     networks: [backend]
