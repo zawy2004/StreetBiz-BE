@@ -34,6 +34,10 @@ compose up -d --remove-orphans
 
 if healthy; then
   echo "Healthy on $tag"
+  # Each deploy pulls a ~0.5 GB API image. Keep the running one and the one before it (for a
+  # manual ./deploy.sh <previous> rollback) and delete older API images, so the disk does not fill.
+  repo="$(grep -E '^API_IMAGE=' .env | cut -d= -f2- || true)"; repo="${repo:-ghcr.io/zawy2004/streetbiz-api}"
+  docker images "$repo" --format '{{.Tag}}' | grep -vxF -e "$tag" -e "${previous:-none}"     | while read -r old; do docker rmi "$repo:$old" >/dev/null 2>&1 || true; done
   docker image prune -f >/dev/null
   exit 0
 fi

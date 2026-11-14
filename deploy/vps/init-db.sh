@@ -37,6 +37,11 @@ else
   fi
 fi
 
+# SIMPLE recovery: the nightly full backup (backup.sh) is the restore point, and without
+# transaction-log backups FULL recovery would let the log file grow until the disk is full.
+sql -Q "IF DB_ID(N'StreetBizDB') IS NOT NULL AND DATABASEPROPERTYEX(N'StreetBizDB', 'Recovery') <> 'SIMPLE'
+ALTER DATABASE [StreetBizDB] SET RECOVERY SIMPLE;"
+
 user="${DB_APP_USER:-streetbiz_app}"
 password="$(quote "${DB_APP_PASSWORD:?Set DB_APP_PASSWORD in .env}")"
 echo "Applying the app login '$user' (read/write data on dbo, no schema changes)..."
