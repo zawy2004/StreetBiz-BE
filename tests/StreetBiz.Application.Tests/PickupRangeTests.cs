@@ -145,7 +145,7 @@ public sealed class PickupRangeTests
         var (gate, tracking) = Gate();
         var reached = false;
 
-        var result = await gate.Handle(Checkout(At(NorthBy(800))), () => { reached = true; return Task.FromResult(Placed); }, default);
+        var result = await gate.Handle(Checkout(At(NorthBy(800))), _ => { reached = true; return Task.FromResult(Placed); }, default);
 
         reached.Should().BeTrue();
         result.Should().Be(Placed);
@@ -158,7 +158,7 @@ public sealed class PickupRangeTests
         var (gate, _) = Gate();
         var reached = false;
 
-        var act = () => gate.Handle(Checkout(At(NorthBy(3400))), () => { reached = true; return Task.FromResult(Placed); }, default);
+        var act = () => gate.Handle(Checkout(At(NorthBy(3400))), _ => { reached = true; return Task.FromResult(Placed); }, default);
 
         await act.Should().ThrowAsync<DomainRuleException>().WithMessage("*3,4 km*2 km*");
         reached.Should().BeFalse();
@@ -169,7 +169,7 @@ public sealed class PickupRangeTests
     {
         var (gate, _) = Gate();
 
-        var act = () => gate.Handle(Checkout(null), () => Task.FromResult(Placed), default);
+        var act = () => gate.Handle(Checkout(null), _ => Task.FromResult(Placed), default);
 
         await act.Should().ThrowAsync<DomainRuleException>().WithMessage(PickupRangeMessages.LocationRequired);
     }
@@ -179,7 +179,7 @@ public sealed class PickupRangeTests
     {
         var (gate, tracking) = Gate(enforced: false);
 
-        var result = await gate.Handle(Checkout(null), () => Task.FromResult(Placed), default);
+        var result = await gate.Handle(Checkout(null), _ => Task.FromResult(Placed), default);
 
         result.Should().Be(Placed);
         tracking.VerifyNoOtherCalls();
@@ -195,7 +195,7 @@ public sealed class PickupRangeTests
             policy, customer.Object, Mock.Of<IOrderTrackingRepository>());
         var reached = false;
 
-        await gate.Handle(Checkout(At(NorthBy(10))), () => { reached = true; return Task.FromResult(Placed); }, default);
+        await gate.Handle(Checkout(At(NorthBy(10))), _ => { reached = true; return Task.FromResult(Placed); }, default);
 
         reached.Should().BeTrue();
     }

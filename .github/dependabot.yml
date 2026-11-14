@@ -29,6 +29,15 @@ updates:
       # (see StreetBiz.Infrastructure.csproj).
       - dependency-name: "SixLabors.ImageSharp"
         versions: [">= 3.2.0"]
+      # 8.x needs a paid licence for commercial use and rewrites the assertion API.
+      - dependency-name: "FluentAssertions"
+        versions: [">= 8.0.0"]
+      # Majors of these Lucky Penny libraries change the licence terms and the API; take
+      # security fixes through the minor-and-patch group on the current major instead.
+      - dependency-name: "AutoMapper"
+        update-types: [version-update:semver-major]
+      - dependency-name: "MediatR"
+        update-types: [version-update:semver-major]
 
   - package-ecosystem: github-actions
     directory: /
