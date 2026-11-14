@@ -5,6 +5,7 @@ using StreetBiz.Application.Common.Interfaces;
 using StreetBiz.Application.Common.Models;
 using StreetBiz.Application.Common.Security;
 using StreetBiz.Application.DTOs.VendorRegistration;
+using StreetBiz.Application.Features.VendorKyc;
 
 namespace StreetBiz.Application.Features.VendorRegistration.UpdateRegistration;
 
@@ -40,7 +41,9 @@ public sealed class UpdateRegistrationCommandValidator : RegistrationFieldsValid
 
 public sealed class UpdateRegistrationCommandHandler(
     IVendorContext vendorContext,
+    ICurrentUser currentUser,
     IBusinessRegistrationRepository repository,
+    IKycResultRepository kycResults,
     IAdministrativeUnitRepository units) : IRequestHandler<UpdateRegistrationCommand, BusinessRegistrationDto>
 {
     public async Task<BusinessRegistrationDto> Handle(UpdateRegistrationCommand request, CancellationToken cancellationToken)
@@ -73,6 +76,12 @@ public sealed class UpdateRegistrationCommandHandler(
             request.FoodSafetyCommitment, request.HouseholdMembers);
 
         await repository.UpdateAndResubmitAsync(request.RegistrationId, data, cancellationToken);
+
+        // A card scanned while editing (the vendor swapped a blurry photo) belongs to this registration too.
+        if (currentUser.UserId is { } userId)
+        {
+            await kycResults.LinkPendingResultsAsync(userId, request.RegistrationId, cancellationToken);
+        }
 
         var updated = await repository.GetByIdAsync(request.RegistrationId, cancellationToken)
             ?? throw new NotFoundException(RegMessages.NotFound);

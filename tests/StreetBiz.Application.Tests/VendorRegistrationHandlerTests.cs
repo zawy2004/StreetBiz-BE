@@ -60,7 +60,7 @@ public sealed class VendorRegistrationHandlerTests
         Owns(RegistrationStatuses.MoreInformationRequired);
         registrations.Setup(r => r.HasActivePendingAsync(VendorId, It.IsAny<CancellationToken>(), RegistrationId))
             .ReturnsAsync(true);
-        var handler = new UpdateRegistrationCommandHandler(vendorContext.Object, registrations.Object, units.Object);
+        var handler = new UpdateRegistrationCommandHandler(vendorContext.Object, submitCurrentUser.Object, registrations.Object, kycResults.Object, units.Object);
         var command = new UpdateRegistrationCommand(RegistrationId, VendorTypes.Itinerant, "Banh mi", null, null, null, WardId);
 
         await FluentActions.Awaiting(() => handler.Handle(command, CancellationToken.None))
@@ -75,13 +75,28 @@ public sealed class VendorRegistrationHandlerTests
         Owns(RegistrationStatuses.Submitted);
         registrations.Setup(r => r.GetByIdAsync(RegistrationId, It.IsAny<CancellationToken>()))
             .ReturnsAsync(Registration(RegistrationStatuses.Submitted));
-        var handler = new UpdateRegistrationCommandHandler(vendorContext.Object, registrations.Object, units.Object);
+        var handler = new UpdateRegistrationCommandHandler(vendorContext.Object, submitCurrentUser.Object, registrations.Object, kycResults.Object, units.Object);
         var command = new UpdateRegistrationCommand(RegistrationId, VendorTypes.Itinerant, "Banh mi 2", null, null, null, WardId);
 
         await handler.Handle(command, CancellationToken.None);
 
         registrations.Verify(r => r.HasActivePendingAsync(VendorId, It.IsAny<CancellationToken>(), RegistrationId), Times.Once);
         registrations.Verify(r => r.UpdateAndResubmitAsync(RegistrationId, It.IsAny<NewBizRegistration>(), It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task Cards_scanned_while_editing_are_linked_to_the_registration_being_edited()
+    {
+        Owns(RegistrationStatuses.MoreInformationRequired);
+        registrations.Setup(r => r.GetByIdAsync(RegistrationId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Registration(RegistrationStatuses.Submitted));
+        submitCurrentUser.SetupGet(c => c.UserId).Returns(55L);
+        var handler = new UpdateRegistrationCommandHandler(vendorContext.Object, submitCurrentUser.Object, registrations.Object, kycResults.Object, units.Object);
+        var command = new UpdateRegistrationCommand(RegistrationId, VendorTypes.Itinerant, "Banh mi", null, null, null, WardId);
+
+        await handler.Handle(command, CancellationToken.None);
+
+        kycResults.Verify(k => k.LinkPendingResultsAsync(55L, RegistrationId, It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [Theory]

@@ -142,9 +142,16 @@ public sealed class AiComplianceService : IAiComplianceService
         IReadOnlyList<WardEvidenceDto> evidence,
         CancellationToken ct)
     {
-        var idPhoto = evidence.FirstOrDefault(e =>
-            e.Type.Contains("ID", StringComparison.OrdinalIgnoreCase) ||
-            e.Type.Contains("CCCD", StringComparison.OrdinalIgnoreCase)) ?? evidence.FirstOrDefault();
+        // The card's front carries the number, name and address. Older registrations may hold more than
+        // one front (replaced photos were once kept), so take the newest rather than the first.
+        var idPhoto = evidence
+                .Where(e => e.Type == EvidenceTypes.IdentityDocument)
+                .OrderByDescending(e => e.EvidenceId)
+                .FirstOrDefault()
+            ?? evidence.OrderByDescending(e => e.EvidenceId).FirstOrDefault(e =>
+                e.Type.Contains("ID", StringComparison.OrdinalIgnoreCase) ||
+                e.Type.Contains("CCCD", StringComparison.OrdinalIgnoreCase))
+            ?? evidence.FirstOrDefault();
 
         if (idPhoto is null)
         {
