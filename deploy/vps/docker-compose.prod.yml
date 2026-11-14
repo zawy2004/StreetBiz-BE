@@ -44,9 +44,6 @@ services:
     env_file: api.env
     environment:
       ASPNETCORE_ENVIRONMENT: Production
-      # Log timestamps in Vietnam time. The app itself works in UTC (UtcNow, UTC columns, explicit
-      # +7 for business days), so this only changes what `docker compose logs` shows.
-      TZ: Asia/Ho_Chi_Minh
       ASPNETCORE_HTTP_PORTS: "8080"
       # Caddy terminates TLS: trust its X-Forwarded-For/Proto so rate limits see the real client IP.
       ASPNETCORE_FORWARDEDHEADERS_ENABLED: "true"
