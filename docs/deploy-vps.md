@@ -384,6 +384,32 @@ không trả `/health` trong khoảng 2 phút, `deploy.sh` in 60 dòng log cuố
 
 `deploy.sh` không đụng tới database. Nếu bản mới có đổi schema, xem mục 11 trước khi quay về.
 
+### Giữ dung lượng ổ đĩa (VPS 40 GB)
+
+Những thứ có thể lớn dần đều đã có giới hạn:
+
+| Thành phần | Giới hạn | Đặt ở |
+|---|---|---|
+| Log container (api, caddy, sqlserver) | 10 MB × 3 file mỗi dịch vụ | `x-logging` trong `docker-compose.prod.yml` |
+| Image API cũ | Chỉ giữ bản đang chạy và bản trước đó | `deploy.sh`, sau mỗi lần deploy thành công |
+| Log giao dịch SQL Server | Chế độ khôi phục `SIMPLE`, log tự tái sử dụng | `init-db.sh` |
+| Log hệ thống (journald) | 200 MB, chừa trống ít nhất 2 GB | `/etc/systemd/journald.conf.d/streetbiz.conf` |
+| Bản sao lưu | Giữ `BACKUP_KEEP_DAYS` ngày (mặc định 14) | `backup.sh` |
+
+Server cài trước bản này phải chạy tay hai lệnh một lần:
+
+```bash
+sudo mkdir -p /etc/systemd/journald.conf.d
+printf "[Journal]
+SystemMaxUse=200M
+SystemKeepFree=2G
+" | sudo tee /etc/systemd/journald.conf.d/streetbiz.conf
+sudo systemctl restart systemd-journald
+./init-db.sh        # chuyển StreetBizDB sang SIMPLE (chạy lại an toàn)
+```
+
+Kiểm tra định kỳ: `df -h /` và `docker system df`.
+
 ## 10. Sao lưu và khôi phục
 
 **Cài lịch sao lưu hằng đêm** (user `deploy`, `crontab -e`, thêm dòng sau):
