@@ -1,221 +1,261 @@
+<div align="center">
+
 # StreetBiz Backend
 
-WARD-16–18, SYS-01–02, BUY-01–05, ADM-01–07, CART-01,
-ORD-01–04 and SORD-01–04 are now implemented. See
-[Ward slot workflows](docs/ward-slot-workflows.md) for API contracts, authentication,
-geofence configuration and test instructions, and
-[Community vendor workflows](docs/community-vendor-workflows.md) for the public map,
-permit verification, public profiles, customer ratings and suspicious-vendor reports.
-[Platform administration workflows](docs/platform-administration-workflows.md) documents
-food-category management, account suspension, content moderation, order-complaint
-resolution, the platform dashboard and report export. See
-[Commerce order workflows](docs/commerce-order-workflows.md) for cart, prepaid order,
-pickup, seller processing, refund-request, address snapshots, authenticated
-SignalR updates and sales-summary contracts.
+**REST API and real-time hub for StreetBiz, the sidewalk-vendor management and marketplace platform for the wards of Đà Nẵng.**
 
-SYS-03–06, FEE-01/03/04 and WARD-14/15 are also implemented. See
-[Fee, payment, invoicing and reporting](docs/fee-payment-invoicing.md) for fee
-schedule generation, the shared payment-callback dispatch with Commerce, the
-hourly reminder sweep, and the ward collection report and dashboard.
+[![CI](https://github.com/zawy2004/StreetBiz-BE/actions/workflows/ci.yml/badge.svg?branch=develop)](https://github.com/zawy2004/StreetBiz-BE/actions/workflows/ci.yml)
+[![Deploy](https://github.com/zawy2004/StreetBiz-BE/actions/workflows/deploy-vps.yml/badge.svg?branch=main)](https://github.com/zawy2004/StreetBiz-BE/actions/workflows/deploy-vps.yml)
+![.NET 8](https://img.shields.io/badge/.NET-8.0_LTS-512BD4?logo=dotnet&logoColor=white)
+![SQL Server](https://img.shields.io/badge/SQL_Server-2022-CC2927?logo=microsoftsqlserver&logoColor=white)
+![Docker](https://img.shields.io/badge/Docker-Compose-2496ED?logo=docker&logoColor=white)
 
-STORE-03 (business hours), REV-02/03 (review window, reporting content), DISC-05
-(rating and price filters), PAY-02 (ZaloPay), SIDE-10 (release of the old slot after an
-address change) and the AI suggestions AIP-01..04 and AIB-01 are documented in
-[Marketplace completion workflows](docs/marketplace-completion-workflows.md) and
-[AI assistance for sellers, customers and wards](docs/ai-marketplace-assistance.md).
+[Web app](https://www.streetbiz.id.vn) · [Frontend repo](https://github.com/zawy2004/StreetBiz-FE) · [Mobile app repo](https://github.com/zawy2004/StreetBiz-App) · [Deployment guide](docs/deploy-vps.md)
 
-StreetBiz backend foundation built with .NET 8, ASP.NET Core, Entity Framework
-Core 8, SQL Server, and Clean Architecture. The current codebase includes
-authentication, vendor onboarding, sidewalk/rental workflows and the ward slot
-proposal, address-conflict, transfer and geolocation workflows.
+</div>
 
-## Prerequisites
+---
 
-- .NET 8 SDK
-- SQL Server 2022 or a compatible SQL Server instance
-- dotnet-ef 8.x
-- Docker Desktop (optional)
+## Contents
 
-Check the SDK and install the EF CLI:
+- [Overview](#overview)
+- [Features](#features)
+- [Tech stack](#tech-stack)
+- [Architecture](#architecture)
+- [Getting started](#getting-started)
+- [Configuration](#configuration)
+- [Database](#database)
+- [Testing](#testing)
+- [Deployment](#deployment)
+- [Project structure](#project-structure)
+- [Documentation](#documentation)
 
-~~~powershell
-dotnet --list-sdks
-dotnet tool update --global dotnet-ef --version "8.*" --allow-downgrade
-dotnet ef --version
+## Overview
+
+StreetBiz digitises how a ward licenses and supervises street vendors, and gives those
+vendors an online storefront. One API serves five roles:
+
+| Role | What they do |
+| --- | --- |
+| **Vendor** (household business) | Registers the business with eKYC, rents a sidewalk slot, pays fees, runs a storefront, takes orders, files household tax |
+| **Customer** | Finds vendors on the map, checks a permit by QR, orders and pays, rates and reports |
+| **Ward authority** | Reviews registrations, manages slots and pricing zones, issues digital permits, collects fees, records violations |
+| **Platform administrator** | Manages categories, moderates content, resolves complaints, sees the platform dashboard |
+| **Guest** | Browses the public map and scans a printed price-board QR code |
+
+## Features
+
+| Area | Highlights |
+| --- | --- |
+| **Identity** | Phone + password or phone + OTP sign-in, OTP by SMS through eSMS.vn, JWT with rotating refresh tokens, session and login history, rate limiting |
+| **Onboarding** | Business registration with evidence files and FPT.AI eKYC, ward review queue with full audit trail |
+| **Sidewalk slots** | Pricing zones, slot proposals, rental applications, contracts, renewals, transfers, address conflicts, geofencing with Nominatim |
+| **Permits** | Digital permits with signed QR codes and a public verification page |
+| **Fees and payments** | Fee schedules, reminders, invoices, payOS (VietQR) paid straight to each household or ward, MoMo and ZaloPay adapters |
+| **Marketplace** | Storefronts, menus, cart, prepaid orders, pickup range checks, refunds, order complaints, ratings |
+| **Real time** | SignalR for order status and chat, with polling fallback on the clients |
+| **AI assistance** | Gemini and Groq with key rotation for seller, customer and ward assistants, a chatbot with voice, compliance suggestions |
+| **Household tax** | Revenue tracking and tax overview for household businesses |
+| **Reporting** | Ward collection reports and dashboards, platform dashboard, Excel, Word and PDF export |
+
+## Tech stack
+
+| Layer | Technology |
+| --- | --- |
+| Runtime | .NET 8 (LTS), ASP.NET Core Web API, SignalR |
+| Application | MediatR 12 (CQRS), FluentValidation 12, AutoMapper |
+| Data | Entity Framework Core 8 (database-first), SQL Server 2022 |
+| Logging and health | Serilog, ASP.NET Core health checks |
+| Documents and images | ClosedXML, DocumentFormat.OpenXml, PdfSharpCore, ImageSharp |
+| Integrations | eSMS.vn, FPT.AI, Gemini, Groq, payOS, MoMo, ZaloPay, Nominatim |
+| Tests | xUnit, FluentAssertions, Moq, WebApplicationFactory, SQLite in-memory |
+| Delivery | Docker, GitHub Actions, GHCR, Caddy (automatic HTTPS) |
+
+## Architecture
+
+Clean Architecture with dependencies pointing inward:
+
+~~~text
+             ┌──────────────────────────┐
+             │       StreetBiz.API       │  Controllers, SignalR hubs, auth, rate limits
+             └────────────┬─────────────┘
+                          │
+        ┌─────────────────┴──────────────────┐
+        ▼                                    ▼
+┌────────────────────┐          ┌────────────────────────┐
+│ StreetBiz.          │◄─────────│ StreetBiz.             │  EF Core, SMS, payments,
+│ Application         │          │ Infrastructure         │  AI, storage, geocoding
+│ (use cases, CQRS)   │          └────────────────────────┘
+└─────────┬──────────┘
+          ▼
+┌────────────────────┐
+│ StreetBiz.Domain    │  No framework dependencies
+└────────────────────┘
 ~~~
 
-Run every dotnet command below from the directory containing
-StreetBiz.Backend.sln.
+Each use case is a MediatR command or query with its own FluentValidation validator, run by
+a shared validation pipeline behaviour. See [docs/architecture.md](docs/architecture.md).
 
-## Configure the database connection
+## Getting started
 
-The application resolves the connection string in this order:
+### Prerequisites
 
-1. Environment variable STREETBIZ_DB_CONNECTION.
-2. Configuration key ConnectionStrings:StreetBizDB, including user-secrets.
-3. Legacy key ConnectionStrings:StreetBizDatabase.
-4. Startup fails with a clear error when none is present.
+- [.NET 8 SDK](https://dotnet.microsoft.com/download/dotnet/8.0)
+- SQL Server 2022 (LocalDB, Developer edition or the Docker image)
+- Optional: Docker Desktop, `dotnet-ef` 8.x
 
-PowerShell process-scoped environment variable:
-
-~~~powershell
-$env:STREETBIZ_DB_CONNECTION = "<sql-server-connection-string>"
-~~~
-
-User-secrets alternative:
+### 1. Build the database
 
 ~~~powershell
-dotnet user-secrets --project src/StreetBiz.API set "ConnectionStrings:StreetBizDB" "<sql-server-connection-string>"
-~~~
-
-Never commit a real password, connection string, .env file, or secrets.json.
-appsettings files intentionally contain no credentials.
-
-Payment credentials and URLs follow the same rule. Configure them with
-environment variables or user-secrets:
-
-~~~powershell
-dotnet user-secrets --project src/StreetBiz.API set "Payments:Momo:CheckoutUrlTemplate" "<provider-checkout-url-template>"
-dotnet user-secrets --project src/StreetBiz.API set "Payments:Momo:CallbackSecret" "<merchant-callback-secret>"
-dotnet user-secrets --project src/StreetBiz.API set "Payments:ZaloPay:CheckoutUrlTemplate" "<provider-checkout-url-template>"
-dotnet user-secrets --project src/StreetBiz.API set "Payments:ZaloPay:CallbackSecret" "<merchant-callback-secret>"
-~~~
-
-ZaloPay Gateway v2 additionally needs `Payments:ZaloPay:Enabled` (true),
-`ApiBaseUrl`, `AppId`, `Key1`, `Key2`, `ReturnUrl` and `CallbackUrl`; it stays off
-until all of them are set. Equivalent environment keys use double underscores, for example
-`Payments__Momo__CallbackSecret`. Callback requests send the hexadecimal
-HMAC-SHA256 in `X-Payment-Signature`.
-
-## Reverse-engineer the existing database
-
-Confirm that STREETBIZ_DB_CONNECTION is set, then run:
-
-~~~powershell
-dotnet ef dbcontext scaffold "$env:STREETBIZ_DB_CONNECTION" Microsoft.EntityFrameworkCore.SqlServer --project src/StreetBiz.Infrastructure --startup-project src/StreetBiz.API --context StreetBizDbContext --context-dir Persistence --output-dir Persistence/ScaffoldedModels --no-onconfiguring --use-database-names --force
-~~~
-
-This command overwrites generated DbContext/model files. Inspect local changes
-first and extend generated types with partial classes instead of editing generated
-files directly. See docs/database.md.
-
-## Restore, build, and test
-
-~~~powershell
-dotnet restore StreetBiz.Backend.sln
-dotnet build StreetBiz.Backend.sln --no-restore
-dotnet test StreetBiz.Backend.sln --no-build
-~~~
-
-## Run the API
-
-Set the connection string, then:
-
-~~~powershell
-dotnet run --project src/StreetBiz.API
-~~~
-
-In Development, open /swagger at the URL printed by ASP.NET Core. Check SQL
-Server readiness with GET /health. HTTPS redirection is enabled.
-
-## Deploying (VPS)
-
-The API and SQL Server run on one VPS with Docker Compose (Caddy for HTTPS in front); the
-web app stays on Vercel. Push to `main` runs `.github/workflows/deploy-vps.yml`: tests, image
-to GHCR, then `deploy/vps/deploy.sh` on the server over SSH, which rolls back by itself when
-the new version fails its health check. See [docs/deploy-vps.md](docs/deploy-vps.md) for the
-server setup, the GitHub secrets, the API settings (it refuses to start in Production without
-its signing keys), backups and schema changes on the live database.
-
-## Uploaded files
-
-Uploads (menu images, slot photos, KYC and evidence files, voice) go through IFileStorage and
-are written to disk under App_Data/uploads. On the VPS that folder is the Docker volume
-`streetbiz_uploads`, so files survive deploys and restarts; `deploy/vps/backup.sh` archives it
-nightly. Files are always served by the API after its permission checks, never by a public URL.
-
-## Docker
-
-This is the local/development Compose file (the production stack is
-`deploy/vps/docker-compose.prod.yml`, see above). Copy .env.example to .env and replace both
-placeholder values. The Compose file contains streetbiz-api and sqlserver services. The SQL Server container only
-starts the engine; it does not create, overwrite, migrate, or seed StreetBizDB.
-
-STREETBIZ_DB_CONNECTION may point to the Compose SQL Server or to an existing
-SQL Server outside Docker.
-
-~~~powershell
-docker compose up --build
-~~~
-
-## Database
-
-StreetBizDB is database-first: the whole database is built from two scripts in `db/`
-and the API never creates or changes it.
-
-- `db/StreetBiz_SQL_Server.sql`: schema, reference data and the EF history stamp
-- `db/StreetBiz_Demo_Seed.sql`: demo accounts and scenario (development only)
-- `db/StreetBiz_Upgrade_*.sql`: one-off, only for a database built before the 94 wards of
-  Đà Nẵng; a build never runs them (see [docs/database.md](docs/database.md#upgrading-a-database-built-before-the-94-wards))
-
-First-time setup on an empty database (stop the API first):
-
-~~~powershell
+# Stop the API first: an open connection blocks DROP DATABASE.
 powershell -ExecutionPolicy Bypass -File scripts/setup-local-db.ps1 -Recreate
 ~~~
 
-Schema changes are edited into those two files, never added as separate scripts. See
-[docs/database.md](docs/database.md) for the full workflow, the demo accounts and the
-EF Core rules (no EnsureCreated, Migrate or migrations against this database).
+This builds `StreetBizDB` from `db/StreetBiz_SQL_Server.sql` and loads the demo seed.
 
-## Solution layout
+> [!WARNING]
+> `-Recreate` drops the database. Never run it against a shared or production database.
+
+### 2. Point the API at it
+
+~~~powershell
+dotnet user-secrets --project src/StreetBiz.API set "ConnectionStrings:StreetBizDB" "<connection-string>"
+~~~
+
+### 3. Run
+
+~~~powershell
+dotnet run --project src/StreetBiz.API --launch-profile https
+~~~
+
+| URL | Purpose |
+| --- | --- |
+| `https://localhost:7147/swagger` | Swagger UI (Development only) |
+| `https://localhost:7147/health` | Health check, including SQL Server |
+
+### Demo accounts
+
+The demo seed creates these accounts. Every password is `Password123!`.
+
+| Role | Phone |
+| --- | --- |
+| Platform administrator | `0900000001` |
+| Ward authority (Hải Châu) | `0983000001` |
+| Vendor, approved with a permit and storefront | `0905000101` |
+| Vendor, registration awaiting review | `0905000102` |
+| Customer | `0905000201` |
+
+The full list and the scenario behind it are in [docs/database.md](docs/database.md#demo-data).
+
+### Run with Docker
+
+~~~powershell
+Copy-Item .env.example .env   # then fill in the placeholders
+docker compose up --build
+~~~
+
+The Compose SQL Server container only starts the engine. It never creates, migrates or
+seeds `StreetBizDB`.
+
+## Configuration
+
+Secrets never go into `appsettings*.json` in Git. Locally they live in user-secrets or the
+ignored `appsettings.Development.json`. On the server they go in `api.env`, with `__` as the
+section separator (for example `Sms__ApiKey`).
+
+| Section | Purpose | Required in Production |
+| --- | --- | :---: |
+| `ConnectionStrings:StreetBizDB` (or `STREETBIZ_DB_CONNECTION`) | SQL Server | ✅ |
+| `Jwt:SigningKey` | Access-token signing | ✅ |
+| `Otp:HashKey` | HMAC key for stored OTP codes | ✅ |
+| `Permit:SigningKey` | Signs permit QR codes | ✅ |
+| `OrderPickup:SigningKey` | Signs order pickup codes | ✅ |
+| `Sms` | eSMS.vn `ApiKey`, `SecretKey`, `SmsType` (8 = fixed number) | For OTP |
+| `Cors:AllowedOrigins` | Web origins allowed to call the API | ✅ |
+| `Payments:PayOs` | Credential encryption key, webhook and return URLs | For payOS |
+| `AiCompliance` | FPT.AI eKYC, Gemini and Groq keys | For AI features |
+
+The API refuses to start in Production when a required key is missing.
+[deploy/vps/api.env.example](deploy/vps/api.env.example) lists every setting with comments.
+
+## Database
+
+`StreetBizDB` is **database-first**. The API never creates or changes the schema.
+
+| Script | Contents |
+| --- | --- |
+| `db/StreetBiz_SQL_Server.sql` | Schema, reference data (94 wards of Đà Nẵng), EF history stamp |
+| `db/StreetBiz_Demo_Seed.sql` | Demo accounts and scenario (development only) |
+
+A schema change edits those two files and the EF model together. EF migrations,
+`EnsureCreated` and `Migrate` are not used. See [docs/database.md](docs/database.md).
+
+## Testing
+
+~~~powershell
+dotnet test StreetBiz.Backend.sln -c Release
+~~~
+
+| Project | Covers |
+| --- | --- |
+| `StreetBiz.Domain.Tests` | Domain rules |
+| `StreetBiz.Application.Tests` | Handlers, validators and pipeline behaviours |
+| `StreetBiz.Infrastructure.Tests` | Repositories on SQLite, adapters (eSMS, payOS, AI) with fake HTTP |
+| `StreetBiz.API.Tests` | HTTP endpoints through `WebApplicationFactory` |
+
+CI runs the whole suite and builds the Docker image on every pull request. Manual test
+scripts and a Postman collection are in [docs/testing/](docs/testing/).
+
+## Deployment
+
+~~~text
+push to main ──► GitHub Actions: test ─► build image ─► push to GHCR ─► SSH deploy
+                                                                           │
+                    VPS (Ubuntu, Docker Compose)                            ▼
+                    ┌──────────┐   ┌───────────────┐   ┌──────────────────────┐
+  HTTPS ──────────► │  Caddy   │──►│ StreetBiz API │──►│ SQL Server 2022      │
+                    └──────────┘   └───────────────┘   │ (internal network)   │
+                                                       └──────────────────────┘
+~~~
+
+- `deploy/vps/deploy.sh` pulls the new image and rolls back by itself when the health check fails.
+- `deploy/vps/backup.sh` backs up the database and uploaded files every night.
+- The web app is hosted separately on Vercel.
+
+The full server setup is in [docs/deploy-vps.md](docs/deploy-vps.md).
+
+## Project structure
 
 ~~~text
 StreetBiz-BE/
-|-- StreetBiz.Backend.sln
-|-- src/
-|   |-- StreetBiz.Domain/
-|   |-- StreetBiz.Application/
-|   |-- StreetBiz.Infrastructure/
-|   +-- StreetBiz.API/
-|-- tests/
-|   |-- StreetBiz.Domain.Tests/
-|   |-- StreetBiz.Application.Tests/
-|   |-- StreetBiz.Infrastructure.Tests/
-|   +-- StreetBiz.API.Tests/
-|-- db/                  database scripts (schema, demo seed)
-|-- deploy/vps/          production stack: compose, Caddyfile, deploy/backup/init-db scripts
-|-- docs/
-|-- Dockerfile
-|-- docker-compose.yml   local development stack
-|-- Directory.Build.props
-+-- README.md
+├── src/
+│   ├── StreetBiz.Domain/           Entities and domain rules
+│   ├── StreetBiz.Application/      Use cases (commands, queries, validators)
+│   ├── StreetBiz.Infrastructure/   EF Core, external services, storage
+│   └── StreetBiz.API/              Controllers, SignalR hubs, startup
+├── tests/                          Unit, integration and API tests
+├── db/                             Schema and demo seed scripts
+├── deploy/vps/                     Production Compose stack, Caddyfile, deploy and backup scripts
+├── scripts/                        Local database setup and end-to-end helpers
+├── docs/                           Feature, operations and testing documentation
+├── Dockerfile
+└── docker-compose.yml              Local development stack
 ~~~
 
-Dependencies point inward:
+## Documentation
 
-- Application references Domain.
-- Infrastructure references Application and Domain.
-- API references Application and Infrastructure.
-- Domain references no other project and has no EF Core or ASP.NET Core package.
+| Topic | Documents |
+| --- | --- |
+| Foundations | [Architecture](docs/architecture.md) · [Database](docs/database.md) · [Deployment](docs/deploy-vps.md) |
+| Vendors and wards | [Auth and onboarding](docs/auth-vendor-onboarding.md) · [Sidewalk slot rental](docs/sidewalk-slot-rental.md) · [Ward slot workflows](docs/ward-slot-workflows.md) · [Registration integrity](docs/ward-registration-integrity-and-report-summary.md) |
+| Money | [Fees, payments and invoicing](docs/fee-payment-invoicing.md) · [payOS](docs/payos-payments.md) · [Household tax](docs/household-tax.md) · [Business calendar](docs/business-calendar.md) |
+| Marketplace | [Customer discovery](docs/customer-discovery.md) · [Community vendor workflows](docs/community-vendor-workflows.md) · [Commerce orders](docs/commerce-order-workflows.md) · [Order tracking and pickup range](docs/order-tracking-pickup-range.md) · [Marketplace completion](docs/marketplace-completion-workflows.md) |
+| Administration | [Platform administration](docs/platform-administration-workflows.md) |
+| AI | [AI assistance](docs/ai-marketplace-assistance.md) · [Chatbot architecture](docs/chatbot-architecture.md) · [Chatbot runbook](docs/chatbot-runbook.md) · [Voice design](docs/chatbot-voice-design.md) |
+| Testing | [docs/testing/](docs/testing/) |
 
-## Ward implementation
+---
 
-WARD-16–18 and SYS-01–02 use the existing authentication/session module,
-controller/MediatR request pipeline, shared Nominatim adapter and sidewalk
-adjacency policy. Ward decisions are serializable, audited and create in-app
-notifications. External push delivery and payment providers remain outside this scope.
-
-## More documentation
-
-- docs/architecture.md
-- docs/database.md
-- docs/deploy-vps.md
-- docs/auth-vendor-onboarding.md
-- docs/sidewalk-slot-rental.md
-- docs/ward-slot-workflows.md
-- docs/community-vendor-workflows.md
-- docs/platform-administration-workflows.md
-- docs/commerce-order-workflows.md
-- docs/customer-discovery.md
-- docs/testing/ (manual test scripts and the Postman collection)
+<div align="center">
+<sub>StreetBiz is a capstone project. The frontend and mobile app live in their own repositories.</sub>
+</div>
