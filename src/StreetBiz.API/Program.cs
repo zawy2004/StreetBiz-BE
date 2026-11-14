@@ -177,6 +177,8 @@ if (signDemoPermits)
 app.UseSecurityHeaders();
 app.UseSerilogRequestLogging();
 app.UseExceptionHandler();
+// Illustrative photos (wwwroot/static): answered before CORS, auth and rate limits, which they do not need.
+app.UseStaticPhotos();
 app.UseResponseCompressionExceptSensitive();
 app.UseMiddleware<ChatbotEnvelopeMiddleware>();
 
