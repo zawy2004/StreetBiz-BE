@@ -86,6 +86,30 @@ public sealed class ImageSharpImageProcessorTests
         Assert.Equal(ImageSharpImageProcessor.UnreadableImage, error.Message);
     }
 
+    public static TheoryData<string> OtherFormats => new() { "tiff", "bmp", "gif" };
+
+    [Theory]
+    [MemberData(nameof(OtherFormats))]
+    public async Task Formats_other_than_jpeg_png_and_webp_never_reach_a_decoder(string format)
+    {
+        // A valid TIFF/BMP/GIF is refused as unreadable: those decoders are not registered, so a
+        // file that slips past the upload sniff cannot reach their parsers (GHSA-v76p-62qx-wwq2).
+        using var image = new Image<Rgba32>(32, 32, Color.Teal);
+        await using var input = new MemoryStream();
+        switch (format)
+        {
+            case "tiff": await image.SaveAsTiffAsync(input); break;
+            case "bmp": await image.SaveAsBmpAsync(input); break;
+            default: await image.SaveAsGifAsync(input); break;
+        }
+
+        input.Position = 0;
+        var asPhoto = await Assert.ThrowsAsync<InvalidImageException>(() => processor.SanitizePhotoAsync(input, ".jpg", 1600, default));
+        Assert.Equal(ImageSharpImageProcessor.UnreadableImage, asPhoto.Message);
+        input.Position = 0;
+        await Assert.ThrowsAsync<InvalidImageException>(() => processor.SquareJpegAsync(input, 256, default));
+    }
+
     [Fact]
     public async Task A_tiny_file_describing_a_huge_canvas_is_refused_before_decoding()
     {
