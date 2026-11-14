@@ -38,6 +38,26 @@ public sealed class LocalFileStorage(Microsoft.Extensions.Options.IOptions<Stora
     public Task<bool> ExistsAsync(string relativePath, CancellationToken cancellationToken) =>
         Task.FromResult(File.Exists(Resolve(relativePath)));
 
+    public Task DeleteAsync(string relativePath, CancellationToken cancellationToken)
+    {
+        // File.Delete does nothing for a missing file.
+        File.Delete(Resolve(relativePath));
+        return Task.CompletedTask;
+    }
+
+    public Task<IReadOnlyList<StoredFile>> ListAsync(string folder, CancellationToken cancellationToken)
+    {
+        var directory = Resolve(folder);
+        IReadOnlyList<StoredFile> files = Directory.Exists(directory)
+            ? Directory.EnumerateFiles(directory, "*", SearchOption.AllDirectories)
+                .Select(path => new StoredFile(
+                    Path.GetRelativePath(root, path).Replace(Path.DirectorySeparatorChar, '/'),
+                    File.GetLastWriteTimeUtc(path)))
+                .ToList()
+            : [];
+        return Task.FromResult(files);
+    }
+
     // Callers already validate names, but refuse anything that escapes the root anyway.
     private string Resolve(string relativePath)
     {

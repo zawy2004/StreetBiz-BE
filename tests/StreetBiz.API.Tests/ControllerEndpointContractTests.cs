@@ -209,6 +209,9 @@ public sealed class ControllerEndpointContractTests
         "GET /api/uploads/evidence/{ownerUserId}/{fileName}",
         "POST /api/uploads/menu-images",
         "GET /api/uploads/menu-images/{ownerUserId}/{fileName}",
+        "POST /api/account/avatar",
+        "DELETE /api/account/avatar",
+        "GET /api/uploads/avatars/{userId}/{fileName}",
         "POST /api/uploads/slot-images",
         "GET /api/uploads/slot-images/{ownerUserId}/{fileName}",
         "GET /api/vendor/food-safety",
@@ -513,6 +516,8 @@ public sealed class ControllerEndpointContractTests
         (HttpMethod.Post, "/api/uploads/evidence"),
         (HttpMethod.Get, "/api/uploads/evidence/1/missing.pdf"),
         (HttpMethod.Post, "/api/uploads/menu-images"),
+        (HttpMethod.Post, "/api/account/avatar"),
+        (HttpMethod.Delete, "/api/account/avatar"),
         (HttpMethod.Post, "/api/uploads/slot-images"),
         (HttpMethod.Get, "/api/vendor/food-safety"),
         (HttpMethod.Post, "/api/vendor/food-safety"),
@@ -634,7 +639,7 @@ public sealed class ControllerEndpointContractTests
         foreach (var endpoint in ProtectedEndpoints)
         {
             using var request = new HttpRequestMessage(endpoint.Method, endpoint.Path);
-            if (endpoint.Path is "/api/uploads/evidence" or "/api/uploads/menu-images" or "/api/uploads/slot-images")
+            if (endpoint.Path is "/api/uploads/evidence" or "/api/uploads/menu-images" or "/api/uploads/slot-images" or "/api/account/avatar")
             {
                 request.Content = new MultipartFormDataContent();
             }

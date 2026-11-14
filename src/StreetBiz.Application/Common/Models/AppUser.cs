@@ -13,7 +13,9 @@ public sealed record AppUser(
     DateTime? LockoutUntil = null,
     // WARD-13: set only on officers who may sign a sanction decision (Chairman/Vice-Chairman
     // of the Ward People's Committee, or a written delegate). Null for everyone else.
-    string? SanctionAuthorityTitle = null);
+    string? SanctionAuthorityTitle = null,
+    // Public profile photo URL (/api/uploads/avatars/...), or null for the initial-letter avatar.
+    string? AvatarUrl = null);
 
 /// <summary>Data required to create a new user account.</summary>
 public sealed record NewUser(

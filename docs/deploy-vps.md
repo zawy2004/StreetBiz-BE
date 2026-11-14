@@ -395,13 +395,15 @@ không trả `/health` trong khoảng 2 phút, `deploy.sh` in 60 dòng log cuố
 Mỗi lần chạy tạo `backups/StreetBizDB-<thời gian>.bak.gz` (database) và `backups/uploads-<thời gian>.tar.gz` (file
 upload), và xoá bản cũ hơn `BACKUP_KEEP_DAYS` ngày (mặc định 14). Chạy thử ngay: `./backup.sh && ls -lh backups`.
 
-**Copy bản sao lưu ra khỏi VPS.** Bản sao lưu nằm cùng ổ đĩa sẽ mất theo nếu VPS hỏng. Từ máy của bạn (Git Bash):
+**Copy bản sao lưu ra khỏi VPS.** Bản sao lưu nằm cùng ổ đĩa sẽ mất theo nếu VPS hỏng. Trên máy Windows của bạn, script
+`scripts/pull-backups.ps1` chỉ tải các file mới (đã có thì bỏ qua) về `%USERPROFILE%\streetbiz-backups`:
 
-```bash
-scp -i $K "deploy@<IP-VPS>:/opt/streetbiz/backups/*.gz" ./streetbiz-backups/
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/pull-backups.ps1 -VpsHost <IP-VPS> -KeyPath $HOME\.ssh\streetbiz_deploy
 ```
 
-hoặc dùng `rclone` trên VPS để đẩy lên Google Drive hay object storage.
+Nên chạy mỗi tuần, hoặc đặt lịch bằng Task Scheduler. Muốn tự động hơn thì dùng `rclone` trên VPS để đẩy lên Google Drive
+hay object storage.
 
 **Khôi phục database** từ một bản sao lưu:
 
@@ -423,8 +425,21 @@ docker compose -f docker-compose.prod.yml start api
 **Khôi phục file upload:**
 
 ```bash
-docker run --rm -v streetbiz_uploads:/data -v "$PWD/backups:/in" alpine:3.20 tar -xzf /in/uploads-<thời gian>.tar.gz -C /data
+docker run --rm -v streetbiz_uploads:/data -v "$PWD/backups:/in" alpine:3.20   sh -c 'tar -xzf /in/uploads-<thời gian>.tar.gz -C /data && chown -R 1654:1654 /data'
 ```
+
+`1654` là user `app` mà API chạy dưới quyền (xem mục "Chạy API không bằng root" bên dưới); thiếu `chown` thì API đọc
+được ảnh cũ nhưng không ghi được ảnh mới.
+
+**Chạy API không bằng root.** Từ bản có ảnh đại diện, image API chạy bằng user `app` (UID 1654) chứ không phải root.
+Volume ảnh tạo mới tự nhận đúng chủ. Một volume tạo khi API còn chạy bằng root (mọi VPS deploy trước bản này) phải đổi
+chủ **một lần, trước khi** deploy bản mới, nếu không upload sẽ lỗi 500:
+
+```bash
+docker run --rm -v streetbiz_uploads:/data alpine:3.20 chown -R 1654:1654 /data
+```
+
+Lệnh này chạy được cả khi API cũ đang chạy, không cần dừng.
 
 **Chuyển sang VPS mới:** làm mục 2–5 trên VPS mới, copy hai file sao lưu mới nhất sang, khôi phục như trên, trỏ DNS về
 IP mới, cập nhật `VPS_HOST` và `VPS_KNOWN_HOSTS` trên GitHub, rồi chạy lại workflow.
@@ -449,6 +464,25 @@ docker compose -f docker-compose.prod.yml exec -it sqlserver /opt/mssql-tools18/
 
 Một file `.sql` đã có trong `db/` (workflow copy lên `/opt/streetbiz/db`, container thấy ở `/scripts`) thì chạy bằng
 `... sqlcmd ... -f 65001 -i /scripts/<tên file>`. Luôn có `-f 65001` để tiếng Việt được đọc đúng UTF-8.
+
+### Ví dụ: cột ảnh đại diện (`UserAccounts.avatar_url`)
+
+```sql
+IF COL_LENGTH('dbo.UserAccounts', 'avatar_url') IS NULL
+    ALTER TABLE dbo.UserAccounts ADD avatar_url NVARCHAR(500) NULL;
+GO
+```
+
+API bản mới đọc cột này mỗi lần đăng nhập, nên phải chạy lệnh trên **trước** khi deploy bản đó.
+
+### Ảnh công khai
+
+- Ảnh món, ảnh gian hàng (`/api/uploads/menu-images`) và ảnh đại diện (`/api/account/avatar`) được server giải mã rồi
+  lưu lại. Việc này xoá EXIF/GPS, xoay đúng chiều, thu nhỏ ảnh món về tối đa 1600 px, còn ảnh đại diện thành JPEG
+  256×256. Ảnh minh chứng giữ nguyên file gốc và chỉ người có quyền mới xem được.
+- Job `OrphanImageCleanup` chạy mỗi 6 giờ. Nó xoá ảnh trong `menu/` và `avatars/` đã quá 24 giờ mà không món, gian
+  hàng, tài khoản, tin nhắn chatbot hay audit log nào còn trỏ tới. Tắt bằng `OrphanImageCleanup__Enabled=false` trong
+  `api.env`.
 
 ## 12. Xử lý sự cố
 

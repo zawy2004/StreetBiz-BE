@@ -31,6 +31,11 @@ public sealed class FptAiKycServiceTests
             Task.FromResult<Stream?>(new MemoryStream(JpegBytes));
 
         public Task<bool> ExistsAsync(string relativePath, CancellationToken ct) => Task.FromResult(true);
+
+        public Task DeleteAsync(string relativePath, CancellationToken ct) => Task.CompletedTask;
+
+        public Task<IReadOnlyList<StreetBiz.Application.Common.Interfaces.StoredFile>> ListAsync(string folder, CancellationToken ct) =>
+            Task.FromResult<IReadOnlyList<StreetBiz.Application.Common.Interfaces.StoredFile>>([]);
     }
 
     private static FptAiKycService BuildService(
