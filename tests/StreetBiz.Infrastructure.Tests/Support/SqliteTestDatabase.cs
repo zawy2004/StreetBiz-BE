@@ -52,6 +52,10 @@ public sealed class SqliteTestDatabase : IDisposable
     public StreetBizDbContext NewContext() =>
         new SqliteContext(new DbContextOptionsBuilder<StreetBizDbContext>().UseSqlite(connection).Options);
 
+    /// <summary>A context on the same connection with EF interceptors attached (e.g. the push interceptor).</summary>
+    public StreetBizDbContext NewContext(params Microsoft.EntityFrameworkCore.Diagnostics.IInterceptor[] interceptors) =>
+        new SqliteContext(new DbContextOptionsBuilder<StreetBizDbContext>().UseSqlite(connection).AddInterceptors(interceptors).Options);
+
     private async Task SeedAsync()
     {
         Db.Roles.AddRange(

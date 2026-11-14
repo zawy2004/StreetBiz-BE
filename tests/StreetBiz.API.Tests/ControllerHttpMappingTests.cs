@@ -511,6 +511,23 @@ public sealed class ControllerHttpMappingTests : IDisposable
     private static readonly byte[] PngSignature = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0, 0, 0, 13];
 
     [Fact]
+    public async Task Device_registration_and_removal_reach_their_commands()
+    {
+        var registered = await client.PostAsJsonAsync("/api/devices", new
+        {
+            deviceIdentifier = "install-1",
+            platform = "ANDROID",
+            pushToken = "ExponentPushToken[aaaaaaaaaaaaaaaaaaaaaa]",
+        });
+        Assert.Equal(HttpStatusCode.NoContent, registered.StatusCode);
+        Assert.Equal(HttpStatusCode.NoContent, (await client.DeleteAsync("/api/devices/install-1")).StatusCode);
+
+        var register = Assert.Single(sender.Requests.OfType<StreetBiz.Application.Features.Notifications.RegisterPushDeviceCommand>());
+        Assert.Equal(("install-1", "ANDROID"), (register.DeviceIdentifier, register.Platform));
+        Assert.Equal("install-1", Assert.Single(sender.Requests.OfType<StreetBiz.Application.Features.Notifications.UnregisterPushDeviceCommand>()).DeviceIdentifier);
+    }
+
+    [Fact]
     public async Task Avatar_upload_and_removal_reach_their_commands()
     {
         sender.Respond = request => request switch
