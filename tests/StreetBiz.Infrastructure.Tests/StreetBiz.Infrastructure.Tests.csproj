@@ -33,4 +33,8 @@
     <Using Include="Xunit" />
   </ItemGroup>
 
+  <ItemGroup>
+    <None Include="..\..\src\StreetBiz.API\Data\ward-boundaries.da-nang.json" Link="Data\ward-boundaries.da-nang.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
 </Project>

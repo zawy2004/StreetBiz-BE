@@ -89,6 +89,20 @@ setup. Mock frontend identities cannot authenticate to this API.
 
 ## Configure ward boundaries
 
+The API ships `src/StreetBiz.API/Data/ward-boundaries.da-nang.json`: the boundaries of 93 of the 94
+wards and communes of Đà Nẵng (since 1/7/2025), taken from OpenStreetMap administrative relations
+through Nominatim and simplified to about 20 m. Each entry's `Version` is `osm-relation-<id>`. The
+data is © OpenStreetMap contributors under the ODbL 1.0; keep that notice with the file. Đặc khu
+Hoàng Sa has no OSM boundary, so a check there answers 503. OSM is community data, not the
+official cadastral map: before a ward relies on the check for enforcement, compare its polygon
+with the ward's own map and override it in configuration if needed. `WardBoundaryDataTests`
+checks that every polygon is valid, lies in Đà Nẵng and does not overlap its neighbours.
+
+Configuration (`Geolocation:Boundaries`) takes precedence over the file for the same ward, and
+`Geolocation:BoundariesFile` points at another file. To refresh the file, fetch each ward from
+Nominatim (`polygon_geojson=1`, one request per second) and keep only administrative relations
+whose name matches the ward exactly.
+
 Each item in Geolocation:Boundaries must have:
 
 - WardId: actual AdministrativeUnits.unit_id.

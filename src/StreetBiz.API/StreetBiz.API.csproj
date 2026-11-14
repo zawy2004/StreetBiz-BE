@@ -27,4 +27,9 @@
     <ProjectReference Include="..\StreetBiz.Infrastructure\StreetBiz.Infrastructure.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- Ward boundaries for SYS-02 (OpenStreetMap, ODbL): read at runtime by WardGeolocation. -->
+    <Content Update="Data\ward-boundaries.da-nang.json" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+
 </Project>
