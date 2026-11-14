@@ -43,7 +43,7 @@ public sealed class PayOsSettings
     public int LinkLifetimeMinutes { get; set; } = 30;
 
     /// <summary>
-    /// Base64 of 32 random bytes that encrypts the payees' keys (AES-GCM). User-secrets / App
+    /// Base64 of 32 random bytes that encrypts the payees' keys (AES-GCM). User-secrets / api.env
     /// Settings only. Outside Development, PAYOS stays off until it is set.
     /// </summary>
     public string? CredentialKey { get; set; }

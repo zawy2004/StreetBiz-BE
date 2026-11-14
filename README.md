@@ -134,15 +134,6 @@ are written to disk under App_Data/uploads. On the VPS that folder is the Docker
 `streetbiz_uploads`, so files survive deploys and restarts; `deploy/vps/backup.sh` archives it
 nightly. Files are always served by the API after its permission checks, never by a public URL.
 
-An Azure Blob Storage provider is still in the code (`Storage:Provider` = `AzureBlob`, with
-`Storage:AzureBlob:ConnectionString` or `AccountUrl`) but the deployment no longer uses it. Its
-opt-in tests need the Azurite emulator:
-
-~~~powershell
-docker run -d -p 10000:10000 mcr.microsoft.com/azure-storage/azurite azurite-blob --blobHost 0.0.0.0 --skipApiVersionCheck
-$env:STREETBIZ_AZURITE_TEST = "1"; dotnet test tests/StreetBiz.Infrastructure.Tests --filter AzureBlobFileStorage
-~~~
-
 ## Docker
 
 This is the local/development Compose file (the production stack is

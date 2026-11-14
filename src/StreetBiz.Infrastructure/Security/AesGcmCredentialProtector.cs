@@ -102,7 +102,7 @@ public sealed class AesGcmCredentialProtector : ICredentialProtector
 
     private byte[] RequireKey() =>
         key ?? throw new InvalidOperationException(
-            "Payments:PayOs:CredentialKey is not set (base64 of 32 random bytes, in user-secrets or App Settings).");
+            "Payments:PayOs:CredentialKey is not set (base64 of 32 random bytes, in user-secrets or api.env on the VPS).");
 
     private static byte[]? ResolveKey(string? configured, IHostEnvironment environment)
     {

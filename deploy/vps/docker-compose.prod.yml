@@ -40,9 +40,8 @@ services:
       ASPNETCORE_FORWARDEDHEADERS_ENABLED: "true"
       # The app's own least-privilege login (created by init-db.sh), never sa.
       STREETBIZ_DB_CONNECTION: "Server=sqlserver,1433;Database=StreetBizDB;User Id=${DB_APP_USER:-streetbiz_app};Password=${DB_APP_PASSWORD:?Set DB_APP_PASSWORD in .env};Encrypt=True;TrustServerCertificate=True;MultipleActiveResultSets=True"
-      # Uploads (menu photos, slot photos, KYC and evidence files) on a named volume, so they
-      # survive every deploy and restart.
-      Storage__Provider: Local
+    # Uploads (menu photos, slot photos, KYC and evidence files) on a named volume, so they
+    # survive every deploy and restart.
     volumes:
       - uploads:/app/App_Data/uploads
     depends_on:

@@ -64,7 +64,6 @@ builder.Services.AddAuthRateLimits(builder.Environment);
 builder.Services.AddChatbotApi();
 builder.Services.AddAiRateLimit();
 builder.Services.AddHttpPerformance();
-builder.Services.AddAzureMonitorIfConfigured(builder.Configuration);
 // ai/vendor-assistant calls a paid LLM per request; an earlier draft left it [AllowAnonymous]
 // with no limit. Now [Authorize]-only, plus this per-account cap.
 builder.Services.AddRateLimiter(options =>

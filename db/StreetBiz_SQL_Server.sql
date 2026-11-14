@@ -36,8 +36,8 @@
                                                comments and Phase 2 reviews are
                                                two different populations
      The two write-skew triggers (NoOverlap, NotMoreThanPaid) and the debt
-     check take UPDLOCK/HOLDLOCK: under READ_COMMITTED_SNAPSHOT, which Azure
-     SQL Database enables by default, an unhinted read sees a stale snapshot
+     check take UPDLOCK/HOLDLOCK: under READ_COMMITTED_SNAPSHOT (if it is ever
+     turned on for the database), an unhinted read sees a stale snapshot
      and two concurrent transactions each conclude they are the only one.
      Other cross-table business rules that need multi-row or workflow-state
      checks (e.g. BR-11 geofence radius, BR-12 one active adjacent
@@ -688,8 +688,8 @@ BEGIN
     IF EXISTS (
         SELECT 1
         FROM inserted i
-        -- UPDLOCK/HOLDLOCK, not decoration: under READ_COMMITTED_SNAPSHOT (the
-        -- default on Azure SQL Database) an unhinted read sees a pre-transaction
+        -- UPDLOCK/HOLDLOCK, not decoration: under READ_COMMITTED_SNAPSHOT (if it
+        -- is ever turned on) an unhinted read sees a pre-transaction
         -- snapshot, so two concurrent approvals each find the slot free and both
         -- commit. Verified: without these hints the slot double-books.
         JOIN RentalContracts c WITH (UPDLOCK, HOLDLOCK)
