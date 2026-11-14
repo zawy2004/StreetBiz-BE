@@ -1,15 +1,14 @@
-# Weekly update PRs into develop. They go through CI like any other PR; nothing merges on its own.
+# Monthly update PRs into develop, at most two per run (one minor/patch bundle, one major bundle). They go through CI like any other PR; nothing merges on its own.
 version: 2
 updates:
   - package-ecosystem: nuget
     directory: /
     target-branch: develop
     schedule:
-      interval: weekly
-      day: monday
+      interval: monthly
       time: "06:00"
       timezone: Asia/Ho_Chi_Minh
-    open-pull-requests-limit: 5
+    open-pull-requests-limit: 2
     commit-message:
       prefix: build
     labels: [dependencies]
@@ -17,6 +16,9 @@ updates:
       # One PR for routine patch/minor bumps instead of one per package.
       minor-and-patch:
         update-types: [minor, patch]
+      # Majors that are not ignored below arrive together in a second PR; close it if CI is red.
+      major:
+        update-types: [major]
     ignore:
       # The app targets .NET 8 (LTS); framework packages move with the runtime, not on their own.
       - dependency-name: "Microsoft.AspNetCore.*"
@@ -38,13 +40,19 @@ updates:
         update-types: [version-update:semver-major]
       - dependency-name: "MediatR"
         update-types: [version-update:semver-major]
+      # 10.x pulls the .NET 10 Microsoft.Extensions packages into a .NET 8 app.
+      - dependency-name: "Serilog.AspNetCore"
+        update-types: [version-update:semver-major]
+      # 10.x+ moves to Microsoft.OpenApi 2.x and breaks the Swagger setup in Program.cs.
+      - dependency-name: "Swashbuckle.AspNetCore"
+        update-types: [version-update:semver-major]
 
   - package-ecosystem: github-actions
     directory: /
     target-branch: develop
     schedule:
       interval: monthly
-    open-pull-requests-limit: 3
+    open-pull-requests-limit: 1
     commit-message:
       prefix: ci
     labels: [dependencies]
