@@ -69,6 +69,19 @@ internal sealed class FakeAiLogs : IAiAssistanceLogs
 
     public Task<(long AiLogId, DateTime ReviewedAt)> RecordAcceptedByAuthorAsync(string featureCode, string entityType, long entityId, long authorUserId, object output, CancellationToken ct) =>
         throw new NotSupportedException();
+
+    public List<long> Accepted { get; } = [];
+
+    public Task<bool> MarkAcceptedByAuthorAsync(long aiLogId, string featureCode, string entityType, long entityId, long authorUserId, CancellationToken ct)
+    {
+        var owned = rows.Any(r => r.LogId == aiLogId && r.Feature == featureCode && r.Entity == entityType && r.Id == entityId);
+        if (owned)
+        {
+            Accepted.Add(aiLogId);
+        }
+
+        return Task.FromResult(owned);
+    }
 }
 
 public sealed class AiTextTests
@@ -153,6 +166,33 @@ public sealed class DishAiUseCaseTests
         result.Description.Should().Contain("Bún chả");
         result.AiLogId.Should().NotBeNull();
         logs.Count.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task Using_the_suggestion_marks_the_vendors_own_log_accepted()
+    {
+        ai.Answer("{\"description\":\"Bún chả nướng than thơm, ăn kèm rau sống và nước chấm chua ngọt.\"}");
+        var suggestion = await Description().Handle(new GenerateDishDescriptionCommand("Bún chả", null), default);
+        var accept = new AcceptDishDescriptionCommandHandler(vendors.Object, currentUser.Object, logs);
+
+        await accept.Handle(new AcceptDishDescriptionCommand(suggestion.AiLogId!.Value), default);
+
+        logs.Accepted.Should().ContainSingle().Which.Should().Be(suggestion.AiLogId);
+    }
+
+    [Fact]
+    public async Task A_log_that_is_not_this_vendors_is_not_found()
+    {
+        ai.Answer("{\"description\":\"Bún chả nướng than thơm, ăn kèm rau sống và nước chấm chua ngọt.\"}");
+        var suggestion = await Description().Handle(new GenerateDishDescriptionCommand("Bún chả", null), default);
+        var other = new Mock<IVendorContext>();
+        other.Setup(x => x.RequireVendorIdAsync(It.IsAny<CancellationToken>())).ReturnsAsync(99);
+        var accept = new AcceptDishDescriptionCommandHandler(other.Object, currentUser.Object, logs);
+
+        var act = () => accept.Handle(new AcceptDishDescriptionCommand(suggestion.AiLogId!.Value), default);
+
+        await act.Should().ThrowAsync<NotFoundException>();
+        logs.Accepted.Should().BeEmpty();
     }
 
     [Fact]

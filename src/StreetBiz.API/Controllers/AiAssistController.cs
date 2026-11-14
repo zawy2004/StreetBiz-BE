@@ -32,6 +32,16 @@ public sealed class AiAssistController(ISender sender) : ControllerBase
         CancellationToken cancellationToken) =>
         Ok(await sender.Send(new GenerateDishDescriptionCommand(request.Name, request.ImageUrl), cancellationToken));
 
+    /// <summary>AIP-01: the vendor used the suggested text; marks that suggestion accepted. 404 for anyone else's.</summary>
+    [HttpPost("dish-description/{aiLogId:long}/accept")]
+    [Authorize]
+    [DisableRateLimiting]
+    public async Task<IActionResult> AcceptDishDescription(long aiLogId, CancellationToken cancellationToken)
+    {
+        await sender.Send(new AcceptDishDescriptionCommand(aiLogId), cancellationToken);
+        return NoContent();
+    }
+
     /// <summary>AIP-02: a dish name, a platform category and a reference price from the vendor's own dish photo.</summary>
     [HttpPost("dish-recognition")]
     [Authorize]
