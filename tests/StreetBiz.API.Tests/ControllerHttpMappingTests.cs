@@ -499,6 +499,66 @@ public sealed class ControllerHttpMappingTests : IDisposable
         Assert.Equal(before, sender.Requests.Count);
     }
 
+    private static MultipartFormDataContent PhotoForm(byte[] bytes)
+    {
+        var form = new MultipartFormDataContent();
+        var file = new ByteArrayContent(bytes);
+        file.Headers.ContentType = new("image/png");
+        form.Add(file, "file", "photo.png");
+        return form;
+    }
+
+    private static readonly byte[] PngSignature = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0, 0, 0, 13];
+
+    [Fact]
+    public async Task Avatar_upload_and_removal_reach_their_commands()
+    {
+        sender.Respond = request => request switch
+        {
+            StreetBiz.Application.Features.Authentication.Avatar.SetAvatarCommand =>
+                new StreetBiz.Application.Features.Authentication.Avatar.AvatarDto("/api/uploads/avatars/7/x.jpg"),
+            StreetBiz.Application.Features.Authentication.Avatar.RemoveAvatarCommand =>
+                new StreetBiz.Application.Features.Authentication.Avatar.AvatarDto(null),
+            _ => null,
+        };
+
+        var uploaded = await client.PostAsync("/api/account/avatar", PhotoForm([.. PngSignature, 1, 2, 3]));
+        Assert.Equal(HttpStatusCode.OK, uploaded.StatusCode);
+        Assert.Contains("/api/uploads/avatars/7/x.jpg", await uploaded.Content.ReadAsStringAsync());
+
+        Assert.Equal(HttpStatusCode.OK, (await client.DeleteAsync("/api/account/avatar")).StatusCode);
+        Assert.Contains(sender.Requests, r => r is StreetBiz.Application.Features.Authentication.Avatar.SetAvatarCommand);
+        Assert.Contains(sender.Requests, r => r is StreetBiz.Application.Features.Authentication.Avatar.RemoveAvatarCommand);
+    }
+
+    [Fact]
+    public async Task Avatar_upload_refuses_a_non_image_before_any_command()
+    {
+        var response = await client.PostAsync("/api/account/avatar", PhotoForm("<?php echo 1; ?>"u8.ToArray()));
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Contains(MenuImageFiles.InvalidType, await response.Content.ReadAsStringAsync());
+        Assert.DoesNotContain(sender.Requests, r => r is StreetBiz.Application.Features.Authentication.Avatar.SetAvatarCommand);
+    }
+
+    [Fact]
+    public async Task An_upload_over_the_size_limit_answers_413_in_vietnamese()
+    {
+        var response = await client.PostAsync("/api/account/avatar", PhotoForm(new byte[6 * 1024 * 1024]));
+
+        Assert.True((int)response.StatusCode == 413, await response.Content.ReadAsStringAsync());
+        Assert.Contains(EvidenceFiles.TooLarge, await response.Content.ReadAsStringAsync());
+    }
+
+    [Fact]
+    public async Task Avatar_files_are_public_and_only_valid_names_are_looked_up()
+    {
+        using var anonymous = host.CreateClient(new() { BaseAddress = new("https://localhost") });
+
+        Assert.Equal(HttpStatusCode.NotFound, (await anonymous.GetAsync("/api/uploads/avatars/7/..%2Fsecret.jpg")).StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, (await anonymous.GetAsync("/api/uploads/avatars/7/" + new string('a', 32) + ".jpg")).StatusCode);
+    }
+
     private sealed class RecordingSender : ISender
     {
         public List<object> Requests { get; } = [];

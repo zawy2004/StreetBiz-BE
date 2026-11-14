@@ -1023,6 +1023,46 @@ public sealed class CommerceManagementTests
             "MOMO", null, idempotencyKey, amount, status,
             $"{{\"idempotencyKey\":\"{idempotencyKey}\"}}", signatureValid), default);
 
+    [Fact]
+    public async Task Store_photo_is_set_kept_when_omitted_and_removed_with_an_empty_string()
+    {
+        using var f = await Fixture.Create();
+
+        var saved = await f.Service.SaveStore(1, new(1, 1, "Store", null, "OPEN", Photo), default);
+        Assert.Equal(Photo, saved.ImageUrl);
+
+        // An older client that never sends the field must not wipe the photo.
+        var kept = await f.Service.SaveStore(1, new(1, 1, "Store renamed", null, "OPEN"), default);
+        Assert.Equal(Photo, kept.ImageUrl);
+        Assert.Equal(Photo, (await f.Service.Stores(default)).Single().ImageUrl);
+
+        var removed = await f.Service.SaveStore(1, new(1, 1, "Store renamed", null, "OPEN", ""), default);
+        Assert.Null(removed.ImageUrl);
+    }
+
+    [Theory]
+    [InlineData("/api/uploads/menu-images/2/0123456789abcdef0123456789abcdef.jpg")] // another account's photo
+    [InlineData("/api/uploads/evidence/1/0123456789abcdef0123456789abcdef.jpg")]    // a private evidence file
+    [InlineData("https://example.com/photo.jpg")]                                    // an outside URL
+    public async Task Store_photo_must_be_the_vendors_own_public_upload(string url)
+    {
+        using var f = await Fixture.Create();
+
+        var error = await Assert.ThrowsAsync<DomainRuleException>(() =>
+            f.Service.SaveStore(1, new(1, 1, "Store", null, "OPEN", url), default));
+        Assert.Equal(CommerceManagement.StoreImageInvalid, error.Message);
+    }
+
+    [Fact]
+    public async Task Store_photo_that_was_never_stored_is_refused()
+    {
+        using var f = await Fixture.Create();
+        f.Storage.Setup(x => x.ExistsAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(false);
+
+        await Assert.ThrowsAsync<DomainRuleException>(() =>
+            f.Service.SaveStore(1, new(1, 1, "Store", null, "OPEN", Photo), default));
+    }
+
     private sealed class Fixture : IDisposable
     {
         private readonly SqliteConnection connection = new("Data Source=:memory:");

@@ -17,4 +17,7 @@ public interface IUserAccountRepository
     Task<bool> RecordFailedLoginAsync(long userId, int maxFailures, TimeSpan lockoutDuration, CancellationToken cancellationToken);
 
     Task ClearFailedLoginsAsync(long userId, CancellationToken cancellationToken);
+
+    /// <summary>Sets (or with null clears) the profile photo URL and returns the previous one.</summary>
+    Task<string?> SetAvatarUrlAsync(long userId, string? avatarUrl, CancellationToken cancellationToken);
 }

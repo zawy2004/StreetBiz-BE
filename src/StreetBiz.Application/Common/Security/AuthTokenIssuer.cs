@@ -29,7 +29,7 @@ public sealed class AuthTokenIssuer(
         var access = jwtTokenService.CreateAccessToken(user, sessionId);
 
         var userDto = new UserDto(
-            user.Id, user.PhoneNumber, user.FullName, user.RoleCode, user.WardUnitId, user.AccountStatus);
+            user.Id, user.PhoneNumber, user.FullName, user.RoleCode, user.WardUnitId, user.AccountStatus, user.AvatarUrl);
 
         return new AuthResultDto(access.Token, access.ExpiresAtUtc, refresh.RawToken, userDto);
     }

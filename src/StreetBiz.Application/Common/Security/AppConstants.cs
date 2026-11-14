@@ -71,6 +71,8 @@ public static class AppMessages
     public const string RefreshTokenRequired = "Thiếu refresh token.";
     public const string UnsupportedOtpPurpose = "Mục đích mã xác thực không hợp lệ.";
     public const string SessionNotFound = "Không tìm thấy phiên đăng nhập.";
+    public const string AccountNotFound = "Không tìm thấy tài khoản.";
+    public const string AvatarRequired = "Vui lòng chọn ảnh JPG, PNG hoặc WEBP.";
     public const string TooManyAttempts = "Bạn đã thử quá nhiều lần. Vui lòng chờ ít phút rồi thử lại.";
     public const string AccountLocked = "Tài khoản tạm thời bị khoá do nhập sai mật khẩu nhiều lần. Vui lòng thử lại sau.";
 }
