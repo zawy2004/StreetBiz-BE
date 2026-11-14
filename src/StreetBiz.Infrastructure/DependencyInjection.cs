@@ -65,22 +65,40 @@ public static class DependencyInjection
         services.AddSingleton<IJwtTokenService, JwtTokenService>();
         services.Configure<SmsSettings>(configuration.GetSection(SmsSettings.SectionName));
         services.AddHttpClient<HttpSmsSender>(client => client.Timeout = TimeSpan.FromSeconds(15));
+        services.AddHttpClient<EsmsSmsSender>(client => client.Timeout = TimeSpan.FromSeconds(15));
         // OTP codes must never reach production logs: the logging sender is Development-only,
         // and any other environment refuses to start without a real provider and an OTP hash key.
         services.AddSingleton<ISmsSender>(sp =>
         {
             var env = sp.GetRequiredService<IHostEnvironment>();
             var sms = sp.GetRequiredService<IOptions<SmsSettings>>().Value;
-            if (env.IsDevelopment() && !string.Equals(sms.Provider, "Http", StringComparison.OrdinalIgnoreCase))
+            var isHttp = string.Equals(sms.Provider, "Http", StringComparison.OrdinalIgnoreCase);
+            var isEsms = string.Equals(sms.Provider, "Esms", StringComparison.OrdinalIgnoreCase);
+
+            if (env.IsDevelopment() && !isHttp && !isEsms)
             {
                 return ActivatorUtilities.CreateInstance<LoggingSmsSender>(sp);
             }
 
-            if (!string.Equals(sms.Provider, "Http", StringComparison.OrdinalIgnoreCase)
-                || string.IsNullOrWhiteSpace(sms.Endpoint))
+            if (isEsms)
+            {
+                if (string.IsNullOrWhiteSpace(sms.ApiKey) || string.IsNullOrWhiteSpace(sms.SecretKey))
+                {
+                    throw new InvalidOperationException("Sms:Provider=Esms needs Sms:ApiKey and Sms:SecretKey.");
+                }
+
+                if (sms.SmsType != "8" && string.IsNullOrWhiteSpace(sms.Brandname))
+                {
+                    throw new InvalidOperationException("Sms:SmsType other than 8 needs Sms:Brandname.");
+                }
+
+                return sp.GetRequiredService<EsmsSmsSender>();
+            }
+
+            if (!isHttp || string.IsNullOrWhiteSpace(sms.Endpoint))
             {
                 throw new InvalidOperationException(
-                    "Sms:Provider must be \"Http\" with Sms:Endpoint set outside Development.");
+                    "Sms:Provider must be \"Esms\", or \"Http\" with Sms:Endpoint, outside Development.");
             }
 
             return sp.GetRequiredService<HttpSmsSender>();
