@@ -46,8 +46,19 @@ public static class DependencyInjection
         services.AddScoped<StreetBiz.Application.Features.WardFinance.IWardFinanceService, WardFinanceService>();
         services.AddScoped<StreetBiz.Application.Common.Models.IRegistrationDocumentGenerator, Services.Documents.RegistrationDocumentGenerator>();
 
-        services.AddDbContext<StreetBizDbContext>(options =>
+        // Push: every saved Notifications row is also pushed to the recipient's phones (see
+        // Notifications/Push/PushDelivery.cs). The interceptor is a stateless singleton.
+        services.Configure<Notifications.Push.PushSettings>(configuration.GetSection(Notifications.Push.PushSettings.SectionName));
+        services.AddSingleton<Notifications.Push.PushQueue>();
+        services.AddSingleton<StreetBiz.Application.Features.Notifications.IPushQueue>(sp => sp.GetRequiredService<Notifications.Push.PushQueue>());
+        services.AddSingleton<Notifications.Push.NotificationPushInterceptor>();
+        services.AddHttpClient<Notifications.Push.ExpoPushSender>(client => client.Timeout = TimeSpan.FromSeconds(15));
+        services.AddHostedService<Notifications.Push.PushDispatcherService>();
+        services.AddScoped<StreetBiz.Application.Features.Notifications.IUserDeviceRepository, Notifications.Push.UserDeviceRepository>();
+
+        services.AddDbContext<StreetBizDbContext>((serviceProvider, options) =>
         {
+            options.AddInterceptors(serviceProvider.GetRequiredService<Notifications.Push.NotificationPushInterceptor>());
             options.UseSqlServer(
                 connectionString,
                 sqlOptions =>
