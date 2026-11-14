@@ -47,6 +47,7 @@ public static class AuthenticationSetup
         });
         services.AddHttpContextAccessor();
         services.AddScoped<ICurrentUser, CurrentUser>();
+        services.AddScoped<IClientContext, ClientContext>();
         services.AddExceptionHandler<GlobalExceptionHandler>();
 
         var signingKey = configuration["Jwt:SigningKey"];

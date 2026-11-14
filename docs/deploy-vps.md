@@ -247,6 +247,11 @@ mới trên server; **không dùng lại** khoá trên máy của bạn hay kho�
   "message": "<nội dung>"}` và header `Authorization: Bearer <Sms__ApiKey>`, coi mọi mã 2xx là thành công. Các nhà cung cấp khác
   dùng định dạng riêng nên cần dịch vụ trung gian hoặc một adapter trong `StreetBiz.Infrastructure/Notifications`.
 
+**Chống lạm dụng OTP.** Mỗi số điện thoại tối đa 5 mã/giờ và 10 mã/ngày, chờ 60 giây giữa hai lần gửi; mỗi địa chỉ IP tối đa
+`Otp__MaxPerIpPerHour` tin OTP mỗi giờ (mặc định 10, `0` là tắt) để một IP không thể xin mã cho hàng loạt số khác nhau. Tin OTP là ASCII,
+dưới 160 ký tự và để mã ở cuối. Nhiều người dùng chung một IP (mạng công ty, trường) sẽ dùng chung hạn mức này, nên tăng nếu cần.
+Khi cổng SMS lỗi, mã vừa tạo bị huỷ để người dùng xin lại ngay mà không bị tính vào hạn mức, và API trả 503 (`sms_unavailable`).
+
 **Tuỳ chọn** (đã có sẵn dạng chú thích trong `api.env.example`; bỏ `#` ở đầu dòng để bật):
 
 | Biến | Khi nào cần |

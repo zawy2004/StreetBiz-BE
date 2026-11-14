@@ -59,3 +59,10 @@ public sealed class AiUnavailableException(string message) : AppException(messag
     public override int StatusCode => 503;
     public override string ErrorCode => "ai_unavailable";
 }
+
+/// <summary>503 - the SMS gateway did not take the message (down, out of credit, sender not registered).</summary>
+public sealed class SmsDeliveryException(string message) : AppException(message)
+{
+    public override int StatusCode => 503;
+    public override string ErrorCode => "sms_unavailable";
+}

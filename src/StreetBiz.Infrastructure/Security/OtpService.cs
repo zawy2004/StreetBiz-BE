@@ -13,19 +13,30 @@ namespace StreetBiz.Infrastructure.Security;
 
 /// <summary>
 /// Phone OTP: single-use, 6 digits, 5-minute validity, 60s resend cooldown, 5-attempt lock (BR-61),
-/// plus per-phone volume caps (5/hour, 10/day) and an HMAC-hashed code so a leaked table is useless.
+/// plus per-phone volume caps (5/hour, 10/day), a per-address cap against SMS pumping and an HMAC-hashed
+/// code so a leaked table is useless. The code goes last in the text so a lock-screen preview that cuts
+/// the message short does not show it, and the text stays plain ASCII within one 160-character SMS.
 /// </summary>
 public sealed class OtpService(
     StreetBizDbContext dbContext,
     ISmsSender smsSender,
     IDateTimeProvider clock,
-    IOptions<OtpSettings> options) : IOtpService
+    IOptions<OtpSettings> options,
+    IClientContext? client = null,
+    OtpIpGuard? ipGuard = null) : IOtpService
 {
     private static readonly TimeSpan Validity = TimeSpan.FromMinutes(5);
     private static readonly TimeSpan ResendCooldown = TimeSpan.FromSeconds(60);
     private const byte MaxAttempts = 5;
     private const int MaxPerHour = 5;
     private const int MaxPerDay = 10;
+    private static readonly TimeSpan IpWindow = TimeSpan.FromHours(1);
+
+    /// <summary>One SMS segment is 160 GSM characters; accents would switch it to the 70-character UCS-2 form.</summary>
+    public const int MaxMessageLength = 160;
+
+    public static string BuildMessage(string code) =>
+        $"StreetBiz: Ma xac thuc OTP (hieu luc 5 phut, khong chia se cho ai): {code}";
 
     private readonly byte[] hashKey = Encoding.UTF8.GetBytes(options.Value.HashKey);
 
@@ -59,9 +70,16 @@ public sealed class OtpService(
             throw new TooManyRequestsException(AppMessages.OtpCooldown, 3600);
         }
 
+        // Counted last, so a request already refused above never uses up the address's allowance.
+        var ip = client?.IpAddress;
+        if (ipGuard is not null && !ipGuard.TryAcquire(ip, now, options.Value.MaxPerIpPerHour, IpWindow))
+        {
+            throw new TooManyRequestsException(AppMessages.OtpCooldown, 3600);
+        }
+
         var code = RandomNumberGenerator.GetInt32(0, 1_000_000).ToString("D6");
 
-        dbContext.OtpChallenges.Add(new OtpChallenge
+        var challenge = new OtpChallenge
         {
             phone_number = phoneNumber,
             purpose = purpose,
@@ -70,10 +88,26 @@ public sealed class OtpService(
             max_attempts = MaxAttempts,
             expires_at = now.Add(Validity),
             created_at = now,
-        });
+        };
+        dbContext.OtpChallenges.Add(challenge);
 
         await dbContext.SaveChangesAsync(cancellationToken);
-        await smsSender.SendAsync(phoneNumber, $"Your StreetBiz verification code is {code}.", cancellationToken);
+        try
+        {
+            await smsSender.SendAsync(phoneNumber, BuildMessage(code), cancellationToken);
+        }
+        catch
+        {
+            // The text never left, so the code is worthless and must not hold the resend cooldown or
+            // use up the phone's and the address's allowance: the person can simply ask again.
+            ipGuard?.Release(ip);
+            dbContext.OtpChallenges.Remove(challenge);
+            await dbContext.SaveChangesAsync(CancellationToken.None);
+
+            // The sender already logged why (provider code only, never the text or keys); the caller
+            // gets a plain 503 instead of an unhandled 500 with a stack trace.
+            throw new SmsDeliveryException(AppMessages.SmsUnavailable);
+        }
     }
 
     public async Task ConsumeAsync(string rawPhoneNumber, string purpose, string code, CancellationToken cancellationToken)

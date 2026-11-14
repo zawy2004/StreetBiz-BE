@@ -54,6 +54,7 @@ public static class AppMessages
     public const string PasswordResetSuccess = "Đặt lại mật khẩu thành công. Vui lòng đăng nhập.";
     public const string PasswordChanged = "Đổi mật khẩu thành công. Các thiết bị khác đã được đăng xuất.";
     public const string CurrentPasswordIncorrect = "Mật khẩu hiện tại không đúng.";
+    public const string SmsUnavailable = "Chưa gửi được tin nhắn xác thực. Vui lòng thử lại sau ít phút.";
     public const string OtpCooldown = "Vui lòng chờ trước khi yêu cầu mã xác thực mới.";
     public const string OtpLocked = "Nhập sai mã quá nhiều lần. Vui lòng yêu cầu mã mới và thử lại sau.";
     public const string AccountSuspended = "Tài khoản đã bị tạm khoá. Vui lòng liên hệ hỗ trợ.";
