@@ -28,8 +28,8 @@
    StreetBiz_Upgrade_Demo_Ward_Names.sql:
      sqlcmd -S "(localdb)\MSSQLLocalDB" -d StreetBizDB -E -I -f 65001 -i db\StreetBiz_Upgrade_DaNang_94_Wards.sql
    (Docker: -S "localhost,1433" -U sa -P <password> in place of -S … -E.)
-   -f 65001 makes sqlcmd read this file as UTF-8; SSMS and Azure Data
-   Studio do that by themselves. Safe to run twice.
+   -f 65001 makes sqlcmd read this file as UTF-8; SSMS does that by
+   itself. Safe to run twice.
    ============================================================ */
 SET NOCOUNT ON;
 SET QUOTED_IDENTIFIER ON;   -- the filtered indexes on the tables below need it
