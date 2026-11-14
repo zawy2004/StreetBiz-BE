@@ -16,7 +16,8 @@ public static class ChatbotRegistration
             || settings.ProviderTimeoutSeconds is < 5 or > 90 || settings.ProviderTimeoutSeconds > settings.TurnTimeoutSeconds
             || settings.ImageProviderTimeoutSeconds is < 5 or > 60
             || settings.MaxToolCalls is < 1 or > 10 || settings.MaxModelSteps is < 2 or > 8
-            || settings.RetentionDays is < 1 or > 365 || settings.MaxTurnTokenBudget is < 8000 or > 100000
+            || settings.RetentionDays is < 1 or > 365 || settings.RetentionSweepMinutes is < 15 or > 1440
+            || settings.MaxTurnTokenBudget is < 8000 or > 100000
             || settings.DailyTokenBudget < settings.MaxTurnTokenBudget || settings.MaxContextCharacters is < 2000 or > 40000)
             throw new InvalidOperationException("Chatbot settings exceed supported limits.");
         services.AddSingleton(settings);

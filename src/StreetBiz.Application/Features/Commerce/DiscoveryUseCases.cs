@@ -141,7 +141,9 @@ public sealed record ListStorefrontsQuery(
     decimal? Longitude = null,
     double? RadiusMeters = null,
     string? Sort = null,
-    int Take = 50) : IRequest<IReadOnlyList<StorefrontSummaryDto>>;
+    int Take = 50,
+    decimal? MinRating = null,
+    decimal? MaxPrice = null) : IRequest<IReadOnlyList<StorefrontSummaryDto>>;
 
 public sealed class ListStorefrontsQueryValidator : AbstractValidator<ListStorefrontsQuery>
 {
@@ -159,6 +161,9 @@ public sealed class ListStorefrontsQueryValidator : AbstractValidator<ListStoref
         RuleFor(x => x).Must(x => x.Sort != MarketplaceStorefrontSorts.Distance || x.Latitude.HasValue)
             .WithMessage("Sorting by distance needs latitude and longitude.");
         RuleFor(x => x.Take).InclusiveBetween(1, 100);
+        RuleFor(x => x.MinRating).InclusiveBetween(1m, 5m).When(x => x.MinRating.HasValue)
+            .WithMessage("minRating must be between 1 and 5.");
+        RuleFor(x => x.MaxPrice).GreaterThanOrEqualTo(0).When(x => x.MaxPrice.HasValue);
     }
 }
 
@@ -182,14 +187,17 @@ public sealed class ListStorefrontsQueryHandler(
                 request.WardId,
                 request.CategoryId,
                 request.OpenNow == true ? now : null,
-                area),
+                area,
+                request.MinRating),
             DiscoveryRules.MaxStorefrontCandidates,
             cancellationToken);
 
         var candidates = rows
             .Select(row => (Row: row, Distance: DiscoveryRules.Distance(request.Latitude, request.Longitude, row.Latitude, row.Longitude)))
             // A bounding box also covers its corners, which lie outside the requested circle.
-            .Where(x => !request.RadiusMeters.HasValue || x.Distance <= request.RadiusMeters);
+            .Where(x => !request.RadiusMeters.HasValue || x.Distance <= request.RadiusMeters)
+            // DISC-05 price: a storefront passes when at least one of its dishes costs no more than the cap.
+            .Where(x => !request.MaxPrice.HasValue || (x.Row.MinPrice.HasValue && x.Row.MinPrice <= request.MaxPrice));
 
         var sort = request.Sort ?? (hasPosition ? MarketplaceStorefrontSorts.Distance : MarketplaceStorefrontSorts.Name);
         IOrderedEnumerable<(MarketplaceStorefrontRow Row, double? Distance)> ordered = sort switch

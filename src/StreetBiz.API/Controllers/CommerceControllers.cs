@@ -8,14 +8,31 @@ using StreetBiz.Application.Common.Security;
 using StreetBiz.Application.Features.Commerce;
 using StreetBiz.Application.Features.Commerce.OrderTracking;
 using StreetBiz.API.Hubs;
+using Microsoft.AspNetCore.OutputCaching;
+using StreetBiz.API.Extensions;
 
 namespace StreetBiz.API.Controllers;
+
+public sealed record ContentReportRequest(string ReasonCode, string? Detail);
+
+/// <summary>ZaloPay's callback reply ({"return_code": ..., "return_message": ...}) for the outcome the shared handler reported.</summary>
+internal static class ZaloPayAcknowledgement
+{
+    public static object For(string result) => result switch
+    {
+        "APPLIED" => new { return_code = 1, return_message = "success" },
+        "DUPLICATE" => new { return_code = 2, return_message = "order already processed" },
+        "REJECTED" => new { return_code = -1, return_message = "invalid callback" },
+        _ => new { return_code = -1, return_message = "order not found" },
+    };
+}
 
 [ApiController]
 [Route("api/marketplace")]
 public sealed class MarketplaceController(ISender sender) : ControllerBase
 {
     [HttpGet("menu-items")]
+    [OutputCache(PolicyName = PublicCache.Listing)]
     public async Task<ActionResult<IReadOnlyList<MarketplaceMenuItemDto>>> Search(
         [FromQuery] string? query,
         [FromQuery] int? wardId,
@@ -25,30 +42,57 @@ public sealed class MarketplaceController(ISender sender) : ControllerBase
         [FromQuery] bool? openNow,
         [FromQuery] string? sort,
         [FromQuery] int take = 50,
+        [FromQuery] decimal? minRating = null,
         CancellationToken cancellationToken = default) =>
         Ok(await sender.Send(
-            new SearchMarketplaceMenuQuery(query, take, wardId, categoryId, minPrice, maxPrice, openNow, sort),
+            new SearchMarketplaceMenuQuery(query, take, wardId, categoryId, minPrice, maxPrice, openNow, sort, minRating),
             cancellationToken));
 
     [HttpGet("menu-items/{menuItemId:long}")]
+    [OutputCache(PolicyName = PublicCache.Listing)]
     public async Task<ActionResult<MarketplaceMenuItemDto>> Get(
         long menuItemId,
         CancellationToken cancellationToken) =>
         Ok(await sender.Send(new GetMarketplaceMenuItemQuery(menuItemId), cancellationToken));
 
     [HttpGet("service-areas")]
+    [OutputCache(PolicyName = PublicCache.Reference)]
     public async Task<ActionResult<IReadOnlyList<ServiceAreaDto>>> ServiceAreas(
         [FromQuery] decimal? latitude,
         [FromQuery] decimal? longitude,
         CancellationToken cancellationToken) =>
         Ok(await sender.Send(new ListServiceAreasQuery(latitude, longitude), cancellationToken));
 
+    /// <summary>REV-03: report a storefront to the moderators (sign-in required).</summary>
+    [Authorize]
+    [HttpPost("storefronts/{storefrontId:long}/reports")]
+    public async Task<ActionResult<ContentReportReceiptDto>> ReportStorefront(
+        long storefrontId,
+        ContentReportRequest request,
+        CancellationToken cancellationToken) =>
+        Ok(await sender.Send(
+            new ReportContentCommand(ReportedContentTypes.Storefront, storefrontId, request.ReasonCode, request.Detail),
+            cancellationToken));
+
+    /// <summary>REV-03: report a dish to the moderators (sign-in required).</summary>
+    [Authorize]
+    [HttpPost("menu-items/{menuItemId:long}/reports")]
+    public async Task<ActionResult<ContentReportReceiptDto>> ReportMenuItem(
+        long menuItemId,
+        ContentReportRequest request,
+        CancellationToken cancellationToken) =>
+        Ok(await sender.Send(
+            new ReportContentCommand(ReportedContentTypes.MenuItem, menuItemId, request.ReasonCode, request.Detail),
+            cancellationToken));
+
     [HttpGet("categories")]
+    [OutputCache(PolicyName = PublicCache.Reference)]
     public async Task<ActionResult<IReadOnlyList<MarketplaceCategoryDto>>> Categories(
         CancellationToken cancellationToken) =>
         Ok(await sender.Send(new ListMarketplaceCategoriesQuery(), cancellationToken));
 
     [HttpGet("storefronts")]
+    [OutputCache(PolicyName = PublicCache.Listing)]
     public async Task<ActionResult<IReadOnlyList<StorefrontSummaryDto>>> Storefronts(
         [FromQuery] string? query,
         [FromQuery] int? wardId,
@@ -59,12 +103,15 @@ public sealed class MarketplaceController(ISender sender) : ControllerBase
         [FromQuery] double? radiusMeters,
         [FromQuery] string? sort,
         [FromQuery] int take = 50,
+        [FromQuery] decimal? minRating = null,
+        [FromQuery] decimal? maxPrice = null,
         CancellationToken cancellationToken = default) =>
         Ok(await sender.Send(
-            new ListStorefrontsQuery(query, wardId, categoryId, openNow, latitude, longitude, radiusMeters, sort, take),
+            new ListStorefrontsQuery(query, wardId, categoryId, openNow, latitude, longitude, radiusMeters, sort, take, minRating, maxPrice),
             cancellationToken));
 
     [HttpGet("storefronts/{storefrontId:long}")]
+    [OutputCache(PolicyName = PublicCache.Listing)]
     public async Task<ActionResult<StorefrontDetailDto>> Storefront(
         long storefrontId,
         [FromQuery] decimal? latitude,
@@ -229,6 +276,29 @@ public sealed class PaymentCallbacksController(
     ISender sender,
     IOrderRealtimePublisher realtime) : ControllerBase
 {
+    /// <summary>
+    /// payOS's webhook for one payee's own channel: the token in the URL names the receiving account
+    /// whose checksum key verifies the body. Always 200 once recorded, so payOS does not retry a
+    /// REJECTED or UNMATCHED report.
+    /// </summary>
+    [HttpPost("payos/callback/{token}")]
+    public async Task<ActionResult<PaymentCallbackReceiptDto>> PayOsCallback(
+        string token,
+        CancellationToken cancellationToken)
+    {
+        using var reader = new StreamReader(Request.Body);
+        var rawPayload = await reader.ReadToEndAsync(cancellationToken);
+        var result = await sender.Send(
+            new ProcessPaymentCallbackCommand("PAYOS", rawPayload, null) { PayeeToken = token },
+            cancellationToken);
+        if (result.OrderId is { } orderId && result.OrderStatus is { } orderStatus)
+        {
+            await realtime.PublishAsync(orderId, orderStatus, cancellationToken);
+        }
+
+        return Ok(new { success = true, result = result.Result });
+    }
+
     [HttpPost("{provider}/callback")]
     public async Task<ActionResult<PaymentCallbackReceiptDto>> Callback(
         string provider,
@@ -249,6 +319,13 @@ public sealed class PaymentCallbacksController(
         if (string.Equals(provider, "momo", StringComparison.OrdinalIgnoreCase))
         {
             return NoContent();
+        }
+
+        // ZaloPay's contract: a JSON body with return_code 1 (done), 2 (already processed) or anything
+        // else (it calls again). Returned as-is, outside the ActionResult<PaymentCallbackReceiptDto> shape.
+        if (string.Equals(provider, "zalopay", StringComparison.OrdinalIgnoreCase))
+        {
+            return new ObjectResult(StreetBiz.API.Controllers.ZaloPayAcknowledgement.For(result.Result));
         }
 
         return Ok(result);

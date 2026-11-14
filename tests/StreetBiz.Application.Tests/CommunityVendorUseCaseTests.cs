@@ -117,19 +117,20 @@ public sealed class CommunityVendorUseCaseTests
         customer.Setup(x => x.RequireCustomerUserIdAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync(7);
         var repository = new Mock<ICommunityVendorRepository>();
-        repository.Setup(x => x.GetPublicProfileAsync(2, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Profile(2));
+        repository.Setup(x => x.GetReportTargetAsync(2, null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ReportTargetRow(2, "Vendor", null));
         repository.Setup(x => x.ReportReferencesBelongToVendorAsync(
                 2, 99, null, It.IsAny<CancellationToken>()))
             .ReturnsAsync(false);
 
-        var action = () => new ReportSuspiciousVendorCommandHandler(customer.Object, repository.Object)
+        var action = () => ReportHandler(customer.Object, repository.Object)
             .Handle(new ReportSuspiciousVendorCommand(2, "Wrong location", null, 99, null), CancellationToken.None);
 
         await action.Should().ThrowAsync<DomainRuleException>()
             .WithMessage(CommunityMessages.ReportReferenceMismatch);
         repository.Verify(x => x.AddReportAsync(
-            It.IsAny<long>(), It.IsAny<long>(), It.IsAny<CustomerVendorReport>(), It.IsAny<CancellationToken>()),
+            It.IsAny<long>(), It.IsAny<long>(), It.IsAny<CustomerVendorReport>(), It.IsAny<NewVendorReportNotices>(),
+            It.IsAny<CancellationToken>()),
             Times.Never);
     }
 
@@ -140,8 +141,8 @@ public sealed class CommunityVendorUseCaseTests
         customer.Setup(x => x.RequireCustomerUserIdAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync(7);
         var repository = new Mock<ICommunityVendorRepository>();
-        repository.Setup(x => x.GetPublicProfileAsync(2, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Profile(2));
+        repository.Setup(x => x.GetReportTargetAsync(2, 3, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ReportTargetRow(2, "Vendor", "S-01"));
         repository.Setup(x => x.ReportReferencesBelongToVendorAsync(
                 2, 1, 3, It.IsAny<CancellationToken>()))
             .ReturnsAsync(true);
@@ -150,23 +151,46 @@ public sealed class CommunityVendorUseCaseTests
                 7,
                 It.Is<CustomerVendorReport>(report =>
                     report.Reason == "Wrong location"
-                    && report.EvidenceUrl == "/uploads/evidence/photo.jpg"
+                    && report.EvidenceUrl == "/api/uploads/evidence/7/0123456789abcdef0123456789abcdef.jpg"
                     && report.SlotId == 1
-                    && report.ScannedPermitId == 3),
+                    && report.ScannedPermitId == 3
+                    && report.ReportType == VendorReportTypes.General
+                    && report.PostedAmount == null
+                    && report.DueAt != null),
+                It.IsAny<NewVendorReportNotices>(),
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(41);
 
-        var result = await new ReportSuspiciousVendorCommandHandler(customer.Object, repository.Object)
+        var result = await ReportHandler(customer.Object, repository.Object)
             .Handle(new ReportSuspiciousVendorCommand(
                 2,
                 " Wrong location ",
-                " /uploads/evidence/photo.jpg ",
+                " /api/uploads/evidence/7/0123456789abcdef0123456789abcdef.jpg ",
                 1,
                 3), CancellationToken.None);
 
         result.ReportId.Should().Be(41);
         result.Status.Should().Be(VendorReportStatuses.Pending);
         repository.VerifyAll();
+    }
+
+    [Theory]
+    [InlineData("javascript:alert(document.domain)")]
+    [InlineData("https://evil.example/steal.jpg")]
+    [InlineData("/api/uploads/evidence/8/0123456789abcdef0123456789abcdef.jpg")] // another user's file
+    [InlineData("/api/uploads/evidence/7/../../auth/sessions")]
+    public async Task Report_photo_that_is_not_the_customers_own_upload_is_refused(string url)
+    {
+        // The ward officer's screen downloads this file with the officer's token: a planted link
+        // would hand the token to another host or open a script.
+        var customer = new Mock<ICustomerContext>();
+        customer.Setup(x => x.RequireCustomerUserIdAsync(It.IsAny<CancellationToken>())).ReturnsAsync(7);
+        var repository = new Mock<ICommunityVendorRepository>(MockBehavior.Strict);
+
+        var act = () => ReportHandler(customer.Object, repository.Object)
+            .Handle(new ReportSuspiciousVendorCommand(2, "Lấn lối đi", url, 1, 3), CancellationToken.None);
+
+        (await act.Should().ThrowAsync<ValidationAppException>()).Which.Errors.Should().ContainKey("EvidenceUrl");
     }
 
     [Theory]
@@ -186,6 +210,10 @@ public sealed class CommunityVendorUseCaseTests
 
         await action.Should().ThrowAsync<ForbiddenException>();
     }
+
+    private static ReportSuspiciousVendorCommandHandler ReportHandler(
+        ICustomerContext customer, ICommunityVendorRepository repository) =>
+        new(customer, repository, new VendorReportSettings(), TimeProvider.System);
 
     private static ActiveVendorLocationRow Location(long vendorId, decimal latitude, decimal longitude) => new(
         vendorId, vendorId, $"Vendor {vendorId}", VendorTypes.Itinerant, null,

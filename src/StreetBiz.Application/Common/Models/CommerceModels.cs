@@ -85,7 +85,16 @@ public sealed record PaymentCallbackData(
     decimal? Amount,
     string? Status,
     string RawPayload,
-    bool SignatureValid);
+    bool SignatureValid,
+    /// <summary>The provider's id for this money movement (payOS's bank reference); see <see cref="PaymentCallbackOutcome.Surplus"/>.</summary>
+    string? ProviderEventId = null)
+{
+    /// <summary>
+    /// PAYOS: the receiving account whose channel sent (or answered) this report. A payment to a
+    /// payee is settled only by that payee's own channel; anything else is REJECTED.
+    /// </summary>
+    public long? PayeeAccountId { get; init; }
+}
 
 public enum PaymentCallbackOutcome
 {
@@ -93,6 +102,13 @@ public enum PaymentCallbackOutcome
     Duplicate,
     Unmatched,
     Rejected,
+
+    /// <summary>
+    /// Real money for a payment that is already settled or closed (a second bank transfer with
+    /// the same payment code, or one that arrived after the order was cancelled). Recorded as
+    /// REJECTED; nothing is applied, and someone has to refund it by hand.
+    /// </summary>
+    Surplus,
 }
 
 public sealed record PaymentCallbackMutationResult(

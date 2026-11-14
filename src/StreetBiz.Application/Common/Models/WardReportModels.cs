@@ -29,7 +29,10 @@ public sealed record WardDashboardRow(
     int ActiveContracts,
     decimal RevenueCollected,
     decimal OutstandingDebt,
-    int OpenViolations);
+    int OpenViolations,
+    int OpenReports = 0,
+    int OverdueReports = 0,
+    double? AvgResolutionHours30d = null);
 
 /// <summary>
 /// What the AIC-08 summary needs beyond the WARD-14/15 totals: how the period's violations break

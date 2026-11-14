@@ -1,13 +1,14 @@
 # StreetBiz Backend
 
-WARD-16–18, SYS-01–02, BUY-01–05, ADM-01, ADM-03–05, CART-01,
+WARD-16–18, SYS-01–02, BUY-01–05, ADM-01–07, CART-01,
 ORD-01–04 and SORD-01–04 are now implemented. See
 [Ward slot workflows](docs/ward-slot-workflows.md) for API contracts, authentication,
 geofence configuration and test instructions, and
 [Community vendor workflows](docs/community-vendor-workflows.md) for the public map,
 permit verification, public profiles, customer ratings and suspicious-vendor reports.
 [Platform administration workflows](docs/platform-administration-workflows.md) documents
-food-category management, content moderation and order-complaint resolution. See
+food-category management, account suspension, content moderation, order-complaint
+resolution, the platform dashboard and report export. See
 [Commerce order workflows](docs/commerce-order-workflows.md) for cart, prepaid order,
 pickup, seller processing, refund-request, address snapshots, authenticated
 SignalR updates and sales-summary contracts.
@@ -16,6 +17,12 @@ SYS-03–06, FEE-01/03/04 and WARD-14/15 are also implemented. See
 [Fee, payment, invoicing and reporting](docs/fee-payment-invoicing.md) for fee
 schedule generation, the shared payment-callback dispatch with Commerce, the
 hourly reminder sweep, and the ward collection report and dashboard.
+
+STORE-03 (business hours), REV-02/03 (review window, reporting content), DISC-05
+(rating and price filters), PAY-02 (ZaloPay), SIDE-10 (release of the old slot after an
+address change) and the AI suggestions AIP-01..04 and AIB-01 are documented in
+[Marketplace completion workflows](docs/marketplace-completion-workflows.md) and
+[AI assistance for sellers, customers and wards](docs/ai-marketplace-assistance.md).
 
 StreetBiz backend foundation built with .NET 8, ASP.NET Core, Entity Framework
 Core 8, SQL Server, and Clean Architecture. The current codebase includes
@@ -74,7 +81,9 @@ dotnet user-secrets --project src/StreetBiz.API set "Payments:ZaloPay:CheckoutUr
 dotnet user-secrets --project src/StreetBiz.API set "Payments:ZaloPay:CallbackSecret" "<merchant-callback-secret>"
 ~~~
 
-Equivalent environment keys use double underscores, for example
+ZaloPay Gateway v2 additionally needs `Payments:ZaloPay:Enabled` (true),
+`ApiBaseUrl`, `AppId`, `Key1`, `Key2`, `ReturnUrl` and `CallbackUrl`; it stays off
+until all of them are set. Equivalent environment keys use double underscores, for example
 `Payments__Momo__CallbackSecret`. Callback requests send the hexadecimal
 HMAC-SHA256 in `X-Payment-Signature`.
 
@@ -109,45 +118,27 @@ dotnet run --project src/StreetBiz.API
 In Development, open /swagger at the URL printed by ASP.NET Core. Check SQL
 Server readiness with GET /health. HTTPS redirection is enabled.
 
-## Deploying to Azure
+## Deploying (VPS)
 
-See [docs/deploy-azure.md](docs/deploy-azure.md) for the GitHub settings, the App
-Settings the API needs in Production (it refuses to start without its signing keys)
-and the database steps.
+The API and SQL Server run on one VPS with Docker Compose (Caddy for HTTPS in front); the
+web app stays on Vercel. Push to `main` runs `.github/workflows/deploy-vps.yml`: tests, image
+to GHCR, then `deploy/vps/deploy.sh` on the server over SSH, which rolls back by itself when
+the new version fails its health check. See [docs/deploy-vps.md](docs/deploy-vps.md) for the
+server setup, the GitHub secrets, the API settings (it refuses to start in Production without
+its signing keys), backups and schema changes on the live database.
 
-## Uploaded files (Azure Blob Storage)
+## Uploaded files
 
-Uploads (menu images, slot photos, KYC evidence, voice) go through IFileStorage.
-By default they are written to disk under App_Data/uploads. To keep them in Azure
-Blob Storage instead, set Storage:Provider to AzureBlob and give it credentials:
-
-~~~powershell
-# Account key / SAS connection string (keep it in user-secrets or an env var, never in git)
-dotnet user-secrets set "Storage:Provider" "AzureBlob" --project src/StreetBiz.API
-dotnet user-secrets set "Storage:AzureBlob:ConnectionString" "<connection-string>" --project src/StreetBiz.API
-
-# Or managed identity in Azure: no secret, the identity needs "Storage Blob Data Contributor"
-$env:Storage__Provider = "AzureBlob"
-$env:Storage__AzureBlob__AccountUrl = "https://<account>.blob.core.windows.net"
-~~~
-
-The container (default streetbiz-uploads, Storage:AzureBlob:ContainerName) is private and
-is created on the first upload when it does not exist. Files are still served by the API
-after its permission checks, never by a public blob URL. Existing files are not copied:
-move App_Data/uploads into the container (same relative paths) if you switch with data.
-
-To try it locally without an Azure account, run the Azurite emulator and use the
-connection string UseDevelopmentStorage=true:
-
-~~~powershell
-docker run -d -p 10000:10000 mcr.microsoft.com/azure-storage/azurite azurite-blob --blobHost 0.0.0.0 --skipApiVersionCheck
-$env:STREETBIZ_AZURITE_TEST = "1"; dotnet test tests/StreetBiz.Infrastructure.Tests --filter AzureBlobFileStorage
-~~~
+Uploads (menu images, slot photos, KYC and evidence files, voice) go through IFileStorage and
+are written to disk under App_Data/uploads. On the VPS that folder is the Docker volume
+`streetbiz_uploads`, so files survive deploys and restarts; `deploy/vps/backup.sh` archives it
+nightly. Files are always served by the API after its permission checks, never by a public URL.
 
 ## Docker
 
-Copy .env.example to .env and replace both placeholder values. The Compose file
-contains streetbiz-api and sqlserver services. The SQL Server container only
+This is the local/development Compose file (the production stack is
+`deploy/vps/docker-compose.prod.yml`, see above). Copy .env.example to .env and replace both
+placeholder values. The Compose file contains streetbiz-api and sqlserver services. The SQL Server container only
 starts the engine; it does not create, overwrite, migrate, or seed StreetBizDB.
 
 STREETBIZ_DB_CONNECTION may point to the Compose SQL Server or to an existing
@@ -164,6 +155,8 @@ and the API never creates or changes it.
 
 - `db/StreetBiz_SQL_Server.sql`: schema, reference data and the EF history stamp
 - `db/StreetBiz_Demo_Seed.sql`: demo accounts and scenario (development only)
+- `db/StreetBiz_Upgrade_*.sql`: one-off, only for a database built before the 94 wards of
+  Đà Nẵng; a build never runs them (see [docs/database.md](docs/database.md#upgrading-a-database-built-before-the-94-wards))
 
 First-time setup on an empty database (stop the API first):
 
@@ -190,9 +183,11 @@ StreetBiz-BE/
 |   |-- StreetBiz.Application.Tests/
 |   |-- StreetBiz.Infrastructure.Tests/
 |   +-- StreetBiz.API.Tests/
+|-- db/                  database scripts (schema, demo seed)
+|-- deploy/vps/          production stack: compose, Caddyfile, deploy/backup/init-db scripts
 |-- docs/
 |-- Dockerfile
-|-- docker-compose.yml
+|-- docker-compose.yml   local development stack
 |-- Directory.Build.props
 +-- README.md
 ~~~
@@ -215,6 +210,7 @@ notifications. External push delivery and payment providers remain outside this 
 
 - docs/architecture.md
 - docs/database.md
+- docs/deploy-vps.md
 - docs/auth-vendor-onboarding.md
 - docs/sidewalk-slot-rental.md
 - docs/ward-slot-workflows.md

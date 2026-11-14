@@ -87,7 +87,9 @@ public sealed class WebSocketVoiceClient(WebSocket socket) : IChatbotVoiceClient
                     var root = json.RootElement;
                     var type = root.TryGetProperty("type", out var t) && t.ValueKind == JsonValueKind.String ? t.GetString()! : "";
                     bool? muted = root.TryGetProperty("muted", out var m) && m.ValueKind is JsonValueKind.True or JsonValueKind.False ? m.GetBoolean() : null;
-                    return new ChatbotVoiceClientControl(type, muted);
+                    // Only the voice registration's "draft"/"text" frames carry data the relay reads.
+                    var raw = type is "draft" or "text" ? Encoding.UTF8.GetString(message.GetBuffer(), 0, (int)message.Length) : null;
+                    return new ChatbotVoiceClientControl(type, muted, raw);
                 }
                 catch (JsonException) { return new ChatbotVoiceClientControl("invalid"); }
             }

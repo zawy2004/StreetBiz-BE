@@ -6,6 +6,7 @@ using StreetBiz.Application.Common.Interfaces;
 using StreetBiz.Application.Common.Models;
 using StreetBiz.Application.Common.Security;
 using StreetBiz.Application.Features.FoodSafety;
+using StreetBiz.Infrastructure.Payments;
 using StreetBiz.Infrastructure.Persistence.ScaffoldedModels;
 
 namespace StreetBiz.Infrastructure.Persistence.Repositories;
@@ -30,6 +31,22 @@ public sealed partial class CommerceRepository(
 
     private DateTime Now => clock.GetUtcNow().UtcDateTime;
     private DateOnly Today => DateOnly.FromDateTime(TimeZoneInfo.ConvertTimeFromUtc(Now, BusinessTimeZone));
+
+    /// <summary>
+    /// A short, readable order number (<see cref="OrderCodes"/>) not used yet. Six random characters
+    /// give about 730 million codes per day, so a repeat is rare; it is still checked, and the
+    /// unique index on order_code stays the final guard.
+    /// </summary>
+    private async Task<string> NewOrderCodeAsync(DateTime nowUtc, CancellationToken cancellationToken)
+    {
+        var code = OrderCodes.New(nowUtc);
+        for (var attempt = 1; attempt < 5 && await db.Orders.AnyAsync(o => o.order_code == code, cancellationToken); attempt++)
+        {
+            code = OrderCodes.New(nowUtc);
+        }
+
+        return code;
+    }
 
     private IQueryable<Storefront> EligibleStores() => db.Storefronts.Where(store =>
         store.availability_status == StorefrontOpen && store.registration.registration_status == "APPROVED"
@@ -73,6 +90,11 @@ public sealed partial class CommerceRepository(
             items = items.Where(item => storefronts.Contains(item.storefront_id));
         }
 
+        if (filter.MinRating is { } minRating)
+        {
+            items = items.Where(item => RatedAtLeast(minRating).Contains(item.storefront.registration.vendor_id));
+        }
+
         var ordered = filter.Sort switch
         {
             MarketplaceMenuSorts.PriceAsc => items.OrderBy(item => item.unit_price),
@@ -114,12 +136,8 @@ public sealed partial class CommerceRepository(
         string? note,
         CancellationToken cancellationToken)
     {
-        var strategy = db.Database.CreateExecutionStrategy();
-        var result = await strategy.ExecuteAsync(async () =>
+        var result = await db.ExecuteInTransactionAsync(async transaction =>
         {
-            db.ChangeTracker.Clear();
-            await using var transaction = await db.Database.BeginTransactionAsync(
-                IsolationLevel.Serializable, cancellationToken);
             var menuItem = await db.MenuItems.AsNoTracking()
                 .Where(item => item.menu_item_id == menuItemId)
                 .Select(item => new
@@ -207,7 +225,7 @@ public sealed partial class CommerceRepository(
             await db.SaveChangesAsync(cancellationToken);
             await transaction.CommitAsync(cancellationToken);
             return (CartMutationOutcome.Updated, (long?)cart.cart_id);
-        });
+        }, IsolationLevel.Serializable, cancellationToken);
 
         var cartRow = result.Item1 == CartMutationOutcome.Updated && result.Item2.HasValue
             ? await BuildCartAsync(result.Item2.Value, cancellationToken)
@@ -251,12 +269,8 @@ public sealed partial class CommerceRepository(
         long menuItemId,
         CancellationToken cancellationToken)
     {
-        var strategy = db.Database.CreateExecutionStrategy();
-        var result = await strategy.ExecuteAsync(async () =>
+        var result = await db.ExecuteInTransactionAsync(async transaction =>
         {
-            db.ChangeTracker.Clear();
-            await using var transaction = await db.Database.BeginTransactionAsync(
-                IsolationLevel.Serializable, cancellationToken);
             var item = await db.ShoppingCartItems
                 .Include(row => row.cart)
                 .SingleOrDefaultAsync(row => row.menu_item_id == menuItemId
@@ -287,7 +301,7 @@ public sealed partial class CommerceRepository(
 
             await transaction.CommitAsync(cancellationToken);
             return (CartMutationOutcome.Updated, (long?)cartId);
-        });
+        }, IsolationLevel.Serializable, cancellationToken);
 
         return new CartMutationResult(
             result.Item1,
@@ -339,12 +353,8 @@ public sealed partial class CommerceRepository(
         string idempotencyKey,
         CancellationToken cancellationToken)
     {
-        var strategy = db.Database.CreateExecutionStrategy();
-        var result = await strategy.ExecuteAsync(async () =>
+        var result = await db.ExecuteInTransactionAsync(async transaction =>
         {
-            db.ChangeTracker.Clear();
-            await using var transaction = await db.Database.BeginTransactionAsync(
-                IsolationLevel.Serializable, cancellationToken);
             var existing = await db.PaymentTransactions.AsNoTracking()
                 .Where(payment => payment.idempotency_key == idempotencyKey)
                 .Select(payment => new
@@ -430,7 +440,7 @@ public sealed partial class CommerceRepository(
             var now = Now;
             var order = new Order
             {
-                order_code = $"SB-{now:yyyyMMdd}-{Guid.NewGuid():N}"[..30],
+                order_code = await NewOrderCodeAsync(now, cancellationToken),
                 customer_user_id = customerUserId,
                 storefront_id = cart.storefront_id,
                 storefront_address_snapshot = cart.storefront.registration.declared_address,
@@ -474,7 +484,7 @@ public sealed partial class CommerceRepository(
             await db.SaveChangesAsync(cancellationToken);
             await transaction.CommitAsync(cancellationToken);
             return (OrderMutationOutcome.Updated, (long?)order.order_id);
-        });
+        }, IsolationLevel.Serializable, cancellationToken);
 
         return await BuildOrderResultAsync(result, cancellationToken);
     }
@@ -505,13 +515,8 @@ public sealed partial class CommerceRepository(
         PaymentCallbackData callback,
         CancellationToken cancellationToken)
     {
-        var strategy = db.Database.CreateExecutionStrategy();
-        return await strategy.ExecuteAsync(async () =>
+        return await db.ExecuteInTransactionAsync(async transaction =>
         {
-            db.ChangeTracker.Clear();
-            await using var transaction = await db.Database.BeginTransactionAsync(
-                IsolationLevel.Serializable, cancellationToken);
-
             PaymentTransaction? payment = null;
             if (!string.IsNullOrWhiteSpace(callback.ProviderReference))
             {
@@ -577,15 +582,28 @@ public sealed partial class CommerceRepository(
                 return await Finish(PaymentCallbackOutcome.Rejected, "REJECTED");
             }
 
+            // PAYOS: only the receiving account the transaction pays into may settle it, so a webhook
+            // (or a status answer) from any other channel is refused, whatever it reports.
+            if (!ProviderTransfers.FromItsPayee(payment.payee_account_id, callback))
+            {
+                return await Finish(PaymentCallbackOutcome.Rejected, "REJECTED");
+            }
+
+            // A bank transfer that arrives for a settled or cancelled order is real money that
+            // cannot be applied: recorded as REJECTED and raised as surplus for a manual refund.
             if (payment.transaction_status is PaymentSuccess or PaymentFailed)
             {
-                return await Finish(PaymentCallbackOutcome.Duplicate, "DUPLICATE");
+                return await db.IsNewTransferAsync(payment.transaction_id, callback, cancellationToken)
+                    ? await Finish(PaymentCallbackOutcome.Surplus, "REJECTED")
+                    : await Finish(PaymentCallbackOutcome.Duplicate, "DUPLICATE");
             }
 
             var order = payment.order;
             if (order.order_status != OrderStatuses.PendingPayment)
             {
-                return await Finish(PaymentCallbackOutcome.Rejected, "REJECTED");
+                return await db.IsNewTransferAsync(payment.transaction_id, callback, cancellationToken)
+                    ? await Finish(PaymentCallbackOutcome.Surplus, "REJECTED")
+                    : await Finish(PaymentCallbackOutcome.Rejected, "REJECTED");
             }
 
             var now = Now;
@@ -623,7 +641,7 @@ public sealed partial class CommerceRepository(
             }
 
             return await Finish(PaymentCallbackOutcome.Applied, "APPLIED");
-        });
+        }, IsolationLevel.Serializable, cancellationToken);
     }
 
     public async Task<OrderMutationResult> ConfirmSandboxPaymentAsync(
@@ -631,12 +649,8 @@ public sealed partial class CommerceRepository(
         long orderId,
         CancellationToken cancellationToken)
     {
-        var strategy = db.Database.CreateExecutionStrategy();
-        var result = await strategy.ExecuteAsync(async () =>
+        var result = await db.ExecuteInTransactionAsync(async transaction =>
         {
-            db.ChangeTracker.Clear();
-            await using var transaction = await db.Database.BeginTransactionAsync(
-                IsolationLevel.Serializable, cancellationToken);
             var order = await db.Orders.SingleOrDefaultAsync(
                 row => row.order_id == orderId && row.customer_user_id == customerUserId,
                 cancellationToken);
@@ -697,7 +711,7 @@ public sealed partial class CommerceRepository(
             await db.SaveChangesAsync(cancellationToken);
             await transaction.CommitAsync(cancellationToken);
             return OrderMutationOutcome.Updated;
-        });
+        }, IsolationLevel.Serializable, cancellationToken);
 
         return result == OrderMutationOutcome.Updated
             ? new OrderMutationResult(result, await GetCustomerOrderAsync(
@@ -727,12 +741,8 @@ public sealed partial class CommerceRepository(
         string expectedStatus,
         CancellationToken cancellationToken)
     {
-        var strategy = db.Database.CreateExecutionStrategy();
-        var result = await strategy.ExecuteAsync(async () =>
+        var result = await db.ExecuteInTransactionAsync(async transaction =>
         {
-            db.ChangeTracker.Clear();
-            await using var transaction = await db.Database.BeginTransactionAsync(
-                IsolationLevel.Serializable, cancellationToken);
             var order = await db.Orders.SingleOrDefaultAsync(
                 row => row.order_id == orderId && row.customer_user_id == customerUserId,
                 cancellationToken);
@@ -785,7 +795,7 @@ public sealed partial class CommerceRepository(
             await db.SaveChangesAsync(cancellationToken);
             await transaction.CommitAsync(cancellationToken);
             return OrderMutationOutcome.Updated;
-        });
+        }, IsolationLevel.Serializable, cancellationToken);
 
         return result == OrderMutationOutcome.Updated
             ? new OrderMutationResult(result, await GetCustomerOrderAsync(
@@ -838,12 +848,8 @@ public sealed partial class CommerceRepository(
         string expectedStatus,
         CancellationToken cancellationToken)
     {
-        var strategy = db.Database.CreateExecutionStrategy();
-        var result = await strategy.ExecuteAsync(async () =>
+        var result = await db.ExecuteInTransactionAsync(async transaction =>
         {
-            db.ChangeTracker.Clear();
-            await using var transaction = await db.Database.BeginTransactionAsync(
-                IsolationLevel.Serializable, cancellationToken);
             var order = await OwnedSellerOrderAsync(vendorId, orderId, cancellationToken);
             if (order is null)
             {
@@ -882,7 +888,7 @@ public sealed partial class CommerceRepository(
             await db.SaveChangesAsync(cancellationToken);
             await transaction.CommitAsync(cancellationToken);
             return OrderMutationOutcome.Updated;
-        });
+        }, IsolationLevel.Serializable, cancellationToken);
 
         return result == OrderMutationOutcome.Updated
             ? new OrderMutationResult(result, await GetSellerOrderAsync(
@@ -971,6 +977,8 @@ public sealed partial class CommerceRepository(
     // storefront list, its counts and this search can never disagree about what is visible. The
     // in-term and vendor/registration consistency checks that EligibleStores() adds belong to the
     // write paths (cart, checkout, menu edits), which call it directly.
+    public IQueryable<MenuItem> SellableMenuItems() => MarketplaceMenuQuery();
+
     private IQueryable<MenuItem> MarketplaceMenuQuery() =>
         PublicStorefronts()
             .SelectMany(storefront => storefront.MenuItems)
@@ -1198,12 +1206,8 @@ public sealed partial class CommerceRepository(
         string notificationBody,
         CancellationToken cancellationToken)
     {
-        var strategy = db.Database.CreateExecutionStrategy();
-        return await strategy.ExecuteAsync(async () =>
+        return await db.ExecuteInTransactionAsync(async transaction =>
         {
-            db.ChangeTracker.Clear();
-            await using var transaction = await db.Database.BeginTransactionAsync(
-                IsolationLevel.Serializable, cancellationToken);
             var order = await OwnedSellerOrderAsync(vendorId, orderId, cancellationToken);
             if (order is null)
             {
@@ -1223,7 +1227,7 @@ public sealed partial class CommerceRepository(
             await db.SaveChangesAsync(cancellationToken);
             await transaction.CommitAsync(cancellationToken);
             return OrderMutationOutcome.Updated;
-        });
+        }, IsolationLevel.Serializable, cancellationToken);
     }
 
     // Only the seller completes an order: the buyer's own "picked up" button
@@ -1236,12 +1240,8 @@ public sealed partial class CommerceRepository(
         string note,
         CancellationToken cancellationToken)
     {
-        var strategy = db.Database.CreateExecutionStrategy();
-        var outcome = await strategy.ExecuteAsync(async () =>
+        var outcome = await db.ExecuteInTransactionAsync(async transaction =>
         {
-            db.ChangeTracker.Clear();
-            await using var transaction = await db.Database.BeginTransactionAsync(
-                IsolationLevel.Serializable, cancellationToken);
             var order = await OwnedSellerOrderAsync(vendorId, orderId, cancellationToken);
             if (order is null)
             {
@@ -1266,7 +1266,7 @@ public sealed partial class CommerceRepository(
             await db.SaveChangesAsync(cancellationToken);
             await transaction.CommitAsync(cancellationToken);
             return OrderMutationOutcome.Updated;
-        });
+        }, IsolationLevel.Serializable, cancellationToken);
 
         var orderRow = outcome == OrderMutationOutcome.Updated
             ? await GetSellerOrderAsync(vendorId, orderId, cancellationToken)

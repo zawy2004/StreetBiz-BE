@@ -64,4 +64,23 @@ public sealed class DigitalPermitHandlerTests
         result.EffectiveStatus.Should().Be(PermitEffectiveStatuses.Expired);
         result.PermitStatus.Should().Be(PermitStatuses.Active);
     }
+
+    [Fact]
+    public async Task The_qr_link_wraps_the_signed_token_unchanged_and_is_absent_without_a_base_url()
+    {
+        vendorContext.Setup(v => v.RequireVendorIdAsync(It.IsAny<CancellationToken>())).ReturnsAsync(OwnerVendorId);
+        permits.Setup(p => p.GetValidityByContractAsync(ContractId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Permit(PermitEffectiveStatuses.Valid));
+        var links = new Mock<IPermitLinks>();
+        links.Setup(l => l.ScanUrl("SBP1.abc.def", null)).Returns("http://192.168.1.5:5173/q/SBP1.abc.def");
+
+        var linked = await new GetPermitQueryHandler(vendorContext.Object, permits.Object, links.Object)
+            .Handle(new GetPermitQuery(ContractId), CancellationToken.None);
+        var unlinked = await new GetPermitQueryHandler(vendorContext.Object, permits.Object)
+            .Handle(new GetPermitQuery(ContractId), CancellationToken.None);
+
+        linked.QrUrl.Should().Be("http://192.168.1.5:5173/q/SBP1.abc.def");
+        linked.QrPayload.Should().Be("SBP1.abc.def");
+        unlinked.QrUrl.Should().BeNull();
+    }
 }

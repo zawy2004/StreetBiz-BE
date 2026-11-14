@@ -1288,15 +1288,12 @@ public sealed class WardConfigurationService(
     #region Shared
     private async Task Write(Func<Task> action, CancellationToken ct)
     {
-        var strategy = db.Database.CreateExecutionStrategy();
-        await strategy.ExecuteAsync(async () =>
+        await db.ExecuteInTransactionAsync(async transaction =>
         {
-            db.ChangeTracker.Clear();
-            await using var transaction = await db.Database.BeginTransactionAsync(IsolationLevel.Serializable, ct);
             await action();
             await db.SaveChangesAsync(ct);
             await transaction.CommitAsync(ct);
-        });
+        }, IsolationLevel.Serializable, ct);
         db.ChangeTracker.Clear();
     }
 

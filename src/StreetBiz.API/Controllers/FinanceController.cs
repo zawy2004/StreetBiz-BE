@@ -3,6 +3,8 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using StreetBiz.Application.Common.Security;
 using StreetBiz.Application.DTOs.Finance;
+using StreetBiz.Application.DTOs.Payments;
+using StreetBiz.Application.Features.Finance.BankTransfer;
 using StreetBiz.Application.Features.Finance.ConfirmSandboxPayment;
 using StreetBiz.Application.Features.Finance.GetInvoice;
 using StreetBiz.Application.Features.Finance.InvoiceDocuments;
@@ -13,15 +15,14 @@ using StreetBiz.Application.Features.Finance.ListPayments;
 using StreetBiz.Application.Features.Finance.ListPenalties;
 using StreetBiz.Application.Features.Finance.ListViolations;
 using StreetBiz.Application.Features.Finance.PayFee;
-using StreetBiz.Application.Features.Finance.PayPenalty;
 using StreetBiz.Application.Features.Finance.SyncPayment;
 using StreetBiz.Application.Features.Finance.VendorContracts;
+using StreetBiz.Application.Features.PayoutAccounts;
+using StreetBiz.Application.Features.PenaltyReceipts;
 
 namespace StreetBiz.API.Controllers;
 
 public sealed record PayFeeRequest(string Provider);
-
-public sealed record PayPenaltyRequest(string Provider);
 
 [ApiController]
 [Authorize]
@@ -63,6 +64,15 @@ public sealed class FinanceController(
         CancellationToken cancellationToken) =>
         Ok(await sender.Send(new ListVendorViolationsQuery(), cancellationToken));
 
+    /// <summary>
+    /// The payment methods for one fee instalment. PAYOS is offered, naming the ward that would be
+    /// paid, only when that ward has connected its own receiving account.
+    /// </summary>
+    [HttpGet("fees/{feeItemId:long}/payment-options")]
+    public async Task<IActionResult> FeePaymentOptions(long feeItemId, CancellationToken cancellationToken) =>
+        Ok(PaymentOptions.Build(
+            SandboxEnabled, configuration, await sender.Send(new GetFeePayeeQuery(feeItemId), cancellationToken)));
+
     /// <summary>FEE-01: open a checkout for one fee instalment.</summary>
     [HttpPost("fees/{feeItemId:long}/checkout")]
     public async Task<ActionResult<FinanceCheckoutDto>> PayFee(
@@ -73,15 +83,19 @@ public sealed class FinanceController(
         Ok(await sender.Send(
             new PayFeeCommand(feeItemId, request.Provider, idempotencyKey), cancellationToken));
 
-    /// <summary>FEE-04: open a checkout for one penalty.</summary>
-    [HttpPost("penalties/{penaltyId:long}/checkout")]
-    public async Task<ActionResult<FinanceCheckoutDto>> PayPenalty(
-        long penaltyId,
-        PayPenaltyRequest request,
-        [FromHeader(Name = "Idempotency-Key")] string idempotencyKey,
-        CancellationToken cancellationToken) =>
-        Ok(await sender.Send(
-            new PayPenaltyCommand(penaltyId, request.Provider, idempotencyKey), cancellationToken));
+    /// <summary>
+    /// How to pay this fine to the State Treasury, and the receipt history. StreetBiz does not collect
+    /// fines: the household pays the Treasury and uploads the receipt for the ward to check.
+    /// </summary>
+    [HttpGet("penalties/{penaltyId:long}/treasury")]
+    public async Task<ActionResult<PenaltyTreasuryDto>> PenaltyTreasury(long penaltyId, CancellationToken cancellationToken) =>
+        Ok(await sender.Send(new GetPenaltyTreasuryQuery(penaltyId), cancellationToken));
+
+    /// <summary>The household submits its Treasury receipt (a file from POST /api/uploads/evidence) for the ward to check.</summary>
+    [HttpPost("penalties/{penaltyId:long}/receipts")]
+    public async Task<ActionResult<PenaltyReceiptDto>> SubmitPenaltyReceipt(
+        long penaltyId, SubmitPenaltyReceiptRequest request, CancellationToken cancellationToken) =>
+        Ok(await sender.Send(new SubmitPenaltyReceiptCommand(penaltyId, request), cancellationToken));
 
     /// <summary>
     /// Development-only stand-in for a real signed callback (same role as
@@ -110,6 +124,15 @@ public sealed class FinanceController(
     public async Task<ActionResult<FinancePaymentSyncDto>> SyncPayment(
         long transactionId, CancellationToken cancellationToken) =>
         Ok(await sender.Send(new SyncFinancePaymentCommand(transactionId), cancellationToken));
+
+    /// <summary>
+    /// FEE-01: the VietQR and transfer details of a payment still waiting for its payOS
+    /// bank transfer, so the payment page can show them again after a reload.
+    /// </summary>
+    [HttpGet("payments/{transactionId:long}/bank-transfer")]
+    public async Task<ActionResult<BankTransferDto>> GetBankTransfer(
+        long transactionId, CancellationToken cancellationToken) =>
+        Ok(await sender.Send(new GetFinanceBankTransferQuery(transactionId), cancellationToken));
 
     /// <summary>FEE-03: the caller's invoices, most recent first.</summary>
     [HttpGet("invoices")]

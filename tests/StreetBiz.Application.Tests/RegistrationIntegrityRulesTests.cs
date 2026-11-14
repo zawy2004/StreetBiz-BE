@@ -13,7 +13,7 @@ public sealed class RegistrationIntegrityRulesTests
 
     private static RelatedRegistrationFact Related(
         long id, string status = "APPROVED", int ward = OfficerWard, string? note = null) =>
-        new(id, $"Hộ {id}", ward, ward == OfficerWard ? "Phường Hải Châu 1" : "Phường Thanh Khê Đông", status, note);
+        new(id, $"Hộ {id}", ward, ward == OfficerWard ? "Phường Hải Châu" : "Phường Thanh Khê", status, note);
 
     private static RegistrationIntegrityFacts Facts(
         string? idNumber = "048185000001",
@@ -124,7 +124,7 @@ public sealed class RegistrationIntegrityRulesTests
         related[0].BusinessName.Should().Be("Hộ 7");
         related[1].RegistrationId.Should().BeNull();
         related[1].BusinessName.Should().BeNull();
-        related[1].WardName.Should().Be("Phường Thanh Khê Đông");
+        related[1].WardName.Should().Be("Phường Thanh Khê");
     }
 
     [Fact]

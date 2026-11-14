@@ -1,0 +1,21 @@
+# HTTPS for the API: Caddy gets and renews the Let's Encrypt certificate for API_DOMAIN by itself
+# (the domain's A record must point at this VPS and ports 80/443 must be open).
+{$API_DOMAIN} {
+	# Uploads are capped at 5 MB by the API; leave a little room for the multipart envelope.
+	request_body {
+		max_size 12MB
+	}
+
+	# HTTP/1.1 upgrade for SignalR (/hubs/*) and the chatbot voice socket is handled automatically.
+	reverse_proxy api:8080
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		-Server
+	}
+
+	log {
+		output stdout
+		format console
+	}
+}

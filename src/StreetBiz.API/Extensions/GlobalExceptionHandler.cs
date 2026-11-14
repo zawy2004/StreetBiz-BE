@@ -16,6 +16,26 @@ public sealed class GlobalExceptionHandler(ILogger<GlobalExceptionHandler> logge
     public async ValueTask<bool> TryHandleAsync(
         HttpContext httpContext, Exception exception, CancellationToken cancellationToken)
     {
+        // The client went away (closed the tab, navigated on, lost signal) while the request was
+        // running. Whatever the cancellation surfaced as -- OperationCanceledException, or a
+        // SqlException "Operation cancelled by user" -- nobody is waiting for an answer, so it is
+        // not a server fault: one line instead of an error with a stack trace, and 499 rather than
+        // 500 so failed-request counts and alerts only see real failures.
+        if (httpContext.RequestAborted.IsCancellationRequested)
+        {
+            logger.LogInformation(
+                "{Method} {Path} -> client closed the request ({ExceptionType})",
+                httpContext.Request.Method,
+                httpContext.Request.Path,
+                exception.GetType().Name);
+            if (!httpContext.Response.HasStarted)
+            {
+                httpContext.Response.StatusCode = StatusCodes.Status499ClientClosedRequest;
+            }
+
+            return true;
+        }
+
         if (exception is AppException expected)
         {
             // Expected outcomes, not faults: one line, no stack trace.

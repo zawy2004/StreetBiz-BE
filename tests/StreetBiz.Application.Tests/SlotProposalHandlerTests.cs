@@ -13,11 +13,32 @@ public sealed class SlotProposalHandlerTests
     private const long RegistrationId = 700;
     private const int ZoneId = 1;
 
+    private const long VendorUserId = 55;
+    private static readonly string OwnPhoto = EvidenceFiles.BuildUrl(VendorUserId, "0123456789abcdef0123456789abcdef.jpg");
+
     private readonly Mock<IVendorContext> vendorContext = new();
     private readonly Mock<ISidewalkSlotRepository> slots = new();
+    private readonly Mock<ICurrentUser> currentUser = new();
+
+    public SlotProposalHandlerTests() => currentUser.SetupGet(u => u.UserId).Returns(VendorUserId);
 
     private static ProposeSlotCommand ValidCommand() => new(
-        RegistrationId, ZoneId, 16.0130m, 108.2400m, 2, 3, "https://example.test/evidence/photo.jpg");
+        RegistrationId, ZoneId, 16.0130m, 108.2400m, 2, 3, OwnPhoto);
+
+    [Theory]
+    [InlineData("javascript:alert(document.domain)")]
+    [InlineData("https://evil.example/steal.jpg")]
+    [InlineData("/api/uploads/evidence/56/0123456789abcdef0123456789abcdef.jpg")] // someone else's file
+    [InlineData("/api/uploads/evidence/55/../../auth/sessions")]
+    public async Task A_photo_that_is_not_the_vendors_own_upload_is_refused(string url)
+    {
+        var handler = new ProposeSlotCommandHandler(vendorContext.Object, slots.Object, currentUser.Object);
+
+        var act = () => handler.Handle(ValidCommand() with { ProposalPhotoUrl = url }, CancellationToken.None);
+
+        (await act.Should().ThrowAsync<ValidationAppException>()).Which.Errors.Should().ContainKey("ProposalPhotoUrl");
+        slots.Verify(s => s.ZoneExistsAsync(It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
 
     [Fact]
     public void Proposing_without_a_photo_is_a_validation_error()
@@ -36,7 +57,7 @@ public sealed class SlotProposalHandlerTests
     {
         slots.Setup(s => s.ZoneExistsAsync(ZoneId, It.IsAny<CancellationToken>())).ReturnsAsync(false);
 
-        var handler = new ProposeSlotCommandHandler(vendorContext.Object, slots.Object);
+        var handler = new ProposeSlotCommandHandler(vendorContext.Object, slots.Object, currentUser.Object);
 
         var error = await FluentActions.Awaiting(() => handler.Handle(ValidCommand(), CancellationToken.None))
             .Should().ThrowAsync<ValidationAppException>();
@@ -56,7 +77,7 @@ public sealed class SlotProposalHandlerTests
             .ReturnsAsync(new SlotProposalRow(55, "VP-1-x", 16.0130m, 108.2400m,
                 ProposalReviewStatuses.Pending, "https://example.test/evidence/photo.jpg", null, DateTime.UtcNow));
 
-        var handler = new ProposeSlotCommandHandler(vendorContext.Object, slots.Object);
+        var handler = new ProposeSlotCommandHandler(vendorContext.Object, slots.Object, currentUser.Object);
         var result = await handler.Handle(ValidCommand(), CancellationToken.None);
 
         result.SlotId.Should().Be(55);
@@ -70,7 +91,7 @@ public sealed class SlotProposalHandlerTests
         slots.Setup(s => s.ProposeAsync(RegistrationId, It.IsAny<NewSlotProposal>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
             .ThrowsAsync(new ConflictException(SideMessages.SlotCodeGenerationFailed));
 
-        var handler = new ProposeSlotCommandHandler(vendorContext.Object, slots.Object);
+        var handler = new ProposeSlotCommandHandler(vendorContext.Object, slots.Object, currentUser.Object);
 
         await FluentActions.Awaiting(() => handler.Handle(ValidCommand(), CancellationToken.None))
             .Should().ThrowAsync<ConflictException>().WithMessage(SideMessages.SlotCodeGenerationFailed);
@@ -86,7 +107,7 @@ public sealed class SlotProposalHandlerTests
             .ReturnsAsync(new SlotProposalRow(56, "VP-1-x", 16.0130m, 108.2400m,
                 ProposalReviewStatuses.Pending, "https://example.test/evidence/photo.jpg", null, DateTime.UtcNow));
 
-        var handler = new ProposeSlotCommandHandler(vendorContext.Object, slots.Object);
+        var handler = new ProposeSlotCommandHandler(vendorContext.Object, slots.Object, currentUser.Object);
         var result = await handler.Handle(ValidCommand(), CancellationToken.None);
 
         result.ProposalReviewStatus.Should().Be(ProposalReviewStatuses.Pending);

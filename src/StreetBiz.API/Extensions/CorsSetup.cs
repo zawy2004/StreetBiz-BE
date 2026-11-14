@@ -43,7 +43,7 @@ public static class CorsSetup
                 .AllowAnyMethod()
                 // The SPA sends the refresh token in the body, not a cookie, so credentials
                 // are not required; keeping them off allows a stricter origin check.
-                .WithExposedHeaders("Retry-After", "WWW-Authenticate");
+                .WithExposedHeaders("Retry-After", "WWW-Authenticate", "Content-Disposition", "X-Export-Id");
         }));
 
         return services;

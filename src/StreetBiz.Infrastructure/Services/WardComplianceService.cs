@@ -31,7 +31,8 @@ public sealed class WardComplianceService(
     IKycResultRepository kycResults,
     IAiAssistanceLogs aiLogs,
     TimeProvider clock,
-    IRegistrationDocumentGenerator registrationDocuments)
+    IRegistrationDocumentGenerator registrationDocuments,
+    DocumentCheckFailures documentCheckFailures)
     : IWardComplianceService
 {
     private DateTime Now => clock.GetUtcNow().UtcDateTime;
@@ -41,8 +42,16 @@ public sealed class WardComplianceService(
 
     private DateOnly TodayVn => ToVnDate(Now);
 
+    private static DateTime ToVnTime(DateTime utc) =>
+        TimeZoneInfo.ConvertTimeFromUtc(DateTime.SpecifyKind(utc, DateTimeKind.Utc), VietnamTimeZone);
+
     private static DateOnly ToVnDate(DateTime utc) =>
         DateOnly.FromDateTime(TimeZoneInfo.ConvertTimeFromUtc(DateTime.SpecifyKind(utc, DateTimeKind.Utc), VietnamTimeZone));
+
+    /// <summary>NĐ 241/2026 Điều 21: a renewal is decided within 3 working days of being filed,
+    /// counted from the next day and running to the end of the third (BusinessCalendar).</summary>
+    private static DateTime RenewalSlaDueAt(DateTime createdAtUtc) =>
+        BusinessCalendar.EndOfDayUtc(BusinessCalendar.AddWorkingDays(ToVnDate(createdAtUtc), RenewalStatuses.DecisionSlaDays));
 
     private static string? NullIfBlank(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
@@ -60,15 +69,12 @@ public sealed class WardComplianceService(
     /// WardSlots.Write, whose pattern this mirrors for the same reason).
     private async Task Write(Func<Task> action, CancellationToken ct)
     {
-        var strategy = db.Database.CreateExecutionStrategy();
-        await strategy.ExecuteAsync(async () =>
+        await db.ExecuteInTransactionAsync(async transaction =>
         {
-            db.ChangeTracker.Clear();
-            await using var transaction = await db.Database.BeginTransactionAsync(IsolationLevel.Serializable, ct);
             await action();
             await db.SaveChangesAsync(ct);
             await transaction.CommitAsync(ct);
-        });
+        }, IsolationLevel.Serializable, ct);
     }
 
     #region Enrollment / Registration Review
@@ -123,9 +129,6 @@ public sealed class WardComplianceService(
         long registrationId,
         CancellationToken ct)
     {
-        // Tracked (not AsNoTracking): a first-time AI-OCR backfill of id_number
-        // below is persisted here, so subsequent opens of the same record reuse
-        // the stored value instead of re-calling the AI provider every time.
         var reg = await db.BusinessRegistrations
             .Include(x => x.vendor).ThenInclude(v => v.user)
             .Include(x => x.RegistrationEvidences)
@@ -140,14 +143,18 @@ public sealed class WardComplianceService(
         }
 
         var evidence = reg.RegistrationEvidences
-            .Select(e => new WardEvidenceDto(e.evidence_id, e.evidence_type, e.evidence_type, e.file_url))
+            .Select(e => new WardEvidenceDto(e.evidence_id, e.evidence_type, EvidenceTypes.Label(e.evidence_type), e.file_url))
             .ToList();
 
         var ownerName = reg.vendor?.user?.full_name ?? reg.display_name;
 
-        // AI Document Inspector [BR-41/42]: extract real CCCD data from the
-        // uploaded ID photo (multimodal), never compare against phone number.
-        var aiCheck = await RunDocumentCheckAsync(reg, evidence, ownerName, refresh: false, ct);
+        // AI Document Inspector [BR-41/42]: opening a record never calls the AI provider. It shows
+        // the stored check while its inputs are unchanged, or nothing ("not run yet") until the
+        // officer asks for one (ReRunDocumentCheckAsync). Calling the provider here put a slow or
+        // exhausted provider on the page load: 4-45 s per open, and a retry on every open because
+        // failures were never stored.
+        var aiCheck = DocumentCheckPrecondition(reg, evidence)
+            ?? TryReadCachedDocumentCheck(reg.ai_check_result, DocumentCheckKey(reg, evidence, ownerName));
 
         return new WardEnrollmentDetailDto(
             Id(reg.registration_id),
@@ -177,7 +184,12 @@ public sealed class WardComplianceService(
             reg.identity_verified_at,
             reg.identity_verified_by?.ToString(CultureInfo.InvariantCulture),
             reg.identity_verification_note,
-            await kycResults.ListForRegistrationAsync(reg.registration_id, ct));
+            await kycResults.ListForRegistrationAsync(reg.registration_id, ct),
+            await db.AIAssistanceLogs.AsNoTracking().AnyAsync(x =>
+                x.feature_code == StreetBiz.Application.Features.AiAssistance.AiFeatureCodes.VoiceRegistration
+                && x.entity_type == StreetBiz.Application.Features.AiAssistance.AiLogEntities.Registration
+                && x.entity_id == reg.registration_id
+                && x.accepted == true, ct));
     }
 
     public async Task<(byte[] Content, string FileName)> GenerateEnrollmentDocumentAsync(
@@ -369,26 +381,26 @@ public sealed class WardComplianceService(
         }
 
         var evidence = reg.RegistrationEvidences
-            .Select(e => new WardEvidenceDto(e.evidence_id, e.evidence_type, e.evidence_type, e.file_url))
+            .Select(e => new WardEvidenceDto(e.evidence_id, e.evidence_type, EvidenceTypes.Label(e.evidence_type), e.file_url))
             .ToList();
         var ownerName = reg.vendor?.user?.full_name ?? reg.display_name;
 
-        // An explicit re-run is the officer asking for a fresh answer: skip the cache.
-        return await RunDocumentCheckAsync(reg, evidence, ownerName, refresh: true, ct);
+        // An explicit re-run is the officer asking for a fresh answer: skip the stored one.
+        return await RunDocumentCheckAsync(reg, evidence, ownerName, ct);
     }
 
-    /// <summary>
-    /// [BR-41/42] + biometric-data consent gate: refuses with an honest, non-AI result while
-    /// BusinessRegistrations.biometric_consent_at is unset (Luat Bao ve du lieu ca nhan 2025 /
-    /// Nghi dinh 356/2025/ND-CP requires this consent to be separate and explicit -- captured at
-    /// REG-02 evidence upload, not assumed here).
-    /// </summary>
-    private async Task<AiDocumentCheckResult> RunDocumentCheckAsync(
-        BusinessRegistration reg,
-        IReadOnlyList<WardEvidenceDto> evidence,
-        string ownerName,
-        bool refresh,
-        CancellationToken ct)
+    /// <summary>Longest the officer waits for one AI document check (OCR + compare) before getting a
+    /// "check by hand" answer: room for a hung model (10 s) and its fallback. The web client waits
+    /// 45 s for this call.</summary>
+    private static readonly TimeSpan DocumentCheckBudget = TimeSpan.FromSeconds(30);
+
+    /// <summary>After a failed check, how long the same inputs are not sent to the provider again.</summary>
+    private static readonly TimeSpan DocumentCheckFailureCooldown = TimeSpan.FromMinutes(10);
+
+    /// <summary>The non-AI answers given without calling a provider: no biometric consent, or no
+    /// photo to read. Null when an AI check may run.</summary>
+    private static AiDocumentCheckResult? DocumentCheckPrecondition(
+        BusinessRegistration reg, IReadOnlyList<WardEvidenceDto> evidence)
     {
         if (reg.biometric_consent_at is null)
         {
@@ -412,34 +424,87 @@ public sealed class WardComplianceService(
                 IsAiGenerated: false);
         }
 
-        // Opening a record used to call the provider twice (OCR + compare) every time:
-        // ~3.5 s per page view and paid credits for an answer that cannot change until
-        // the evidence or the declared data does. Reuse the stored result while its
-        // inputs are unchanged.
-        if (!refresh
-            && TryReadCachedDocumentCheck(reg.ai_check_result, DocumentCheckKey(reg, evidence, ownerName)) is { } cached)
+        return null;
+    }
+
+    private static AiDocumentCheckResult DocumentCheckUnavailable(string summary, string discrepancy) =>
+        new(
+            MatchPercentage: 0,
+            IsMatch: false,
+            NeedsManualVerification: true,
+            Summary: summary,
+            Discrepancies: new[] { discrepancy },
+            IsAiGenerated: false);
+
+    /// <summary>
+    /// [BR-41/42] + biometric-data consent gate: refuses with an honest, non-AI result while
+    /// BusinessRegistrations.biometric_consent_at is unset (Luat Bao ve du lieu ca nhan 2025 /
+    /// Nghi dinh 356/2025/ND-CP requires this consent to be separate and explicit -- captured at
+    /// REG-02 evidence upload, not assumed here).
+    /// </summary>
+    private async Task<AiDocumentCheckResult> RunDocumentCheckAsync(
+        BusinessRegistration reg,
+        IReadOnlyList<WardEvidenceDto> evidence,
+        string ownerName,
+        CancellationToken ct)
+    {
+        if (DocumentCheckPrecondition(reg, evidence) is { } precondition)
         {
-            return cached;
+            return precondition;
         }
 
-        var extraction = await aiService.ExtractIdDocumentAsync(evidence, ct);
+        // A check that just failed on these same inputs is not sent to the provider again for a
+        // while: the officer gets the answer at once instead of another 15 s wait and lost quota.
+        var failureKey = $"{reg.registration_id}:{DocumentCheckKey(reg, evidence, ownerName)}";
+        if (documentCheckFailures.TryGet(failureKey, Now, out var failure))
+        {
+            return DocumentCheckUnavailable(
+                $"[Hệ thống — chưa xác minh bằng AI] Lần đối soát AI lúc {ToVnTime(failure.FailedAt):HH:mm} không thành công. "
+                + $"Có thể chạy lại sau {ToVnTime(failure.RetryAfter):HH:mm}; trong lúc chờ, cán bộ đối chiếu CCCD thủ công.",
+                "Chưa có kết quả đối soát AI cho hồ sơ này.");
+        }
 
         var changed = false;
-        if (string.IsNullOrWhiteSpace(reg.id_number) && !string.IsNullOrWhiteSpace(extraction.IdNumber)
-            && extraction.ConfidencePercent >= 85)
+        AiDocumentCheckResult result;
+        using (var budget = CancellationTokenSource.CreateLinkedTokenSource(ct))
         {
-            reg.id_number = extraction.IdNumber;
-            changed = true;
+            budget.CancelAfter(DocumentCheckBudget);
+            try
+            {
+                var extraction = await aiService.ExtractIdDocumentAsync(evidence, budget.Token);
+
+                // Only a real provider reading may fill in the CCCD number.
+                if (extraction.IsAiGenerated
+                    && string.IsNullOrWhiteSpace(reg.id_number) && !string.IsNullOrWhiteSpace(extraction.IdNumber)
+                    && extraction.ConfidencePercent >= 85)
+                {
+                    reg.id_number = extraction.IdNumber;
+                    changed = true;
+                }
+
+                result = await aiService.CompareDeclaredProfileAsync(
+                    ownerName, reg.id_number, reg.declared_address ?? "", extraction, budget.Token);
+            }
+            catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+            {
+                result = DocumentCheckUnavailable(
+                    $"[Hệ thống — chưa xác minh bằng AI] Dịch vụ AI phản hồi quá {DocumentCheckBudget.TotalSeconds:0} giây. "
+                    + "Cán bộ đối chiếu CCCD thủ công hoặc chạy lại sau.",
+                    "Dịch vụ AI không phản hồi kịp.");
+            }
         }
 
-        var result = await aiService.CompareDeclaredProfileAsync(
-            ownerName, reg.id_number, reg.declared_address ?? "", extraction, ct);
-
-        // Only a real provider answer is cached; a fallback ("provider unavailable")
-        // must be retried on the next open. The key is taken after the id_number
-        // backfill so the next read, which sees the stored id_number, matches it.
-        if (result.IsAiGenerated)
+        if (!result.IsAiGenerated)
         {
+            // Nothing is stored for a failed check; it is remembered for a while instead.
+            documentCheckFailures.Record(failureKey, Now, Now + DocumentCheckFailureCooldown);
+        }
+        else
+        {
+            documentCheckFailures.Clear(failureKey);
+
+            // Only a real provider answer is stored. The key is taken after the id_number backfill
+            // so the next open, which sees the stored id_number, matches it.
             var key = DocumentCheckKey(reg, evidence, ownerName);
             // BR-41: log the suggestion before it is cached, so a cache hit (the common case --
             // every later view of this record until something changes) still carries the id an
@@ -617,10 +682,22 @@ public sealed class WardComplianceService(
             {
                 user_id = vendorUser,
                 notification_type = "ENROLLMENT_STATUS_UPDATE",
-                title = newStatus == "APPROVED" ? "Hồ sơ điểm bán đã được duyệt" : "Cập nhật hồ sơ điểm bán vỉa hè",
-                body = newStatus == "APPROVED"
-                    ? $"Hồ sơ điểm bán '{reg.display_name}' đã được UBND Phường xác nhận đủ điều kiện trật tự đô thị."
-                    : $"UBND Phường đã cập nhật trạng thái hồ sơ '{reg.display_name}': {decision.Reason.Trim()}",
+                title = newStatus switch
+                {
+                    RegistrationStatuses.Approved => "Hồ sơ điểm bán đã được duyệt",
+                    // WARD-06: say plainly that the file is waiting on the vendor, not just "updated".
+                    RegistrationStatuses.MoreInformationRequired => "Hồ sơ điểm bán cần bổ sung",
+                    _ => "Cập nhật hồ sơ điểm bán vỉa hè",
+                },
+                body = newStatus switch
+                {
+                    RegistrationStatuses.Approved =>
+                        $"Hồ sơ điểm bán '{reg.display_name}' đã được UBND Phường xác nhận đủ điều kiện trật tự đô thị.",
+                    RegistrationStatuses.MoreInformationRequired =>
+                        $"UBND Phường yêu cầu bổ sung hồ sơ '{reg.display_name}': {decision.Reason.Trim()}. " +
+                        "Hãy cập nhật và nộp lại hồ sơ để Phường xét tiếp.",
+                    _ => $"UBND Phường đã cập nhật trạng thái hồ sơ '{reg.display_name}': {decision.Reason.Trim()}",
+                },
                 related_entity_type = "BusinessRegistration",
                 related_entity_id = reg.registration_id,
                 is_read = false,
@@ -710,7 +787,7 @@ public sealed class WardComplianceService(
         var hasOccupant = await db.RentalContracts.AsNoTracking()
             .AnyAsync(c => c.slot_id == app.slot_id
                 && (c.contract_status == ContractStatuses.Active || c.contract_status == ContractStatuses.Suspended)
-                && c.end_date >= DateOnly.FromDateTime(Now), ct);
+                && c.end_date >= TodayVn, ct);
 
         if (hasOccupant)
         {
@@ -783,7 +860,7 @@ public sealed class WardComplianceService(
                     throw new DomainRuleException("Không thể cấp phép khi hồ sơ điểm bán liên kết chưa được phê duyệt (BR-16).");
                 }
 
-                var eventBlocker = EventZoneBlocker(app.slot.zone, app.requested_term_days, DateOnly.FromDateTime(Now));
+                var eventBlocker = EventZoneBlocker(app.slot.zone, app.requested_term_days, TodayVn);
                 if (eventBlocker is not null)
                 {
                     throw new DomainRuleException(eventBlocker);
@@ -793,14 +870,14 @@ public sealed class WardComplianceService(
                 var occupied = await db.RentalContracts
                     .AnyAsync(c => c.slot_id == app.slot_id
                         && (c.contract_status == ContractStatuses.Active || c.contract_status == ContractStatuses.Suspended)
-                        && c.end_date >= DateOnly.FromDateTime(Now), ct);
+                        && c.end_date >= TodayVn, ct);
 
                 if (occupied)
                 {
                     throw new ConflictException("Vị trí vỉa hè đã có giấy phép đang hoạt động.");
                 }
 
-                var startDate = DateOnly.FromDateTime(Now);
+                var startDate = TodayVn;
                 // end_date is inclusive: a 90-day term runs start .. start+89 (same as EventZoneBlocker).
                 var endDate = startDate.AddDays(app.requested_term_days - 1);
 
@@ -1186,7 +1263,7 @@ public sealed class WardComplianceService(
                 && r.contract.slot.slot_status != SlotStatuses.Suspended
                 && permit?.permit_status == PermitStatuses.Active;
 
-            var slaDueAt = r.created_at.AddDays(RenewalStatuses.DecisionSlaDays);
+            var slaDueAt = RenewalSlaDueAt(r.created_at);
             var isOverdue = RenewalStatuses.Open.Contains(r.renewal_status) && Now > slaDueAt;
 
             result.Add(new WardRenewalListItemDto(
@@ -1235,7 +1312,7 @@ public sealed class WardComplianceService(
         var vendorPhone = contract.vendor.user.phone_number;
         var vendorType = reg.vendor_type;
 
-        var today = DateOnly.FromDateTime(Now);
+        var today = TodayVn;
         var currentEndDate = contract.end_date;
         var remainingDays = currentEndDate.DayNumber - today.DayNumber;
         var proposedEndDate = currentEndDate.AddDays(renewal.requested_term_days);
@@ -1250,7 +1327,7 @@ public sealed class WardComplianceService(
             && compliance.Blockers.Count == 0;
         var isFastTrack = canApprove && compliance.Scorecard.IsCleanRecord;
 
-        var slaDueAt = renewal.created_at.AddDays(RenewalStatuses.DecisionSlaDays);
+        var slaDueAt = RenewalSlaDueAt(renewal.created_at);
         var isOverdue = RenewalStatuses.Open.Contains(renewal.renewal_status) && Now > slaDueAt;
 
         return new WardRenewalDetailDto(
@@ -1477,7 +1554,9 @@ public sealed class WardComplianceService(
         InspectWardPermitRequest request,
         CancellationToken ct)
     {
-        var raw = request.PermitCodeOrPayload?.Trim() ?? "";
+        var scanned = request.PermitCodeOrPayload?.Trim() ?? "";
+        // A printed board's QR is a /q/{token} link (PermitQrText); older permits carry the bare token.
+        var raw = PermitQrText.ExtractToken(scanned);
 
         long? targetContractId = null;
         if (permitTokens.TryParse(raw, out var claims))
@@ -1495,12 +1574,24 @@ public sealed class WardComplianceService(
 
         validity ??= await viewQuery.FirstOrDefaultAsync(x => x.qr_payload == raw, ct);
 
+        // A typed permit or contract number is sequential, so it is only accepted for the officer's
+        // own ward; another ward's permit needs the signed QR, as the public check does.
+        var foundByNumber = false;
         if (validity is null && long.TryParse(raw, out var parsedId))
         {
             validity = await viewQuery.FirstOrDefaultAsync(x => x.permit_id == parsedId || x.contract_id == parsedId, ct);
+            foundByNumber = validity is not null;
         }
 
-        if (validity is null)
+        var contract = validity is null
+            ? null
+            : await db.RentalContracts.AsNoTracking()
+                .Include(c => c.slot).ThenInclude(s => s.zone)
+                .Include(c => c.vendor).ThenInclude(v => v.BusinessRegistrations)
+                .SingleOrDefaultAsync(c => c.contract_id == validity.contract_id, ct);
+        var isOwnWard = contract?.slot.zone.ward_unit_id == actor.WardId;
+
+        if (validity is null || (foundByNumber && !isOwnWard))
         {
             return new InspectWardPermitResult(
                 Found: false, IsValid: false, EffectiveStatus: "NOT_FOUND",
@@ -1511,11 +1602,6 @@ public sealed class WardComplianceService(
                 LocationWarning: "Không tìm thấy giấy phép hợp lệ trên hệ thống.",
                 AiVisionResult: null);
         }
-
-        var contract = await db.RentalContracts.AsNoTracking()
-            .Include(c => c.slot).ThenInclude(s => s.zone)
-            .Include(c => c.vendor).ThenInclude(v => v.BusinessRegistrations)
-            .SingleOrDefaultAsync(c => c.contract_id == validity.contract_id, ct);
 
         var slot = contract?.slot;
         var vendorName = contract?.vendor.BusinessRegistrations.FirstOrDefault()?.display_name
@@ -1546,8 +1632,10 @@ public sealed class WardComplianceService(
             }
         }
 
+        // Another ward's stall: this officer can confirm the permit but has no authority to act on
+        // it, so neither the encroachment check (an action aid) nor the case ids are handed back.
         AiEncroachmentResult? aiVision = null;
-        if (!string.IsNullOrWhiteSpace(request.InspectionPhotoUrl))
+        if (isOwnWard && !string.IsNullOrWhiteSpace(request.InspectionPhotoUrl))
         {
             aiVision = await aiService.AnalyzeInspectionPhotoAsync(
                 request.InspectionPhotoUrl,
@@ -1559,7 +1647,7 @@ public sealed class WardComplianceService(
         var scanLog = new PermitScanLog
         {
             permit_id = validity.permit_id,
-            qr_payload = raw,
+            qr_payload = scanned,
             scanned_by = actor.UserId,
             scan_context = "WARD_INSPECTION",
             scanner_role = RoleCodes.WardAuthority,
@@ -1585,11 +1673,11 @@ public sealed class WardComplianceService(
             Found: true,
             IsValid: isPermitValid,
             EffectiveStatus: validity.effective_status ?? "UNKNOWN",
-            PermitId: validity.permit_id,
-            ContractId: validity.contract_id,
-            VendorId: validity.vendor_id,
+            PermitId: isOwnWard ? validity.permit_id : null,
+            ContractId: isOwnWard ? validity.contract_id : null,
+            VendorId: isOwnWard ? validity.vendor_id : null,
             VendorName: vendorName,
-            SlotId: slot?.slot_id,
+            SlotId: isOwnWard ? slot?.slot_id : null,
             SlotCode: slot?.slot_code,
             SlotStreet: slot?.zone.zone_code ?? slot?.zone.zone_name,
             Width: slot?.width_meters,
@@ -1601,7 +1689,8 @@ public sealed class WardComplianceService(
             DistanceMeters: distanceMeters.HasValue ? Math.Round(distanceMeters.Value, 1) : null,
             IsLocationMatched: isLocationMatched,
             LocationWarning: locationWarning,
-            AiVisionResult: aiVision);
+            AiVisionResult: aiVision,
+            IsOwnWard: isOwnWard);
     }
 
     public async Task<bool> ExecutePermitActionAsync(
@@ -1644,7 +1733,7 @@ public sealed class WardComplianceService(
                 .AnyAsync(c => c.slot_id == permit.contract.slot_id
                     && c.contract_id != permit.contract.contract_id
                     && (c.contract_status == ContractStatuses.Active || c.contract_status == ContractStatuses.Suspended)
-                    && c.end_date >= DateOnly.FromDateTime(Now), ct);
+                    && c.end_date >= TodayVn, ct);
 
             if (!stillOccupied)
             {
@@ -1726,6 +1815,17 @@ public sealed class WardComplianceService(
             .Include(v => v.UserAccount)
             .Where(InWard(actor.WardId));
 
+        // Filter on the stage the list itself shows (see WardViolationListStatuses), before paging.
+        var stages = WardViolationListStatuses.Parse(status);
+        if (stages.Count > 0)
+        {
+            var wantsPending = stages.Contains(WardViolationListStatuses.PendingSanction);
+            var penaltyStatuses = stages.Where(s => s != WardViolationListStatuses.PendingSanction).ToList();
+            query = query.Where(v =>
+                (wantsPending && v.Penalty == null)
+                || (v.Penalty != null && penaltyStatuses.Contains(v.Penalty.penalty_status)));
+        }
+
         var offset = (page - 1) * 20;
         var items = await query
             .OrderByDescending(v => v.recorded_at)
@@ -1740,7 +1840,7 @@ public sealed class WardComplianceService(
                     : "Hộ kinh doanh",
                 v.violation_type,
                 v.violation_typeNavigation.description,
-                v.Penalty != null ? v.Penalty.penalty_status : "PENDING_SANCTION",
+                v.Penalty != null ? v.Penalty.penalty_status : WardViolationListStatuses.PendingSanction,
                 v.Penalty != null ? v.Penalty.amount : null,
                 v.recorded_at,
                 v.UserAccount != null ? v.UserAccount.full_name ?? "Cán bộ" : "Cán bộ tuần tra"))
@@ -1918,20 +2018,35 @@ public sealed class WardComplianceService(
             throw new WardException(400, "violation_type_inactive", "Loại vi phạm không tồn tại hoặc đã ngừng sử dụng.");
         }
 
+        // A contract names its vendor and slot. Take them from it when the request leaves them out,
+        // so the fine lands on that vendor's finance page (a record with no vendor_id is a fine no
+        // one can see or pay); refuse a request whose vendor or slot contradicts the contract.
+        var vendorId = request.VendorId;
+        var slotIdForRecord = request.SlotId;
+        if (request.ContractId is { } contractId)
+        {
+            var contract = await db.RentalContracts.AsNoTracking()
+                .Where(c => c.contract_id == contractId && c.slot.zone.ward_unit_id == actor.WardId)
+                .Select(c => new { c.vendor_id, c.slot_id })
+                .SingleOrDefaultAsync(ct)
+                ?? throw new NotFoundException("Không tìm thấy hợp đồng tại địa bàn phường của bạn.");
+            if ((vendorId is { } v && v != contract.vendor_id) || (slotIdForRecord is { } s && s != contract.slot_id))
+            {
+                throw new WardException(400, "contract_mismatch", "Hộ kinh doanh hoặc ô sạp không khớp với hợp đồng đã chọn.");
+            }
+
+            vendorId = contract.vendor_id;
+            slotIdForRecord = contract.slot_id;
+        }
+
         string? slotLocation = null;
-        if (request.SlotId is { } slotId)
+        if (slotIdForRecord is { } slotId)
         {
             slotLocation = await db.SidewalkSlots.AsNoTracking()
                 .Where(s => s.slot_id == slotId && s.zone.ward_unit_id == actor.WardId)
                 .Select(s => s.slot_code + " - " + s.zone.zone_name)
                 .SingleOrDefaultAsync(ct)
                 ?? throw new NotFoundException("Không tìm thấy ô sạp tại địa bàn phường của bạn.");
-        }
-
-        if (request.ContractId is { } contractId
-            && !await db.RentalContracts.AnyAsync(c => c.contract_id == contractId && c.slot.zone.ward_unit_id == actor.WardId, ct))
-        {
-            throw new NotFoundException("Không tìm thấy hợp đồng tại địa bàn phường của bạn.");
         }
 
         // Mẫu 01's violator identity block is frozen from the vendor's own registration at this
@@ -1943,13 +2058,13 @@ public sealed class WardComplianceService(
                 .Where(c => c.contract_id == cid)
                 .Select(c => c.application.registration)
                 .SingleOrDefaultAsync(ct)
-            : request.VendorId is { } vid
+            : vendorId is { } vid
                 ? await db.BusinessRegistrations.AsNoTracking()
                     .Where(r => r.vendor_id == vid && r.registration_status == "APPROVED")
                     .OrderByDescending(r => r.reviewed_at)
                     .FirstOrDefaultAsync(ct)
                 : null;
-        var violatorName = request.VendorId is { } vendorForName
+        var violatorName = vendorId is { } vendorForName
             ? await db.Vendors.AsNoTracking().Where(v => v.vendor_id == vendorForName)
                 .Select(v => v.user.full_name).SingleOrDefaultAsync(ct)
             : null;
@@ -1957,59 +2072,147 @@ public sealed class WardComplianceService(
         var explanationMethod = request.ExplanationRequired ? request.ExplanationMethod : null;
         var explanationDeadline = explanationMethod switch
         {
-            "DIRECT" => BusinessCalendar.StartOfDayUtc(BusinessCalendar.AddWorkingDays(TodayVn, 2)),
-            "WRITTEN" => BusinessCalendar.StartOfDayUtc(BusinessCalendar.AddWorkingDays(TodayVn, 5)),
+            "DIRECT" => BusinessCalendar.EndOfDayUtc(BusinessCalendar.AddWorkingDays(TodayVn, 2)),
+            "WRITTEN" => BusinessCalendar.EndOfDayUtc(BusinessCalendar.AddWorkingDays(TodayVn, 5)),
             _ => (DateTime?)null,
         };
 
-        var violation = new Violation
+        // WARD-19: raised from a citizen report, the record and the report's closing are one
+        // transaction, so a report is never left open beside its biên bản nor closed without one.
+        long violationId = 0;
+        await Write(async () =>
         {
-            contract_id = request.ContractId,
-            slot_id = request.SlotId,
-            vendor_id = request.VendorId,
-            violation_type = request.ViolationType,
-            description = request.Description.Trim(),
-            evidence_url = request.EvidenceUrl,
-            recorded_by = actor.UserId,
-            recorder_role = RoleCodes.WardAuthority,
-            source = "ON_SITE",
-            recorded_at = Now,
-            prepared_location = NullIfBlank(request.PreparedLocation) ?? slotLocation,
-            witness_name = NullIfBlank(request.WitnessName),
-            witness_role = request.WitnessName is not null ? request.WitnessRole : null,
-            witness_occupation = NullIfBlank(request.WitnessOccupation),
-            witness_address = NullIfBlank(request.WitnessAddress),
-            violator_full_name = violatorName,
-            violator_date_of_birth = registration?.owner_date_of_birth,
-            violator_gender = registration?.owner_gender,
-            violator_nationality = registration?.owner_nationality,
-            violator_id_number = registration?.id_number,
-            violator_id_issued_date = registration?.id_issued_date,
-            violator_id_issued_place = registration?.id_issued_place,
-            violator_address = registration?.permanent_address ?? registration?.declared_address,
-            containment_measures = NullIfBlank(request.ContainmentMeasures),
-            explanation_required = request.ExplanationRequired,
-            explanation_method = explanationMethod,
-            explanation_deadline_at = explanationDeadline,
-        };
-        db.Violations.Add(violation);
-        await db.SaveChangesAsync(ct);
+            var source = request.SourceReportId is { } reportId
+                ? await RequireReportForViolationAsync(actor, reportId, request, ct)
+                : null;
+            // The photo is opened by the vendor and other officers: it must be a file the officer
+            // uploaded, or the citizen report's own photo when the record is raised from it --
+            // never a planted link (javascript:, another host, someone else's file).
+            if (request.EvidenceUrl is { Length: > 0 } evidenceUrl
+                && !EvidenceFiles.IsOwnUpload(evidenceUrl, actor.UserId)
+                && !(source?.evidence_url is { } reportPhoto && reportPhoto == evidenceUrl && EvidenceFiles.TryParseUrl(evidenceUrl, out _, out _)))
+            {
+                throw new WardException(400, "evidence_invalid", "Ảnh hiện trường không hợp lệ; vui lòng tải ảnh lên lại.");
+            }
 
-        // Mẫu 01 "Số: .../BB-VPHC" -- only knowable once violation_id exists.
-        violation.bien_ban_so = $"{violation.violation_id:0000}/BB-VPHC-{TodayVn.Year}";
+            var violation = new Violation
+            {
+                contract_id = request.ContractId,
+                slot_id = slotIdForRecord,
+                vendor_id = vendorId,
+                violation_type = request.ViolationType,
+                description = request.Description.Trim(),
+                evidence_url = request.EvidenceUrl,
+                recorded_by = actor.UserId,
+                recorder_role = RoleCodes.WardAuthority,
+                source = source is null ? "ON_SITE" : "CUSTOMER_REPORT",
+                source_report_id = source?.report_id,
+                recorded_at = Now,
+                prepared_location = NullIfBlank(request.PreparedLocation) ?? slotLocation,
+                witness_name = NullIfBlank(request.WitnessName),
+                witness_role = request.WitnessName is not null ? request.WitnessRole : null,
+                witness_occupation = NullIfBlank(request.WitnessOccupation),
+                witness_address = NullIfBlank(request.WitnessAddress),
+                violator_full_name = violatorName,
+                violator_date_of_birth = registration?.owner_date_of_birth,
+                violator_gender = registration?.owner_gender,
+                violator_nationality = registration?.owner_nationality,
+                violator_id_number = registration?.id_number,
+                violator_id_issued_date = registration?.id_issued_date,
+                violator_id_issued_place = registration?.id_issued_place,
+                violator_address = registration?.permanent_address ?? registration?.declared_address,
+                containment_measures = NullIfBlank(request.ContainmentMeasures),
+                explanation_required = request.ExplanationRequired,
+                explanation_method = explanationMethod,
+                explanation_deadline_at = explanationDeadline,
+            };
+            db.Violations.Add(violation);
+            await SaveViolationAsync(request.SourceReportId, ct);
 
-        db.AuditLogs.Add(new AuditLog
+            // Mẫu 01 "Số: .../BB-VPHC" -- only knowable once violation_id exists.
+            violation.bien_ban_so = $"{violation.violation_id:0000}/BB-VPHC-{TodayVn.Year}";
+
+            db.AuditLogs.Add(new AuditLog
+            {
+                actor_user_id = actor.UserId,
+                action = "VIOLATION_RECORDED",
+                entity_type = "Violation",
+                entity_id = violation.violation_id,
+                details = $"Cán bộ {actor.Name} lập biên bản {violation.bien_ban_so} vi phạm hành vi {request.ViolationType}: {request.Description.Trim()}",
+                created_at = Now
+            });
+
+            if (source is not null)
+            {
+                await VendorReportRecords.CloseAsync(
+                    db, source, VendorReportResolutions.ViolationRecorded, $"Đã lập biên bản số {violation.bien_ban_so}.",
+                    refundAmount: null, actor, Now, violation.violation_id, ct);
+            }
+
+            violationId = violation.violation_id;
+        }, ct);
+
+        return await GetViolationDetailAsync(actor, violationId, ct);
+    }
+
+    /// <summary>
+    /// The report a violation is raised from: PENDING, in the officer's ward (another ward's is not
+    /// found) and about the vendor or the slot the record names. The officer still chose to record it;
+    /// nothing here is automatic (BR-41/43).
+    /// </summary>
+    private async Task<VendorReport> RequireReportForViolationAsync(
+        WardActor actor, long reportId, RecordWardViolationRequest request, CancellationToken ct)
+    {
+        if (!await VendorReportRecords.InWard(db, actor.WardId).AnyAsync(r => r.report_id == reportId, ct))
         {
-            actor_user_id = actor.UserId,
-            action = "VIOLATION_RECORDED",
-            entity_type = "Violation",
-            entity_id = violation.violation_id,
-            details = $"Cán bộ {actor.Name} lập biên bản {violation.bien_ban_so} vi phạm hành vi {request.ViolationType}: {request.Description.Trim()}",
-            created_at = Now
-        });
+            throw new NotFoundException(CommunityMessages.ReportNotFound);
+        }
 
-        await db.SaveChangesAsync(ct);
-        return await GetViolationDetailAsync(actor, violation.violation_id, ct);
+        var report = await db.VendorReports.SingleAsync(r => r.report_id == reportId, ct);
+        if (report.report_status != VendorReportStatuses.Pending)
+        {
+            throw new WardException(409, "report_closed",
+                "Phản ánh đã được xử lý; mỗi phản ánh chỉ lập được một biên bản.");
+        }
+
+        var contract = request.ContractId is { } contractId
+            ? await db.RentalContracts.AsNoTracking().Where(c => c.contract_id == contractId)
+                .Select(c => new { c.vendor_id, c.slot_id }).SingleOrDefaultAsync(ct)
+            : null;
+        var vendorId = request.VendorId ?? contract?.vendor_id;
+        var slotId = request.SlotId ?? contract?.slot_id;
+        var permitSlotId = report.scanned_permit_id is { } permitId
+            ? await db.DigitalPermits.AsNoTracking().Where(p => p.permit_id == permitId)
+                .Select(p => (long?)p.contract.slot_id).SingleOrDefaultAsync(ct)
+            : null;
+        var sameVendor = vendorId is not null && vendorId == report.vendor_id;
+        var sameSlot = slotId is not null && (slotId == report.slot_id || slotId == permitSlotId);
+        if (!sameVendor && !sameSlot)
+        {
+            throw new WardException(400, "report_mismatch",
+                "Biên bản lập từ phản ánh phải cùng người bán hoặc cùng ô với phản ánh đó.");
+        }
+
+        return report;
+    }
+
+    /// <summary>UQ_Violations_OnePerSourceReport is the last word when two officers record from one report at once.</summary>
+    private async Task SaveViolationAsync(long? sourceReportId, CancellationToken ct)
+    {
+        try
+        {
+            await db.SaveChangesAsync(ct);
+        }
+        catch (DbUpdateException) when (sourceReportId is not null)
+        {
+            if (await db.Violations.AsNoTracking().AnyAsync(v => v.source_report_id == sourceReportId, ct))
+            {
+                throw new WardException(409, "report_closed",
+                    "Phản ánh đã được xử lý; mỗi phản ánh chỉ lập được một biên bản.");
+            }
+
+            throw;
+        }
     }
 
     public async Task<WardViolationDetailDto> RecordExplanationAsync(

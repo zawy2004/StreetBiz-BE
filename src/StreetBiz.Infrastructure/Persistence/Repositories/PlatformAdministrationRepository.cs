@@ -4,15 +4,17 @@ using Microsoft.EntityFrameworkCore;
 using StreetBiz.Application.Common.Interfaces;
 using StreetBiz.Application.Common.Models;
 using StreetBiz.Application.Common.Security;
+using StreetBiz.Application.Features.Commerce;
 using StreetBiz.Infrastructure.Persistence.ScaffoldedModels;
 
 namespace StreetBiz.Infrastructure.Persistence.Repositories;
 
-public sealed class PlatformAdministrationRepository(
+public sealed partial class PlatformAdministrationRepository(
     StreetBizDbContext db,
     TimeProvider clock) : IPlatformAdministrationRepository
 {
     private const string MenuItemHidden = "HIDDEN";
+    private const string MenuItemSoldOut = "SOLD_OUT";
     private const string StorefrontPaused = "PAUSED";
     private const string PaymentSuccess = "SUCCESS";
     private const string RefundPending = "PENDING";
@@ -40,12 +42,8 @@ public sealed class PlatformAdministrationRepository(
         long actorUserId,
         CancellationToken cancellationToken)
     {
-        var strategy = db.Database.CreateExecutionStrategy();
-        var categoryId = await strategy.ExecuteAsync(async () =>
+        var categoryId = await db.ExecuteInTransactionAsync(async transaction =>
         {
-            db.ChangeTracker.Clear();
-            await using var transaction = await db.Database.BeginTransactionAsync(
-                IsolationLevel.Serializable, cancellationToken);
             if (await db.FoodCategories.AnyAsync(
                     category => category.category_name == name,
                     cancellationToken))
@@ -60,7 +58,7 @@ public sealed class PlatformAdministrationRepository(
             await db.SaveChangesAsync(cancellationToken);
             await transaction.CommitAsync(cancellationToken);
             return entity.category_id;
-        });
+        }, IsolationLevel.Serializable, cancellationToken);
 
         return categoryId.HasValue
             ? await CategoryQuery(categoryId).SingleAsync(cancellationToken)
@@ -73,12 +71,8 @@ public sealed class PlatformAdministrationRepository(
         long actorUserId,
         CancellationToken cancellationToken)
     {
-        var strategy = db.Database.CreateExecutionStrategy();
-        var updated = await strategy.ExecuteAsync(async () =>
+        var updated = await db.ExecuteInTransactionAsync(async transaction =>
         {
-            db.ChangeTracker.Clear();
-            await using var transaction = await db.Database.BeginTransactionAsync(
-                IsolationLevel.Serializable, cancellationToken);
             var category = await db.FoodCategories.SingleOrDefaultAsync(
                 row => row.category_id == categoryId, cancellationToken);
             if (category is null)
@@ -100,7 +94,7 @@ public sealed class PlatformAdministrationRepository(
             await db.SaveChangesAsync(cancellationToken);
             await transaction.CommitAsync(cancellationToken);
             return true;
-        });
+        }, IsolationLevel.Serializable, cancellationToken);
 
         return updated
             ? await CategoryQuery(categoryId).SingleAsync(cancellationToken)
@@ -112,12 +106,8 @@ public sealed class PlatformAdministrationRepository(
         long actorUserId,
         CancellationToken cancellationToken)
     {
-        var strategy = db.Database.CreateExecutionStrategy();
-        return await strategy.ExecuteAsync(async () =>
+        return await db.ExecuteInTransactionAsync(async transaction =>
         {
-            db.ChangeTracker.Clear();
-            await using var transaction = await db.Database.BeginTransactionAsync(
-                IsolationLevel.Serializable, cancellationToken);
             var category = await db.FoodCategories.SingleOrDefaultAsync(
                 row => row.category_id == categoryId, cancellationToken);
             if (category is null)
@@ -136,7 +126,7 @@ public sealed class PlatformAdministrationRepository(
             await db.SaveChangesAsync(cancellationToken);
             await transaction.CommitAsync(cancellationToken);
             return CategoryDeleteOutcome.Deleted;
-        });
+        }, IsolationLevel.Serializable, cancellationToken);
     }
 
     public async Task<PlatformPage<ReportedContentRow>> ListReportedContentAsync(
@@ -207,12 +197,8 @@ public sealed class PlatformAdministrationRepository(
         long actorUserId,
         CancellationToken cancellationToken)
     {
-        var strategy = db.Database.CreateExecutionStrategy();
-        var outcome = await strategy.ExecuteAsync(async () =>
+        var outcome = await db.ExecuteInTransactionAsync(async transaction =>
         {
-            db.ChangeTracker.Clear();
-            await using var transaction = await db.Database.BeginTransactionAsync(
-                IsolationLevel.Serializable, cancellationToken);
             var report = await db.ReportedContents.SingleOrDefaultAsync(
                 row => row.content_report_id == reportId, cancellationToken);
             if (report is null)
@@ -229,7 +215,7 @@ public sealed class PlatformAdministrationRepository(
             if (decision == ContentModerationDecisions.Hide)
             {
                 var contentOwner = await HideContentAsync(
-                    report.content_type, report.content_id, cancellationToken);
+                    report.content_type, report.content_id, actorUserId, cancellationToken);
                 if (!contentOwner.HasValue)
                 {
                     return ContentDecisionOutcome.ContentNotFound;
@@ -272,7 +258,68 @@ public sealed class PlatformAdministrationRepository(
             await db.SaveChangesAsync(cancellationToken);
             await transaction.CommitAsync(cancellationToken);
             return ContentDecisionOutcome.Updated;
-        });
+        }, IsolationLevel.Serializable, cancellationToken);
+
+        var row = outcome == ContentDecisionOutcome.Updated
+            ? await GetReportedContentAsync(reportId, cancellationToken)
+            : null;
+        return new ContentDecisionResult(outcome, row);
+    }
+
+    public async Task<ContentDecisionResult> RestoreReportedContentAsync(
+        long reportId,
+        string expectedStatus,
+        long actorUserId,
+        CancellationToken cancellationToken)
+    {
+        var outcome = await db.ExecuteInTransactionAsync(async transaction =>
+        {
+            var report = await db.ReportedContents.SingleOrDefaultAsync(
+                row => row.content_report_id == reportId, cancellationToken);
+            if (report is null)
+            {
+                return ContentDecisionOutcome.NotFound;
+            }
+
+            if (report.status != expectedStatus || report.status != ReportedContentStatuses.Hidden)
+            {
+                return ContentDecisionOutcome.Conflict;
+            }
+
+            var contentOwner = await RestoreContentAsync(
+                report.content_type, report.content_id, actorUserId, cancellationToken);
+            if (!contentOwner.HasValue)
+            {
+                return ContentDecisionOutcome.ContentNotFound;
+            }
+
+            // Every report that kept the content hidden is closed with it, otherwise a duplicate
+            // that was hidden together with this one would keep the content locked.
+            var hidden = await db.ReportedContents
+                .Where(row => row.content_type == report.content_type
+                    && row.content_id == report.content_id
+                    && row.status == ReportedContentStatuses.Hidden)
+                .ToListAsync(cancellationToken);
+            foreach (var row in hidden)
+            {
+                row.status = ReportedContentStatuses.Dismissed;
+                row.reviewed_by = actorUserId;
+                row.reviewed_at = Now;
+            }
+
+            AddNotification(
+                contentOwner.Value,
+                "CONTENT_MODERATION",
+                "Nội dung đã được khôi phục",
+                "Quản trị viên đã gỡ ẩn nội dung của bạn. Bạn có thể mở lại và chỉnh sửa như bình thường.",
+                "ReportedContent",
+                reportId);
+            Audit(actorUserId, "ADM_CONTENT_RESTORE", "ReportedContent", reportId,
+                new { report.content_type, report.content_id, expectedStatus });
+            await db.SaveChangesAsync(cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
+            return ContentDecisionOutcome.Updated;
+        }, IsolationLevel.Serializable, cancellationToken);
 
         var row = outcome == ContentDecisionOutcome.Updated
             ? await GetReportedContentAsync(reportId, cancellationToken)
@@ -357,12 +404,8 @@ public sealed class PlatformAdministrationRepository(
         long actorUserId,
         CancellationToken cancellationToken)
     {
-        var strategy = db.Database.CreateExecutionStrategy();
-        var outcome = await strategy.ExecuteAsync(async () =>
+        var outcome = await db.ExecuteInTransactionAsync(async transaction =>
         {
-            db.ChangeTracker.Clear();
-            await using var transaction = await db.Database.BeginTransactionAsync(
-                IsolationLevel.Serializable, cancellationToken);
             var complaint = await db.Complaints.SingleOrDefaultAsync(
                 row => row.complaint_id == complaintId, cancellationToken);
             if (complaint is null)
@@ -449,7 +492,7 @@ public sealed class PlatformAdministrationRepository(
             await db.SaveChangesAsync(cancellationToken);
             await transaction.CommitAsync(cancellationToken);
             return ComplaintDecisionOutcome.Updated;
-        });
+        }, IsolationLevel.Serializable, cancellationToken);
 
         var row = outcome == ComplaintDecisionOutcome.Updated
             ? await GetOrderComplaintAsync(complaintId, cancellationToken)
@@ -618,6 +661,7 @@ public sealed class PlatformAdministrationRepository(
     private async Task<long?> HideContentAsync(
         string contentType,
         long contentId,
+        long actorUserId,
         CancellationToken cancellationToken)
     {
         switch (contentType)
@@ -630,8 +674,15 @@ public sealed class PlatformAdministrationRepository(
                     return null;
                 }
 
+                // Hiding a dish takes it off the stall's price board: that is a board change (BUY-06),
+                // recorded against the moderator in the same transaction.
+                var wasListed = PriceBoardRules.IsListed(menuItem.availability_status);
                 menuItem.availability_status = MenuItemHidden;
                 menuItem.updated_at = Now;
+                if (wasListed)
+                {
+                    PriceBoards.Record(db, menuItem, PriceBoardRules.Archived, actorUserId, Now);
+                }
                 return await db.MenuItems.Where(item => item.menu_item_id == contentId)
                     .Select(item => (long?)item.storefront.registration.vendor.user_id)
                     .SingleAsync(cancellationToken);
@@ -649,6 +700,54 @@ public sealed class PlatformAdministrationRepository(
                 return await db.Storefronts.Where(item => item.storefront_id == contentId)
                     .Select(item => (long?)item.registration.vendor.user_id)
                     .SingleAsync(cancellationToken);
+
+            case ReportedContentTypes.Review:
+                return await db.Reviews.Where(review => review.review_id == contentId)
+                    .Select(review => (long?)review.customer_user_id)
+                    .SingleOrDefaultAsync(cancellationToken);
+
+            default:
+                return null;
+        }
+    }
+
+    /// <summary>
+    /// Gives hidden content back to its owner and returns the owner's user id (null when the
+    /// content is gone). A dish goes to SOLD_OUT and a storefront stays PAUSED: neither goes on
+    /// sale again until the seller says so. A review is hidden by its report alone, so it needs
+    /// no change here.
+    /// </summary>
+    private async Task<long?> RestoreContentAsync(
+        string contentType,
+        long contentId,
+        long actorUserId,
+        CancellationToken cancellationToken)
+    {
+        switch (contentType)
+        {
+            case ReportedContentTypes.MenuItem:
+                var menuItem = await db.MenuItems.SingleOrDefaultAsync(
+                    item => item.menu_item_id == contentId, cancellationToken);
+                if (menuItem is null)
+                {
+                    return null;
+                }
+
+                if (menuItem.availability_status == MenuItemHidden)
+                {
+                    menuItem.availability_status = MenuItemSoldOut;
+                    menuItem.updated_at = Now;
+                    PriceBoards.Record(db, menuItem, PriceBoardRules.Restored, actorUserId, Now);
+                }
+
+                return await db.MenuItems.Where(item => item.menu_item_id == contentId)
+                    .Select(item => (long?)item.storefront.registration.vendor.user_id)
+                    .SingleAsync(cancellationToken);
+
+            case ReportedContentTypes.Storefront:
+                return await db.Storefronts.Where(item => item.storefront_id == contentId)
+                    .Select(item => (long?)item.registration.vendor.user_id)
+                    .SingleOrDefaultAsync(cancellationToken);
 
             case ReportedContentTypes.Review:
                 return await db.Reviews.Where(review => review.review_id == contentId)

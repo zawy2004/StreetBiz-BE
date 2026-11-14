@@ -4,6 +4,8 @@ using StreetBiz.Application.Common.Exceptions;
 using StreetBiz.Application.Common.Interfaces;
 using StreetBiz.Application.Common.Security;
 using StreetBiz.Application.DTOs.Finance;
+using StreetBiz.Application.DTOs.Payments;
+using StreetBiz.Application.Features.PayoutAccounts;
 
 namespace StreetBiz.Application.Features.Finance.PayFee;
 
@@ -20,15 +22,21 @@ public sealed class PayFeeCommandValidator : AbstractValidator<PayFeeCommand>
             .Cascade(CascadeMode.Stop)
             .NotEmpty()
             .Must(value => PaymentProviders.IsValid(value.Trim().ToUpperInvariant()))
-            .WithMessage("Provider must be MOMO or ZALOPAY.");
+            .WithMessage(PaymentProviders.InvalidMessage);
         RuleFor(x => x.IdempotencyKey).NotEmpty().MaximumLength(100);
     }
 }
 
+/// <summary>
+/// FEE-01. PAYOS pays the ward that owns the slot straight into its own payOS account: the ward
+/// must have connected an ACTIVE receiving account, and only that account's webhook settles it.
+/// </summary>
 public sealed class PayFeeCommandHandler(
     IVendorContext vendorContext,
     IFinanceRepository finance,
-    IPaymentGateway paymentGateway) : IRequestHandler<PayFeeCommand, FinanceCheckoutDto>
+    IPaymentGateway paymentGateway,
+    IPayeeAccountRepository? payees = null,
+    PayeeCheckouts? payeeCheckouts = null) : IRequestHandler<PayFeeCommand, FinanceCheckoutDto>
 {
     public async Task<FinanceCheckoutDto> Handle(PayFeeCommand request, CancellationToken cancellationToken)
     {
@@ -47,22 +55,34 @@ public sealed class PayFeeCommandHandler(
             throw new DomainRuleException(FinanceMessages.ProviderNotConfigured);
         }
 
+        PayeeSummary? payee = null;
+        if (provider == PaymentProviders.PayOs)
+        {
+            payee = payees is null ? null : await payees.GetForFeeItemAsync(request.FeeItemId, cancellationToken);
+            if (payee is not { Active: true } || payeeCheckouts is null)
+            {
+                throw new DomainRuleException(FinanceMessages.WardNotAcceptingTransfers);
+            }
+        }
+
         var checkout = await finance.CreateFeeCheckoutAsync(
             vendorId, request.FeeItemId, provider, idempotencyKey, cancellationToken);
+        var gatewayRequest = new PaymentGatewayCheckoutRequest(
+            request.FeeItemId,
+            item.FeeItemPeriodLabel(),
+            checkout.TransactionId,
+            checkout.IdempotencyKey,
+            checkout.Provider,
+            checkout.Amount,
+            PaymentPurposes.RentalFee);
 
         PaymentGatewayCheckoutResult gatewayResult;
         try
         {
-            gatewayResult = await paymentGateway.CreateCheckoutAsync(
-                new PaymentGatewayCheckoutRequest(
-                    request.FeeItemId,
-                    item.FeeItemPeriodLabel(),
-                    checkout.TransactionId,
-                    checkout.IdempotencyKey,
-                    checkout.Provider,
-                    checkout.Amount,
-                    PaymentPurposes.RentalFee),
-                cancellationToken);
+            gatewayResult = payee is not null && checkout.Provider == PaymentProviders.PayOs
+                // Records the ward on the transaction, then opens (or shows again) its payOS link.
+                ? await payeeCheckouts!.OpenAsync(payee, gatewayRequest, cancellationToken)
+                : await paymentGateway.CreateCheckoutAsync(gatewayRequest, cancellationToken);
         }
         catch
         {
@@ -71,7 +91,7 @@ public sealed class PayFeeCommandHandler(
             throw;
         }
 
-        if (!string.IsNullOrWhiteSpace(gatewayResult.ProviderReference))
+        if (payee is null && !string.IsNullOrWhiteSpace(gatewayResult.ProviderReference))
         {
             await finance.SetPaymentProviderReferenceAsync(
                 checkout.TransactionId, gatewayResult.ProviderReference, cancellationToken);
@@ -83,6 +103,7 @@ public sealed class PayFeeCommandHandler(
             request.FeeItemId,
             checkout.Provider,
             checkout.Amount,
-            gatewayResult.PaymentUrl);
+            gatewayResult.PaymentUrl,
+            BankTransferDto.From(gatewayResult.BankTransfer));
     }
 }

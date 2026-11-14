@@ -11,29 +11,70 @@ namespace StreetBiz.Infrastructure.Payments;
 
 public sealed class ConfiguredPaymentGateway(
     IOptions<PaymentGatewaySettings> options,
-    IHttpClientFactory? httpClientFactory = null) : IPaymentGateway
+    IHttpClientFactory? httpClientFactory = null,
+    TimeProvider? clock = null) : IPaymentGateway
 {
     private readonly PaymentGatewaySettings settings = options.Value;
+    private readonly TimeProvider time = clock ?? TimeProvider.System;
 
     /// <summary>Real MoMo v2 is used for MOMO whenever its credentials are configured.</summary>
     private bool UsesMomo(string provider) =>
         provider == "MOMO" && settings.Momo.IsMomoConfigured && httpClientFactory is not null;
 
+    /// <summary>Real ZaloPay is used for ZALOPAY only when it is switched on and fully configured.</summary>
+    private bool UsesZaloPay(string provider) =>
+        provider == "ZALOPAY" && settings.ZaloPay.IsZaloPayConfigured && httpClientFactory is not null;
+
+    /// <summary>
+    /// payOS is used for PAYOS while it is switched on. Whether a given payee can be paid this way
+    /// (has connected an ACTIVE channel) is decided by the caller, which passes that payee's keys.
+    /// </summary>
+    private bool UsesPayOs(string provider) =>
+        provider == PaymentProviders.PayOs && settings.PayOs.Enabled && httpClientFactory is not null;
+
     public bool IsProviderAvailable(string provider) =>
         !string.IsNullOrWhiteSpace(settings.For(provider).CheckoutUrlTemplate)
         || UsesMomo(provider)
-        || settings.SandboxEnabled;
+        || UsesZaloPay(provider)
+        || UsesPayOs(provider)
+        || (settings.SandboxEnabled && provider != PaymentProviders.PayOs);
 
     public Task<PaymentGatewayCheckoutResult> CreateCheckoutAsync(
         PaymentGatewayCheckoutRequest request,
         CancellationToken cancellationToken)
     {
+        if (request.Provider == PaymentProviders.PayOs)
+        {
+            // Never simulated: a payOS payment always goes to a real (or the demo) payOS channel.
+            if (!UsesPayOs(request.Provider) || request.Payee is null)
+            {
+                throw new DomainRuleException("Payment provider PAYOS is not available for this payee.");
+            }
+
+            return PayOsGateway.CreateAsync(
+                httpClientFactory!.CreateClient(PayOsGateway.HttpClientName),
+                settings.PayOs,
+                request,
+                time.GetUtcNow(),
+                cancellationToken);
+        }
+
         if (UsesMomo(request.Provider))
         {
             return MomoGateway.CreateAsync(
                 httpClientFactory!.CreateClient(MomoGateway.HttpClientName),
                 settings.Momo,
                 request,
+                cancellationToken);
+        }
+
+        if (UsesZaloPay(request.Provider))
+        {
+            return ZaloPayGateway.CreateAsync(
+                httpClientFactory!.CreateClient(ZaloPayGateway.HttpClientName),
+                settings.ZaloPay,
+                request,
+                time.GetUtcNow(),
                 cancellationToken);
         }
 
@@ -63,13 +104,28 @@ public sealed class ConfiguredPaymentGateway(
     public Task<PaymentGatewayCallback> VerifyCallbackAsync(
         string provider,
         string rawPayload,
-        string? signature,
+        PaymentCallbackHeaders? headers,
         CancellationToken cancellationToken)
     {
+        // payOS signs with the checksum key of the channel the webhook URL belongs to. Without
+        // that channel (an unknown URL) nothing authenticates, so it is recorded as REJECTED.
+        if (provider == PaymentProviders.PayOs)
+        {
+            return Task.FromResult(PayOsGateway.VerifyWebhook(headers?.Payee, rawPayload));
+        }
+
+        var signature = headers?.Signature;
+
         // MoMo signs the IPN body itself (no signature header), in its own field layout.
         if (UsesMomo(provider) && MomoGateway.IsIpn(rawPayload))
         {
             return Task.FromResult(MomoGateway.VerifyIpn(settings.Momo, rawPayload));
+        }
+
+        // ZaloPay signs the "data" string of its callback with key2 (no signature header).
+        if (UsesZaloPay(provider) && ZaloPayGateway.IsCallback(rawPayload))
+        {
+            return Task.FromResult(ZaloPayGateway.VerifyCallback(settings.ZaloPay, rawPayload));
         }
 
         string? providerReference = null;
@@ -112,14 +168,45 @@ public sealed class ConfiguredPaymentGateway(
     public async Task<PaymentGatewayCallback?> QueryPaymentAsync(
         string provider,
         string providerReference,
-        CancellationToken cancellationToken) =>
-        UsesMomo(provider)
-            ? await MomoGateway.QueryAsync(
+        CancellationToken cancellationToken)
+    {
+        if (UsesMomo(provider))
+        {
+            return await MomoGateway.QueryAsync(
                 httpClientFactory!.CreateClient(MomoGateway.HttpClientName),
                 settings.Momo,
                 providerReference,
+                cancellationToken);
+        }
+
+        if (UsesZaloPay(provider))
+        {
+            return await ZaloPayGateway.QueryAsync(
+                httpClientFactory!.CreateClient(ZaloPayGateway.HttpClientName),
+                settings.ZaloPay,
+                providerReference,
+                cancellationToken);
+        }
+
+        return null;
+    }
+
+    public async Task<PaymentGatewayCallback?> QueryPaymentAsync(
+        string provider,
+        string providerReference,
+        PayeeCredentials payee,
+        CancellationToken cancellationToken) =>
+        UsesPayOs(provider)
+            ? await PayOsGateway.QueryAsync(
+                httpClientFactory!.CreateClient(PayOsGateway.HttpClientName),
+                settings.PayOs,
+                payee,
+                providerReference,
                 cancellationToken)
-            : null;
+            : await QueryPaymentAsync(provider, providerReference, cancellationToken);
+
+    public BankTransferInstructions? DescribeStoredCheckout(string provider, string? checkoutPayload, decimal amount) =>
+        provider == PaymentProviders.PayOs ? PayOsGateway.DescribeStored(checkoutPayload, time.GetUtcNow()) : null;
 
     private static string? Text(JsonElement root, string name) =>
         root.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String

@@ -40,6 +40,15 @@ public static partial class EvidenceFiles
 
     public static string StoragePath(long ownerUserId, string fileName) => $"evidence/{ownerUserId}/{fileName}";
 
+    /// <summary>
+    /// True only for a file <paramref name="userId"/> uploaded through POST /api/uploads/evidence.
+    /// Every user-supplied evidence or photo URL must pass this before it is stored: anything else
+    /// (a <c>javascript:</c> link, another host, someone else's file) would later be opened or
+    /// fetched -- with the viewer's token -- by the officer who reviews it.
+    /// </summary>
+    public static bool IsOwnUpload(string? url, long userId) =>
+        TryParseUrl(url, out var ownerUserId, out _) && ownerUserId == userId;
+
     /// <summary>Parses a URL produced by <see cref="BuildUrl"/>; anything else is rejected.</summary>
     public static bool TryParseUrl(string? url, out long ownerUserId, out string fileName)
     {

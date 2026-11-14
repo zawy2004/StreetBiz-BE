@@ -1,0 +1,145 @@
+name: Deploy API to VPS
+
+# Push to main: test, build the image, push it to GHCR, then deploy it on the VPS over SSH.
+# Run by hand with an image tag to redeploy an earlier build (rollback) without rebuilding.
+# Setup (secrets, server, DNS): docs/deploy-vps.md.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: 'Redeploy this existing image tag (a commit SHA). Leave empty to build the current commit.'
+        required: false
+        default: ''
+
+env:
+  IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/streetbiz-api
+  DOTNET_VERSION: 8.0.x
+  # Where deploy/vps lives on the server.
+  VPS_PATH: ${{ vars.VPS_PATH || '/opt/streetbiz' }}
+
+# Never two deploys at once.
+concurrency:
+  group: deploy-vps
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    if: ${{ inputs.image_tag == '' }}
+    runs-on: ubuntu-latest
+    steps:
+      # Fail in seconds, not after the image is built and pushed.
+      - name: Check deploy settings
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+          VPS_KNOWN_HOSTS: ${{ secrets.VPS_KNOWN_HOSTS }}
+        run: |
+          for name in VPS_HOST VPS_USER VPS_SSH_KEY VPS_KNOWN_HOSTS; do
+            if [ -z "${!name}" ]; then echo "::error::Set the $name secret (docs/deploy-vps.md)."; exit 1; fi
+          done
+
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Test
+        run: dotnet test StreetBiz.Backend.sln -c Release
+
+  build:
+    needs: test
+    if: ${{ inputs.image_tag == '' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Tagged by commit SHA so the server always runs exactly this build, never a moving "latest".
+      - name: Build and push image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          tags: |
+            ${{ env.IMAGE_NAME }}:${{ github.sha }}
+            ${{ env.IMAGE_NAME }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  deploy:
+    needs: [test, build]
+    # Runs after a successful build, or straight away for a manual redeploy of an existing tag.
+    if: ${{ always() && (inputs.image_tag != '' || (needs.test.result == 'success' && needs.build.result == 'success')) }}
+    runs-on: ubuntu-latest
+    environment: production
+    permissions:
+      contents: read
+      packages: read
+    env:
+      TAG: ${{ inputs.image_tag != '' && inputs.image_tag || github.sha }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: SSH key and pinned host key
+        env:
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+          VPS_KNOWN_HOSTS: ${{ secrets.VPS_KNOWN_HOSTS }}
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$VPS_SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          printf '%s\n' "$VPS_KNOWN_HOSTS" > ~/.ssh/known_hosts
+
+      # The server copy of deploy/vps and db/*.sql always matches the commit being deployed.
+      # .env, api.env and backups/ on the server are never touched.
+      - name: Copy deploy files
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_PORT: ${{ secrets.VPS_PORT || '22' }}
+        run: |
+          key="$HOME/.ssh/deploy_key"
+          ssh -i "$key" -p "$VPS_PORT" -o StrictHostKeyChecking=yes "$VPS_USER@$VPS_HOST" "mkdir -p '$VPS_PATH/db'"
+          scp -i "$key" -P "$VPS_PORT" -o StrictHostKeyChecking=yes \
+            deploy/vps/docker-compose.prod.yml deploy/vps/Caddyfile \
+            deploy/vps/deploy.sh deploy/vps/backup.sh deploy/vps/init-db.sh \
+            deploy/vps/.env.example deploy/vps/api.env.example \
+            "$VPS_USER@$VPS_HOST:$VPS_PATH/"
+          scp -i "$key" -P "$VPS_PORT" -o StrictHostKeyChecking=yes db/*.sql "$VPS_USER@$VPS_HOST:$VPS_PATH/db/"
+
+      # The job's own GITHUB_TOKEN (read:packages) lets the server pull the private image. It goes
+      # over stdin (never on a command line other users could see) and is logged out afterwards
+      # even when the deploy fails; it also expires with the job.
+      - name: Deploy on the VPS
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_PORT: ${{ secrets.VPS_PORT || '22' }}
+          REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REGISTRY_USER: ${{ github.actor }}
+        run: |
+          key="$HOME/.ssh/deploy_key"
+          remote() { ssh -i "$key" -p "$VPS_PORT" -o StrictHostKeyChecking=yes "$VPS_USER@$VPS_HOST" "$@"; }
+          printf '%s' "$REGISTRY_TOKEN" | remote "docker login ghcr.io -u '$REGISTRY_USER' --password-stdin >/dev/null"
+          status=0
+          remote "cd '$VPS_PATH' && chmod +x deploy.sh backup.sh init-db.sh && ./deploy.sh '$TAG'" || status=$?
+          remote "docker logout ghcr.io >/dev/null" || true
+          exit "$status"

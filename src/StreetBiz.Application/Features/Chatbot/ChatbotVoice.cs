@@ -37,7 +37,9 @@ public sealed record ChatbotVoiceUsage(ChatbotUsage Usage) : ChatbotVoiceEvent;
 /// <summary>Provider handle that lets a dropped upstream connection continue the same conversation.</summary>
 public sealed record ChatbotVoiceResumeHandle(string Handle) : ChatbotVoiceEvent;
 
-public sealed record ChatbotVoiceSetup(string SystemPrompt, IReadOnlyList<ChatbotToolDefinition> Tools);
+/// <param name="BlockingTools">The model waits for each tool result before it speaks again (X01 voice
+/// registration: the next question comes from the server). Off for the chatbot, which may talk while it looks up.</param>
+public sealed record ChatbotVoiceSetup(string SystemPrompt, IReadOnlyList<ChatbotToolDefinition> Tools, bool BlockingTools = false);
 
 /// <summary>Replaceable speech-to-speech adapter. Credentials and model choice never leave the server.</summary>
 public interface IChatbotVoiceProvider
@@ -53,12 +55,15 @@ public interface IChatbotVoiceUpstream : IAsyncDisposable
     Task SendAudioAsync(ReadOnlyMemory<byte> pcm16k, CancellationToken ct);
     Task SendAudioEndAsync(CancellationToken ct);
     Task SendToolResponsesAsync(IReadOnlyList<ChatbotToolReply> replies, CancellationToken ct);
+    /// <summary>A complete text turn from the server side (not the user's speech); the model answers it like a spoken turn.</summary>
+    Task SendTextAsync(string text, CancellationToken ct);
     IAsyncEnumerable<ChatbotVoiceEvent> EventsAsync(CancellationToken ct);
 }
 
 public abstract record ChatbotVoiceClientFrame;
 public sealed record ChatbotVoiceClientAudio(ReadOnlyMemory<byte> Pcm) : ChatbotVoiceClientFrame;
-public sealed record ChatbotVoiceClientControl(string Type, bool? Muted = null) : ChatbotVoiceClientFrame;
+/// <param name="Json">The whole control message, kept only for types that carry data (X01 "draft", "text").</param>
+public sealed record ChatbotVoiceClientControl(string Type, bool? Muted = null, string? Json = null) : ChatbotVoiceClientFrame;
 
 /// <summary>The browser side of a session. Implementations serialize concurrent sends.</summary>
 public interface IChatbotVoiceClient
@@ -102,6 +107,11 @@ public sealed class ChatbotVoiceSessions(ChatbotVoiceSettings settings, TimeProv
         var expected = Encoding.ASCII.GetBytes(ticket.Secret);
         var given = Encoding.ASCII.GetBytes(secret);
         return expected.Length == given.Length && CryptographicOperations.FixedTimeEquals(expected, given) ? ticket : null;
+    }
+
+    public bool InSession(long userId)
+    {
+        lock (gate) return active.Contains(userId);
     }
 
     public IDisposable Enter(ChatbotActor actor)

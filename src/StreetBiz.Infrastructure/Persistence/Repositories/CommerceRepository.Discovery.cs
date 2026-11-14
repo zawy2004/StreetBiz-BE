@@ -14,7 +14,7 @@ public sealed partial class CommerceRepository
     /// approved registration, contract active and inside its dates) and, on top of that, an active vendor account.
     /// Listing and ordering share that one rule, so a customer is never shown a storefront that then refuses the order.
     /// </summary>
-    private IQueryable<Storefront> PublicStorefronts() =>
+    public IQueryable<Storefront> PublicStorefronts() =>
         EligibleStores().AsNoTracking().Where(storefront =>
             storefront.contract.vendor.user.account_status == AccountStatuses.Active);
 
@@ -23,6 +23,12 @@ public sealed partial class CommerceRepository
     /// accent-insensitively on SQL Server. SQLite, used only by tests, has no such collation and keeps a plain comparison.
     /// </summary>
     private string TextCollation => db.Database.IsSqlServer() ? "Latin1_General_100_CI_AI" : "BINARY";
+
+    /// <summary>Vendors whose community rating (the figure shown on a storefront card) is at least <paramref name="minRating"/>.</summary>
+    private IQueryable<long> RatedAtLeast(decimal minRating) =>
+        db.vw_VendorRatings.AsNoTracking()
+            .Where(rating => rating.community_rating >= minRating)
+            .Select(rating => rating.vendor_id);
 
     private IQueryable<Storefront> StorefrontsWhere(int? wardId, MarketplaceOpenAt? openAt)
     {
@@ -71,6 +77,12 @@ public sealed partial class CommerceRepository
                 EF.Functions.Collate(storefront.storefront_name, collation).Contains(query)
                 || EF.Functions.Collate(storefront.description!, collation).Contains(query)
                 || itemHits.Contains(storefront.storefront_id));
+        }
+
+        if (filter.MinRating is { } minRating)
+        {
+            storefronts = storefronts.Where(storefront => RatedAtLeast(minRating)
+                .Contains(storefront.registration.vendor_id));
         }
 
         if (filter.Area is { } area)

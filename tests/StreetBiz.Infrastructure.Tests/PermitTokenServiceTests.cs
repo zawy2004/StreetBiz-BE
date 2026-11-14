@@ -35,6 +35,28 @@ public sealed class PermitTokenServiceTests
     }
 
     [Fact]
+    public void A_printed_link_carries_the_signed_token_and_tampering_inside_it_is_caught()
+    {
+        // Section 3 rule 2: the /q/ link only wraps the SBP1 token; it adds no code of its own.
+        var token = service.Create(42, DateTime.UtcNow);
+        var links = new PermitLinks(Options.Create(new PermitSettings { PublicScanBaseUrl = "http://192.168.1.5:5173/" }));
+        var link = links.ScanUrl(token, 3)!;
+
+        link.Should().Be($"http://192.168.1.5:5173/q/{token}?v=3");
+        service.TryParse(StreetBiz.Application.Common.Security.PermitQrText.ExtractToken(link), out var claims).Should().BeTrue();
+        claims.ContractId.Should().Be(42);
+
+        var payload = token.Split('.')[1];
+        var flipped = payload[..^1] + (payload[^1] == 'A' ? 'B' : 'A');
+        var tampered = link.Replace(payload, flipped, StringComparison.Ordinal);
+        service.TryParse(StreetBiz.Application.Common.Security.PermitQrText.ExtractToken(tampered), out _).Should().BeFalse();
+        // Nor can a sequential contract id stand in for the token.
+        service.TryParse(StreetBiz.Application.Common.Security.PermitQrText.ExtractToken("http://192.168.1.5:5173/q/42"), out _)
+            .Should().BeFalse();
+        new PermitLinks(Options.Create(new PermitSettings())).ScanUrl(token).Should().BeNull();
+    }
+
+    [Fact]
     public void A_token_with_a_tampered_signature_is_rejected()
     {
         var token = service.Create(42, DateTime.UtcNow);

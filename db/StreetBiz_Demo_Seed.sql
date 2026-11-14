@@ -66,13 +66,13 @@ BEGIN
         -- Ward officers (WARD-xx, REG-06). scripts/e2e-auth-onboarding.sh signs in as the first.
         ( 2, '0983000001', '$2a$12$Zi2yzfahgQFN8mvwwJyNr.wud3D8giLWQA7E7qXWeuILXQ0K2qvTm',
              N'Nguyễn Thị Hồng Vân', 'WARD_AUTHORITY', 10, 'ACTIVE', SYSUTCDATETIME(),
-             N'Chủ tịch UBND Phường Hải Châu 1'),
+             N'Chủ tịch UBND Phường Hải Châu'),
         ( 3, '0983000002', '$2a$12$vY2IB4IXX7MGXwtZ1H0AkuJpjTTo6AUZJuLtPdBzVmQHu89gqdjMO',
              N'Trần Quốc Bảo',       'WARD_AUTHORITY', 11, 'ACTIVE', SYSUTCDATETIME(),
-             N'Chủ tịch UBND Phường Thanh Khê Đông'),
+             N'Chủ tịch UBND Phường Thanh Khê'),
         ( 4, '0983000003', '$2a$12$kZXarpH37Bj0GR.rPlbvneEH0wrgAlJ/wZkClm.eF3eMmH2GwL0Fq',
              N'Lê Thị Minh Thu',     'WARD_AUTHORITY', 12, 'ACTIVE', SYSUTCDATETIME(),
-             N'Chủ tịch UBND Phường An Hải Bắc'),
+             N'Chủ tịch UBND Phường An Hải'),
 
         -- Vendors (REG-xx, SIDE-xx). Each carries a different registration scenario.
         ( 5, '0905000101', '$2a$12$mUw/sNqNV5nanEk0.nVzeuXkFfbMefF568bBRklyTeaUoBCrBeVt.',
@@ -161,10 +161,11 @@ BEGIN
 END;
 GO
 
--- WARD-03 / WARD-12: the five legal-citation violation types, priced per ward with the
+-- WARD-03 / WARD-12: the seven legal-citation violation types, priced per ward with the
 -- Nghi dinh they come from (PenaltyFeeSchedules.legal_basis). AI only classifies a
 -- violation onto one of these codes and drafts wording from legal_basis; it never
--- invents a citation. Amounts sit inside the statutory range quoted in each row.
+-- invents a citation. Each amount is the midpoint of the statutory bracket quoted in its
+-- row (Luật XLVPHC Điều 23 khoản 4), which the officer may move within the bracket.
 IF NOT EXISTS (SELECT 1 FROM PenaltyFeeSchedules WHERE violation_type = 'UNAUTHORIZED_BUSINESS_USE')
 BEGIN
     INSERT INTO PenaltyFeeSchedules (ward_unit_id, violation_type, penalty_amount, legal_basis, created_by)
@@ -180,7 +181,13 @@ BEGIN
         ('HYGIENE_LITTERING',         CAST(1500000 AS DECIMAL(18,0)),
             N'Nghị định 45/2022/NĐ-CP: vứt, thải, để rác thải sinh hoạt trên vỉa hè, lòng đường (khung 1.000.000 - 2.000.000đ)'),
         ('OBSTRUCT_PUBLIC_ORDER',     CAST(4000000 AS DECIMAL(18,0)),
-            N'Nghị định 144/2021/NĐ-CP: đổ rác, vật cản gây mất an ninh trật tự công cộng (khung 3.000.000 - 5.000.000đ)')
+            N'Nghị định 144/2021/NĐ-CP: đổ rác, vật cản gây mất an ninh trật tự công cộng (khung 3.000.000 - 5.000.000đ)'),
+        -- BUY-07 price complaints. Amounts are for an individual (Điều 3 khoản 4: an organisation
+        -- pays double); Nghị định 114/2026/NĐ-CP changed who may fine, not Điều 13.
+        ('PRICE_NOT_POSTED',          CAST(750000 AS DECIMAL(18,0)),
+            N'Nghị định 87/2024/NĐ-CP, Điều 13, khoản 1, điểm a: không niêm yết giá hàng hóa, dịch vụ bằng một trong các hình thức theo quy định của pháp luật; buộc niêm yết giá theo đúng quy định (khoản 4 điểm a) (khung 500.000 - 1.000.000đ)'),
+        ('PRICE_ABOVE_POSTED',        CAST(7500000 AS DECIMAL(18,0)),
+            N'Nghị định 87/2024/NĐ-CP, Điều 13, khoản 2: bán cao hơn giá niêm yết hàng hóa, dịch vụ do tổ chức, cá nhân định giá; buộc trả lại cho khách hàng số tiền đã thu cao hơn giá niêm yết (khoản 4 điểm b) (khung 5.000.000 - 10.000.000đ)')
     ) AS v(violation_type_code, amount, legal_basis);
 END;
 GO
@@ -191,8 +198,8 @@ GO
 /* ============================================================
    3. PRICING ZONES, SLOTS AND STREET CONTEXT
    The Nguyễn Văn Linh pilot corridor:
-   NVL-01..10 walk a 15 m pitch starting at 50 Nguyễn Văn Linh (Nam Dương,
-   Hải Châu -- geocoded), matching the zone's own segment_from "Nút giao
+   NVL-01..10 walk a 15 m pitch starting at 50 Nguyễn Văn Linh (phường Hải
+   Châu, formerly Nam Dương -- geocoded), matching the zone's own segment_from "Nút giao
    Hoàng Diệu"; NVL-11..20 mirror them 38 m across to the far carriageway.
    Keeping the geometry means the street-strip diagram and its straightness
    check still work. The other three zones' 1-2 slots each anchor at a
@@ -347,7 +354,7 @@ BEGIN
     VALUES
         -- APPROVED, with a contract, permit, fees and a storefront underneath it.
         (1, 1, 'FIXED_STOREFRONT', N'Bánh mì & Xôi Cô Lan',
-            N'123 Nguyễn Văn Linh, Phường Hải Châu 1, Đà Nẵng', 16.060935, 108.217760, 10,
+            N'123 Nguyễn Văn Linh, Phường Hải Châu, Đà Nẵng', 16.060935, 108.217760, 10,
             'APPROVED', 0, 2, N'Hồ sơ đầy đủ, vị trí phù hợp quy hoạch vỉa hè.',
             DATEADD(DAY, -28, SYSUTCDATETIME()), DATEADD(DAY, -32, SYSUTCDATETIME())),
 
@@ -358,7 +365,7 @@ BEGIN
         -- SUBMITTED with NO evidence: BR-07 blocks approval, so the ward sees the
         -- blocker banner and only REVIEW/REJECT/REQUEST_INFO.
         (3, 3, 'FIXED_STOREFRONT', N'Quán chè Đỗ Mai',
-            N'88 Điện Biên Phủ, Phường Thanh Khê Đông, Đà Nẵng', 16.066229, 108.205945, 11,
+            N'88 Điện Biên Phủ, Phường Thanh Khê, Đà Nẵng', 16.066229, 108.205945, 11,
             'SUBMITTED', 1, NULL, NULL, NULL, DATEADD(DAY, -1, SYSUTCDATETIME())),
 
         -- UNDER_REVIEW: an officer has claimed the case.
@@ -374,7 +381,7 @@ BEGIN
 
         -- REJECTED.
         (6, 4, 'FIXED_STOREFRONT', N'Quầy cà phê vỉa hè',
-            N'12 Bạch Đằng, Phường Hải Châu 1, Đà Nẵng', 16.070200, 108.224100, 10,
+            N'12 Bạch Đằng, Phường Hải Châu, Đà Nẵng', 16.070200, 108.224100, 10,
             'REJECTED', 0, 2,
             N'Vị trí đăng ký nằm trong hành lang an toàn giao thông, không thuộc khu vực được phép kinh doanh.',
             DATEADD(DAY, -14, SYSUTCDATETIME()), DATEADD(DAY, -18, SYSUTCDATETIME())),
@@ -389,7 +396,7 @@ BEGIN
 
         -- A second APPROVED registration for vendor 1 (BR-06 allows several).
         (9, 1, 'FIXED_STOREFRONT', N'Bún chả Hải Châu',
-            N'45 Nguyễn Văn Linh, Phường Hải Châu 1, Đà Nẵng', 16.061026, 108.218740, 10,
+            N'45 Nguyễn Văn Linh, Phường Hải Châu, Đà Nẵng', 16.061026, 108.218740, 10,
             'APPROVED', 0, 2, N'Đủ điều kiện kinh doanh cố định trên vỉa hè.',
             DATEADD(DAY, -11, SYSUTCDATETIME()), DATEADD(DAY, -15, SYSUTCDATETIME()));
 
@@ -500,8 +507,10 @@ END;
 GO
 
 /* SIDE-08 permits. qr_payload is a placeholder, NOT a real IPermitTokenService
-   token -- scanning one of these will not verify. Re-issue through the API when
-   testing WARD-11 / BUY-02 scan flows. */
+   token: a real one is signed with Permit:SigningKey, which differs per machine.
+   scripts/setup-local-db.ps1 signs these with the local key right after the seed
+   (dotnet run -- --sign-demo-permits); run on its own, the seed leaves them
+   unscannable. */
 IF NOT EXISTS (SELECT 1 FROM DigitalPermits)
 BEGIN
     SET IDENTITY_INSERT DigitalPermits ON;
@@ -665,25 +674,77 @@ BEGIN
 END;
 GO
 
+-- Each dish carries its real unit of sale (BUY-06). Bún chả Hải Châu serves tourists, so its
+-- vendor also typed English names; Cô Lan left them empty (optional, D8). Dishes date from
+-- their storefront's opening, so the price history below starts there too.
 IF NOT EXISTS (SELECT 1 FROM MenuItems)
 BEGIN
     SET IDENTITY_INSERT MenuItems ON;
-    INSERT INTO MenuItems (menu_item_id, storefront_id, category_id, item_name, description, unit_price, availability_status) VALUES
-        ( 1, 1, 3, N'Bánh mì thịt nướng', N'Bánh mì giòn, thịt nướng than hoa, rau thơm.', 25000, 'AVAILABLE'),
-        ( 2, 1, 3, N'Bánh mì chả cá',     N'Chả cá chiên nóng, sốt đặc biệt.',             25000, 'AVAILABLE'),
-        ( 3, 1, 3, N'Xôi gà xé',          N'Xôi nếp dẻo, gà xé phay, hành phi.',           30000, 'AVAILABLE'),
-        ( 4, 1, 3, N'Xôi xéo',            N'Xôi đậu xanh, mỡ hành, chà bông.',             25000, 'AVAILABLE'),
-        ( 5, 1, 4, N'Sữa đậu nành',       N'Sữa đậu nành nóng, không đường.',              10000, 'AVAILABLE'),
+    INSERT INTO MenuItems
+        (menu_item_id, storefront_id, category_id, item_name, item_name_en, description, unit_price, price_unit,
+         availability_status, created_at, updated_at)
+    VALUES
+        ( 1, 1, 3, N'Bánh mì thịt nướng', NULL, N'Bánh mì giòn, thịt nướng than hoa, rau thơm.', 25000, N'ổ',
+            'AVAILABLE', DATEADD(DAY, -28, SYSUTCDATETIME()), NULL),
+        ( 2, 1, 3, N'Bánh mì chả cá',     NULL, N'Chả cá chiên nóng, sốt đặc biệt.',             25000, N'ổ',
+            'AVAILABLE', DATEADD(DAY, -28, SYSUTCDATETIME()), NULL),
+        ( 3, 1, 3, N'Xôi gà xé',          NULL, N'Xôi nếp dẻo, gà xé phay, hành phi.',           30000, N'gói',
+            'AVAILABLE', DATEADD(DAY, -28, SYSUTCDATETIME()), NULL),
+        ( 4, 1, 3, N'Xôi xéo',            NULL, N'Xôi đậu xanh, mỡ hành, chà bông.',             25000, N'gói',
+            'AVAILABLE', DATEADD(DAY, -28, SYSUTCDATETIME()), NULL),
+        ( 5, 1, 4, N'Sữa đậu nành',       NULL, N'Sữa đậu nành nóng, không đường.',              10000, N'ly',
+            'AVAILABLE', DATEADD(DAY, -28, SYSUTCDATETIME()), NULL),
         -- Archived: a stall sells at most 5 dishes (MenuRules.MaxActiveItemsPerStorefront).
-        ( 6, 1, 4, N'Cà phê sữa đá',      N'Cà phê phin truyền thống.',                    18000, 'ARCHIVED'),
+        ( 6, 1, 4, N'Cà phê sữa đá',      NULL, N'Cà phê phin truyền thống.',                    18000, N'ly',
+            'ARCHIVED',  DATEADD(DAY, -28, SYSUTCDATETIME()), DATEADD(DAY, -14, SYSUTCDATETIME())),
 
-        ( 7, 2, 2, N'Bún chả Hà Nội',     N'Chả miếng, chả viên nướng than, nước mắm chua ngọt.', 45000, 'AVAILABLE'),
-        ( 8, 2, 2, N'Bún chả đặc biệt',   N'Thêm nem cua bể và chả viên.',                 65000, 'AVAILABLE'),
-        ( 9, 2, 5, N'Nem cua bể',         N'Nem vuông nhân cua bể, chiên giòn (2 cái).',   30000, 'AVAILABLE'),
-        (10, 2, 4, N'Trà đá',             N'Trà xanh đá, miễn phí khi ăn tại chỗ.',         3000, 'AVAILABLE'),
-        (11, 2, 4, N'Nước sâm',           N'Nước sâm lạnh nấu thủ công.',                 12000, 'ARCHIVED'),
-        (12, 2, 6, N'Chè đỗ đen',         N'Chè đỗ đen nước cốt dừa.',                     20000, 'AVAILABLE');
+        ( 7, 2, 2, N'Bún chả Hà Nội',     N'Hanoi grilled pork with noodles',
+            N'Chả miếng, chả viên nướng than, nước mắm chua ngọt.', 45000, N'suất',
+            'AVAILABLE', DATEADD(DAY, -10, SYSUTCDATETIME()), NULL),
+        ( 8, 2, 2, N'Bún chả đặc biệt',   N'Special grilled pork noodles',
+            N'Thêm nem cua bể và chả viên.',                 65000, N'suất',
+            'AVAILABLE', DATEADD(DAY, -10, SYSUTCDATETIME()), NULL),
+        ( 9, 2, 5, N'Nem cua bể',         N'Crab spring rolls (2 pieces)',
+            N'Nem vuông nhân cua bể, chiên giòn (2 cái).',   30000, N'đĩa',
+            'AVAILABLE', DATEADD(DAY, -10, SYSUTCDATETIME()), NULL),
+        (10, 2, 4, N'Trà đá',             N'Iced tea',
+            N'Trà xanh đá, miễn phí khi ăn tại chỗ.',         3000, N'ly',
+            'AVAILABLE', DATEADD(DAY, -10, SYSUTCDATETIME()), NULL),
+        (11, 2, 4, N'Nước sâm',           N'Herbal cooling drink',
+            N'Nước sâm lạnh nấu thủ công.',                 12000, N'ly',
+            'ARCHIVED',  DATEADD(DAY, -10, SYSUTCDATETIME()), DATEADD(DAY, -3, SYSUTCDATETIME())),
+        (12, 2, 6, N'Chè đỗ đen',         N'Black bean sweet soup',
+            N'Chè đỗ đen nước cốt dừa.',                     20000, N'ly',
+            'AVAILABLE', DATEADD(DAY, -10, SYSUTCDATETIME()), NULL);
     SET IDENTITY_INSERT MenuItems OFF;
+END;
+GO
+
+-- BUY-06 price history: one CREATED row per dish, written by the stall's vendor (vendor 1,
+-- account 5, owns both storefronts) when the dish was added; the two archived dishes also carry
+-- the ARCHIVED row that took them off the board, so the latest row of every dish matches the
+-- dish as it stands. Ids are pinned: history row n is dish n's CREATED row (13 and 14 are the
+-- archivals), and report 4 below points at row 7. Each board is therefore at "bản số 7".
+IF NOT EXISTS (SELECT 1 FROM MenuItemPriceHistory)
+BEGIN
+    SET IDENTITY_INSERT MenuItemPriceHistory ON;
+    INSERT INTO MenuItemPriceHistory
+        (price_history_id, menu_item_id, storefront_id, item_name, item_name_en, price_unit, unit_price,
+         is_listed, change_kind, changed_by, changed_at)
+    SELECT m.menu_item_id, m.menu_item_id, m.storefront_id, m.item_name, m.item_name_en, m.price_unit, m.unit_price,
+           1, 'CREATED', 5, m.created_at
+    FROM MenuItems m
+    WHERE m.menu_item_id BETWEEN 1 AND 12;
+
+    INSERT INTO MenuItemPriceHistory
+        (price_history_id, menu_item_id, storefront_id, item_name, item_name_en, price_unit, unit_price,
+         is_listed, change_kind, changed_by, changed_at)
+    SELECT v.price_history_id, m.menu_item_id, m.storefront_id, m.item_name, m.item_name_en, m.price_unit, m.unit_price,
+           0, 'ARCHIVED', 5, m.updated_at
+    FROM (VALUES (CAST(13 AS BIGINT), CAST(6 AS BIGINT)), (CAST(14 AS BIGINT), CAST(11 AS BIGINT)))
+        AS v(price_history_id, menu_item_id)
+    JOIN MenuItems m ON m.menu_item_id = v.menu_item_id;
+    SET IDENTITY_INSERT MenuItemPriceHistory OFF;
 END;
 GO
 
@@ -901,9 +962,9 @@ BEGIN
          released_contract_id, requested_new_slot_id, change_status, conflict_resolution_note,
          reviewed_by, reviewed_at, created_at)
     VALUES
-        (1, 1, N'200 Hoàng Diệu, Phường Hải Châu 1, Đà Nẵng', 16.059417, 108.217017,
+        (1, 1, N'200 Hoàng Diệu, Phường Hải Châu, Đà Nẵng', 16.059417, 108.217017,
             1, 21, 'PENDING', NULL, NULL, NULL, DATEADD(DAY, -2, SYSUTCDATETIME())),
-        (2, 9, N'204 Hoàng Diệu, Phường Hải Châu 1, Đà Nẵng', 16.059437, 108.217047,
+        (2, 9, N'204 Hoàng Diệu, Phường Hải Châu, Đà Nẵng', 16.059437, 108.217047,
             2, 21, 'UNDER_REVIEW', N'Xếp hàng chờ theo thứ tự nộp hồ sơ, ưu tiên hồ sơ nộp trước.',
             2, DATEADD(DAY, -1, SYSUTCDATETIME()), DATEADD(DAY, -1, SYSUTCDATETIME()));
     SET IDENTITY_INSERT AddressChangeRequests OFF;
@@ -918,20 +979,51 @@ GO
    report. Fictional data throughout.
    ============================================================ */
 
--- Customer and community reports (BUY-05). Report 2 became violation 4.
+-- Customer and community reports (BUY-05, BUY-07, WARD-19): one of each kind the ward inbox
+-- shows. Officer 2 (ward 10) handles them all.
+--   1: PENDING, GENERAL, past its handling target (the "quá hạn" filter has a row)
+--   2: REVIEWED / VIOLATION_RECORDED: violation 4 below was raised from it (source_report_id 2)
+--   3: DISMISSED, with the reason the reporter reads
+--   4: PENDING OVERCHARGE with full price evidence: 2 suất Bún chả Hà Nội posted at 45.000đ
+--      (price history row 7, in force at purchase) = 90.000đ, charged 120.000đ
+--   5: REVIEWED / MEDIATED OVERCHARGE: the vendor refunded the 20.000đ difference at the stall
+-- due_at is the end (UTC+7) of a Vietnamese day about 7 working days after the report: the API
+-- computes it from BusinessCalendar; here it is written as calendar days so the seed has no
+-- holiday table to consult. At most one PENDING report per reporter and vendor
+-- (UQ_VendorReports_OnePendingPerReporter): 1 is customer 9's, 4 is customer 10's.
 IF NOT EXISTS (SELECT 1 FROM VendorReports)
 BEGIN
+    DECLARE @todayVn DATE = CAST(SWITCHOFFSET(SYSDATETIMEOFFSET(), '+07:00') AS DATE);
     SET IDENTITY_INSERT VendorReports ON;
     INSERT INTO VendorReports
         (report_id, reporter_user_id, vendor_id, slot_id, scanned_permit_id, report_reason,
-         report_status, reviewed_by, reviewed_at, created_at)
+         report_status, reviewed_by, reviewed_at, created_at,
+         report_type, menu_item_id, price_history_id, quantity, posted_amount, charged_amount, purchased_at,
+         due_at, resolution, resolution_note, refund_amount)
     VALUES
         (1, 9,  1,  NULL, NULL, N'Ô bày hàng lấn ra lối đi bộ vào giờ cao điểm buổi sáng.',
-            'PENDING', NULL, NULL, DATEADD(DAY, -1, SYSUTCDATETIME())),
-        (2, 10, NULL, 15, NULL, N'Có người bày bán tại ô NVL-15 nhưng không thấy giấy phép.',
-            'REVIEWED', 2, DATEADD(DAY, -1, SYSUTCDATETIME()), DATEADD(DAY, -2, SYSUTCDATETIME())),
+            'PENDING', NULL, NULL, DATEADD(DAY, -12, SYSUTCDATETIME()),
+            'GENERAL', NULL, NULL, NULL, NULL, NULL, NULL,
+            DATEADD(HOUR, 17, CAST(DATEADD(DAY, -3, @todayVn) AS DATETIME2)), NULL, NULL, NULL),
+        (2, 10, NULL, 9, NULL, N'Có người bày bán tại ô NVL-09 nhưng không thấy giấy phép.',
+            'REVIEWED', 2, DATEADD(DAY, -3, SYSUTCDATETIME()), DATEADD(DAY, -4, SYSUTCDATETIME()),
+            'GENERAL', NULL, NULL, NULL, NULL, NULL, NULL,
+            DATEADD(HOUR, 17, CAST(DATEADD(DAY, 5, @todayVn) AS DATETIME2)),
+            'VIOLATION_RECORDED', N'Đã lập biên bản vi phạm số 4 tại ô NVL-09.', NULL),
         (3, 9,  1,  NULL, 2, N'Nghi ngờ giấy phép giả.',
-            'DISMISSED', 2, DATEADD(DAY, -6, SYSUTCDATETIME()), DATEADD(DAY, -7, SYSUTCDATETIME()));
+            'DISMISSED', 2, DATEADD(DAY, -6, SYSUTCDATETIME()), DATEADD(DAY, -7, SYSUTCDATETIME()),
+            'GENERAL', NULL, NULL, NULL, NULL, NULL, NULL,
+            DATEADD(HOUR, 17, CAST(DATEADD(DAY, 2, @todayVn) AS DATETIME2)),
+            'DISMISSED', N'Cán bộ đã đối chiếu tại quầy: giấy phép còn hiệu lực và mã QR khớp với hệ thống, không có dấu hiệu giả mạo.', NULL),
+        (4, 10, 1,  8, 2, N'Gọi 2 suất bún chả Hà Nội, bảng giá ghi 45.000đ một suất nhưng bị tính 120.000đ.',
+            'PENDING', NULL, NULL, DATEADD(HOUR, -25, SYSUTCDATETIME()),
+            'OVERCHARGE', 7, 7, 2, 90000, 120000, DATEADD(HOUR, -26, SYSUTCDATETIME()),
+            DATEADD(HOUR, 17, CAST(DATEADD(DAY, 8, @todayVn) AS DATETIME2)), NULL, NULL, NULL),
+        (5, 9,  1,  1, 1, N'Mua 2 ổ bánh mì thịt nướng, bảng giá 25.000đ một ổ nhưng bị lấy 70.000đ.',
+            'REVIEWED', 2, DATEADD(DAY, -4, SYSUTCDATETIME()), DATEADD(DAY, -5, SYSUTCDATETIME()),
+            'OVERCHARGE', 1, 1, 2, 50000, 70000, DATEADD(HOUR, -121, SYSUTCDATETIME()),
+            DATEADD(HOUR, 17, CAST(DATEADD(DAY, 4, @todayVn) AS DATETIME2)),
+            'MEDIATED', N'Người bán xác nhận tính nhầm, đã hoàn lại 20.000đ cho khách tại quầy và cam kết treo bảng giá rõ ràng.', 20000);
     SET IDENTITY_INSERT VendorReports OFF;
 END;
 GO
@@ -961,9 +1053,10 @@ GO
    9. WARD COMPLIANCE, CONTINUED: A CONTRACT WITHOUT A SCHEDULE, VIOLATIONS, PENALTIES
    (WARD-12, FEE-01/04/05, SYS-03)
 
-   Violations 1 and 2 are on the contracts that exist; 3 is a customer report; 4 names
-   only a slot, so it has no penalty at all. Of the penalties, 1 is paid, 2 unpaid and
-   3 waived. Their payments are in section 12.
+   Violations 1 and 2 are on the contracts that exist; 3 is a customer report taken
+   outside the app (no report row); 4 was raised from report 2 and names only a slot, so
+   it has no penalty at all. Of the penalties, 1 is paid, 2 unpaid and 3 waived. Their
+   payments are in section 12.
 
    Contracts 1 and 2 already carry a hand-written fee schedule, which makes them
    useful for reading screens but useless for exercising SYS-03: regenerating a
@@ -1021,9 +1114,10 @@ BEGIN
         (3, 1, 1, 1, 'WASTE_DISPOSAL',
             N'Người dân phản ánh đổ nước thải ra vỉa hè cuối buổi bán.',
             NULL, 2, 'CUSTOMER_REPORT', NULL, DATEADD(DAY, -12, SYSUTCDATETIME())),
+        -- Raised from report 2 (WARD-19), which it closed as VIOLATION_RECORDED.
         (4, NULL, 9, NULL, 'NO_PERMIT',
             N'Xe đẩy bán hàng tại ô NVL-09 không xuất trình được giấy phép; chưa xác định được chủ.',
-            NULL, 2, 'ON_SITE', NULL, DATEADD(DAY, -3, SYSUTCDATETIME()));
+            NULL, 2, 'CUSTOMER_REPORT', 2, DATEADD(DAY, -3, SYSUTCDATETIME()));
     SET IDENTITY_INSERT Violations OFF;
 END;
 GO
@@ -1086,8 +1180,8 @@ UPDATE BusinessRegistrations SET
     id_type = 'CCCD', id_number = '048185000001', id_issued_date = '2021-05-20',
     id_issued_place = N'Cục Cảnh sát QLHC về TTXH', owner_date_of_birth = '1985-03-12',
     owner_gender = N'Nữ', owner_ethnicity = N'Kinh',
-    permanent_address = N'123 Nguyễn Văn Linh, Phường Hải Châu 1, Đà Nẵng',
-    contact_address = N'123 Nguyễn Văn Linh, Phường Hải Châu 1, Đà Nẵng',
+    permanent_address = N'123 Nguyễn Văn Linh, Phường Hải Châu, Đà Nẵng',
+    contact_address = N'123 Nguyễn Văn Linh, Phường Hải Châu, Đà Nẵng',
     business_line = N'Bán lẻ bánh mì, xôi ăn sáng', business_line_code = '5610',
     capital_amount = 20000000, labor_count = 2, planned_start_date = '2026-08-01',
     biometric_consent_at = DATEADD(DAY, -32, SYSUTCDATETIME()),
@@ -1100,8 +1194,8 @@ UPDATE BusinessRegistrations SET
     id_type = 'CCCD', id_number = '048185000001', id_issued_date = '2021-05-20',
     id_issued_place = N'Cục Cảnh sát QLHC về TTXH', owner_date_of_birth = '1985-03-12',
     owner_gender = N'Nữ', owner_ethnicity = N'Kinh',
-    permanent_address = N'123 Nguyễn Văn Linh, Phường Hải Châu 1, Đà Nẵng',
-    contact_address = N'45 Nguyễn Văn Linh, Phường Hải Châu 1, Đà Nẵng',
+    permanent_address = N'123 Nguyễn Văn Linh, Phường Hải Châu, Đà Nẵng',
+    contact_address = N'45 Nguyễn Văn Linh, Phường Hải Châu, Đà Nẵng',
     business_line = N'Bún chả, nem cua bể', business_line_code = '5610',
     capital_amount = 35000000, labor_count = 3, planned_start_date = '2026-09-05',
     biometric_consent_at = DATEADD(DAY, -15, SYSUTCDATETIME()),
@@ -1114,8 +1208,8 @@ UPDATE BusinessRegistrations SET
     id_type = 'CCCD', id_number = '048079000002', id_issued_date = '2022-01-15',
     id_issued_place = N'Cục Cảnh sát QLHC về TTXH', owner_date_of_birth = '1979-11-02',
     owner_gender = N'Nam', owner_ethnicity = N'Kinh',
-    permanent_address = N'56 Lê Duẩn, Phường Hải Châu 1, Đà Nẵng',
-    contact_address = N'56 Lê Duẩn, Phường Hải Châu 1, Đà Nẵng',
+    permanent_address = N'56 Lê Duẩn, Phường Hải Châu, Đà Nẵng',
+    contact_address = N'56 Lê Duẩn, Phường Hải Châu, Đà Nẵng',
     business_line = N'Bán nước mía, nước ép trái cây', business_line_code = '5630',
     capital_amount = 8000000, labor_count = 1, planned_start_date = '2026-10-01',
     biometric_consent_at = DATEADD(DAY, -3, SYSUTCDATETIME()),
@@ -1126,8 +1220,8 @@ UPDATE BusinessRegistrations SET
     id_type = 'CCCD', id_number = '048079000002', id_issued_date = '2022-01-15',
     id_issued_place = N'Cục Cảnh sát QLHC về TTXH', owner_date_of_birth = '1979-11-02',
     owner_gender = N'Nam', owner_ethnicity = N'Kinh',
-    permanent_address = N'56 Lê Duẩn, Phường Hải Châu 1, Đà Nẵng',
-    contact_address = N'56 Lê Duẩn, Phường Hải Châu 1, Đà Nẵng',
+    permanent_address = N'56 Lê Duẩn, Phường Hải Châu, Đà Nẵng',
+    contact_address = N'56 Lê Duẩn, Phường Hải Châu, Đà Nẵng',
     business_line = N'Bán nước ép trái cây lưu động', business_line_code = '5630',
     capital_amount = 6000000, labor_count = 1, planned_start_date = '2026-09-15',
     biometric_consent_at = DATEADD(DAY, -12, SYSUTCDATETIME()),
@@ -1140,8 +1234,8 @@ UPDATE BusinessRegistrations SET
     id_type = 'CCCD', id_number = '048079000002', id_issued_date = '2021-09-09',
     id_issued_place = N'Cục Cảnh sát QLHC về TTXH', owner_date_of_birth = '1990-07-25',
     owner_gender = N'Nam', owner_ethnicity = N'Kinh',
-    permanent_address = N'9 Trần Phú, Phường Hải Châu 1, Đà Nẵng',
-    contact_address = N'9 Trần Phú, Phường Hải Châu 1, Đà Nẵng',
+    permanent_address = N'9 Trần Phú, Phường Hải Châu, Đà Nẵng',
+    contact_address = N'9 Trần Phú, Phường Hải Châu, Đà Nẵng',
     business_line = N'Bán bún, phở gánh', business_line_code = '5610',
     capital_amount = 5000000, labor_count = 1, planned_start_date = '2026-10-10',
     biometric_consent_at = DATEADD(DAY, -5, SYSUTCDATETIME()),
@@ -1298,7 +1392,7 @@ IF NOT EXISTS (SELECT 1 FROM Notifications)
         (5,  'ORDER',                    N'Có đơn hàng mới',
             N'Đơn DH-2026-0004 đang chờ khách thanh toán.',                                 'ORDER', 4, 0, DATEADD(MINUTE, -5, SYSUTCDATETIME())),
         (6,  'ENROLLMENT_STATUS_UPDATE', N'Hồ sơ đang chờ duyệt',
-            N'Hồ sơ "Xe nước mía Tám Ù" đã được gửi tới Phường Hải Châu 1.',                'REGISTRATION', 2, 0, DATEADD(DAY, -3, SYSUTCDATETIME())),
+            N'Hồ sơ "Xe nước mía Tám Ù" đã được gửi tới Phường Hải Châu.',                'REGISTRATION', 2, 0, DATEADD(DAY, -3, SYSUTCDATETIME())),
         (9,  'ORDER',                    N'Đơn hàng đã hoàn tất',
             N'Đơn DH-2026-0001 đã được nhận. Bạn có thể đánh giá cửa hàng.',                'ORDER', 1, 1, DATEADD(DAY, -6, SYSUTCDATETIME())),
         (10, 'ORDER',                    N'Đơn hàng sẵn sàng lấy',
@@ -1340,6 +1434,134 @@ BEGIN
 END;
 GO
 
+-- BUY-07 / WARD-19: what the reports in section 9 sent, worded as VendorReportNotices words it.
+-- The vendor (account 5) is told what was reported and how it ended, never who reported it and
+-- never the officer's note (written for the reporter, it may name them).
+IF NOT EXISTS (SELECT 1 FROM Notifications WHERE notification_type LIKE 'VENDOR_REPORT%')
+BEGIN
+    DECLARE @todayVn DATE = CAST(SWITCHOFFSET(SYSDATETIMEOFFSET(), '+07:00') AS DATE);
+    INSERT INTO Notifications
+        (user_id, notification_type, title, body, related_entity_type, related_entity_id, is_read, sent_at)
+    VALUES
+        (2, 'VENDOR_REPORT_NEW', N'Có phản ánh mới cần xử lý',
+            CONCAT(N'Bán cao hơn giá niêm yết: quầy "Bún chả Hải Châu" (ô NVL-08). Hạn xử lý: hết ngày ',
+                   FORMAT(DATEADD(DAY, 8, @todayVn), 'dd/MM/yyyy'), N'.'),
+            'VendorReport', 4, 0, DATEADD(HOUR, -25, SYSUTCDATETIME())),
+        (5, 'VENDOR_REPORT_AGAINST_YOU', N'Có khiếu nại về giá tại quầy của bạn',
+            N'Một khách báo bị tính 120.000đ cho 2 suất Bún chả Hà Nội, trong khi giá niêm yết lúc mua là 90.000đ. Hãy kiểm tra và chủ động hoàn phần chênh lệch nếu tính sai; phường sẽ xem xét và báo kết quả.',
+            'VendorReport', 4, 0, DATEADD(HOUR, -25, SYSUTCDATETIME())),
+        (9, 'VENDOR_REPORT_RESOLVED', N'Phản ánh của bạn đã có kết quả',
+            N'Phường đã hòa giải phản ánh về quầy "Bánh mì & Xôi Cô Lan", người bán hoàn lại 20.000đ. Người bán xác nhận tính nhầm, đã hoàn lại 20.000đ cho khách tại quầy và cam kết treo bảng giá rõ ràng.',
+            'VendorReport', 5, 1, DATEADD(DAY, -4, SYSUTCDATETIME())),
+        (5, 'VENDOR_REPORT_RESOLVED', N'Phản ánh về quầy của bạn đã được đóng',
+            N'Phường ghi nhận đã hòa giải phản ánh về quầy "Bánh mì & Xôi Cô Lan", người bán hoàn lại 20.000đ.',
+            'VendorReport', 5, 1, DATEADD(DAY, -4, SYSUTCDATETIME())),
+        (9, 'VENDOR_REPORT_RESOLVED', N'Phản ánh của bạn đã có kết quả',
+            N'Phường không chấp nhận phản ánh về quầy "Bún chả Hải Châu". Lý do: Cán bộ đã đối chiếu tại quầy: giấy phép còn hiệu lực và mã QR khớp với hệ thống, không có dấu hiệu giả mạo.',
+            'VendorReport', 3, 1, DATEADD(DAY, -6, SYSUTCDATETIME())),
+        (5, 'VENDOR_REPORT_RESOLVED', N'Phản ánh về quầy của bạn đã được đóng',
+            N'Phường đã xem xét và không chấp nhận phản ánh về quầy "Bún chả Hải Châu".',
+            'VendorReport', 3, 1, DATEADD(DAY, -6, SYSUTCDATETIME())),
+        (10, 'VENDOR_REPORT_RESOLVED', N'Phản ánh của bạn đã có kết quả',
+            N'Phường đã lập biên bản vi phạm đối với quầy tại ô NVL-09 từ phản ánh của bạn. Đã lập biên bản vi phạm số 4 tại ô NVL-09.',
+            'VendorReport', 2, 0, DATEADD(DAY, -3, SYSUTCDATETIME()));
+END;
+GO
+
+
+/* ============================================================
+   14. HOUSEHOLD TAX (TAX)
+   Tax year 2026 carries TWO policy versions on purpose: Nghị định 68/2026 set the no-tax
+   threshold at 500 million đ, Nghị định 141/2026 raised it to 1 billion đ from 1/1/2026. The
+   highest version is the one in force, so the screens show 1 billion and the admin's history
+   shows how it got there.
+
+   Revenue is generated relative to today so the demo works whenever it is built:
+     - vendor 1 (0905000101) sells about 3.1 million đ a day from 1 January, which puts it near
+       the threshold with a forecast that crosses it (the warning, the "when" and the e-invoice
+       obligations all show). Its profile has a tax code and agrees to share revenue with the ward.
+     - vendor 2 (0905000102) sells under 1 million đ a day for the last 80 days, has no tax code
+       and shares nothing: the ward sees it only as a household without a tax code.
+   Online sales are not seeded here: they are read from Orders (order 1 is COMPLETED).
+   ============================================================ */
+IF NOT EXISTS (SELECT 1 FROM TaxPolicies)
+BEGIN
+    SET IDENTITY_INSERT TaxPolicies ON;
+    INSERT INTO TaxPolicies
+        (policy_id, tax_year, version_no, legal_basis, revenue_threshold, einvoice_threshold,
+         group2_ceiling, group3_ceiling, pit_deducts_threshold, pit_profit_rate_g2, pit_profit_rate_g3,
+         pit_profit_rate_g4, annual_notice_month, annual_notice_day, warn_ratio, note, created_by, created_at)
+    VALUES
+        (1, 2026, 1,
+            N'Nghị định 68/2026/NĐ-CP (05/3/2026): hộ kinh doanh có doanh thu đến 500 triệu đồng/năm không chịu thuế GTGT, không nộp thuế TNCN.',
+            500000000, 1000000000, 3000000000, 50000000000, 1, 0.1500, 0.1700, 0.2000, 1, 31, 0.8000,
+            N'Phiên bản đầu tiên, đã được phiên bản 2 thay thế.', 1, DATEADD(DAY, -170, SYSUTCDATETIME())),
+        (2, 2026, 2,
+            N'Nghị định 141/2026/NĐ-CP (29/4/2026) sửa đổi Nghị định 68/2026/NĐ-CP: nâng ngưỡng lên 1 tỷ đồng/năm, áp dụng từ 01/01/2026.',
+            1000000000, 1000000000, 3000000000, 50000000000, 1, 0.1500, 0.1700, 0.2000, 1, 31, 0.8000,
+            N'Tham số tham khảo; đối chiếu văn bản gốc trước khi dùng cho báo cáo chính thức.', 1,
+            DATEADD(DAY, -140, SYSUTCDATETIME()));
+    SET IDENTITY_INSERT TaxPolicies OFF;
+
+    INSERT INTO TaxIndustryRates (policy_id, industry_code, industry_name, vat_rate, pit_rate, note)
+    SELECT p.policy_id, r.industry_code, r.industry_name, r.vat_rate, r.pit_rate, r.note
+    FROM TaxPolicies p
+    CROSS JOIN (VALUES
+        ('GOODS',              N'Bán hàng hoá (phân phối, cung cấp hàng hoá)',            0.0100, 0.0050, NULL),
+        ('FOOD_SERVICE',       N'Ăn uống (quán, xe đẩy, bán rong)',                       0.0300, 0.0150,
+            N'Xếp cùng nhóm "sản xuất, dịch vụ gắn với hàng hoá" theo hướng dẫn trước đây (TT 40/2021); cần đối chiếu văn bản hiện hành.'),
+        ('PRODUCTION_SERVICE', N'Sản xuất, vận tải, dịch vụ gắn với hàng hoá',            0.0300, 0.0150, NULL),
+        ('SERVICE',            N'Dịch vụ không gắn với hàng hoá',                         0.0500, 0.0200, NULL),
+        ('OTHER',              N'Hoạt động kinh doanh khác',                              0.0200, 0.0100, NULL)
+    ) AS r(industry_code, industry_name, vat_rate, pit_rate, note);
+END;
+GO
+
+IF NOT EXISTS (SELECT 1 FROM VendorTaxProfiles)
+BEGIN
+    INSERT INTO VendorTaxProfiles
+        (vendor_id, tax_code, industry_code, einvoice_registered, share_revenue_with_ward, consent_updated_at, created_at)
+    VALUES
+        (1, '048090001234', 'FOOD_SERVICE', 0, 1, DATEADD(DAY, -20, SYSUTCDATETIME()), DATEADD(DAY, -20, SYSUTCDATETIME())),
+        (2, NULL,           'FOOD_SERVICE', 0, 0, NULL,                                  DATEADD(DAY, -3,  SYSUTCDATETIME()));
+END;
+GO
+
+IF NOT EXISTS (SELECT 1 FROM RevenueEntries)
+BEGIN
+    DECLARE @today DATE = CAST(DATEADD(HOUR, 7, SYSUTCDATETIME()) AS DATE);   -- Vietnamese calendar day
+    DECLARE @jan1  DATE = DATEFROMPARTS(YEAR(@today), 1, 1);
+
+    -- Vendor 1: every day of the year so far, shaped like a week at a food stall
+    -- (Mon-Thu 2.6M, Fri 3.2M, Sat 4.1M, Sun 4.4M; every fourth day paid to the shop's bank account).
+    ;WITH days AS (
+        SELECT @jan1 AS d WHERE @jan1 < @today
+        UNION ALL
+        SELECT DATEADD(DAY, 1, d) FROM days WHERE d < DATEADD(DAY, -1, @today)
+    )
+    INSERT INTO RevenueEntries (vendor_id, entry_date, amount, channel, note)
+    SELECT 1, d,
+           CASE DATEDIFF(DAY, '20000103', d) % 7      -- 2000-01-03 was a Monday: 0 = Mon
+                WHEN 4 THEN 3200000 WHEN 5 THEN 4100000 WHEN 6 THEN 4400000 ELSE 2600000 END,
+           CASE WHEN DATEDIFF(DAY, '20000103', d) % 4 = 0 THEN 'BANK_TRANSFER' ELSE 'CASH' END,
+           N'Doanh thu bán trực tiếp tại ô'
+    FROM days
+    OPTION (MAXRECURSION 400);
+
+    -- Vendor 2: the last 80 days, small.
+    ;WITH days AS (
+        SELECT (CASE WHEN DATEADD(DAY, -80, @today) > @jan1 THEN DATEADD(DAY, -80, @today) ELSE @jan1 END) AS d
+        WHERE @jan1 < @today
+        UNION ALL
+        SELECT DATEADD(DAY, 1, d) FROM days WHERE d < DATEADD(DAY, -1, @today)
+    )
+    INSERT INTO RevenueEntries (vendor_id, entry_date, amount, channel, note)
+    SELECT 2, d, 600000 + (DATEDIFF(DAY, '20000103', d) % 3) * 100000, 'CASH', N'Bán nước ép tại xe'
+    FROM days
+    OPTION (MAXRECURSION 400);
+END;
+GO
+
 
 /* ============================================================
    Summary
@@ -1361,9 +1583,13 @@ SELECT
     (SELECT COUNT(*) FROM PaymentCallbackEvents)  AS [callbacks],
     (SELECT COUNT(*) FROM Storefronts)            AS [storefronts],
     (SELECT COUNT(*) FROM MenuItems)              AS [menu_items],
+    (SELECT COUNT(*) FROM MenuItemPriceHistory)   AS [price_history],
+    (SELECT COUNT(*) FROM VendorReports)          AS [vendor_reports],
     (SELECT COUNT(*) FROM Orders)                 AS [orders],
     (SELECT COUNT(*) FROM SlotTransferRequests)   AS [transfers],
-    (SELECT COUNT(*) FROM Notifications)          AS [notifications];
+    (SELECT COUNT(*) FROM Notifications)          AS [notifications],
+    (SELECT COUNT(*) FROM TaxPolicies)            AS [tax_policies],
+    (SELECT COUNT(*) FROM RevenueEntries)         AS [revenue_entries];
 
 SELECT registration_status, COUNT(*) AS [count]
 FROM BusinessRegistrations GROUP BY registration_status ORDER BY registration_status;

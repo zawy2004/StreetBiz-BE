@@ -31,7 +31,33 @@ public partial class VendorReport
 
     public DateTime created_at { get; set; }
 
+    public string report_type { get; set; } = null!;
+
+    public long? menu_item_id { get; set; }
+
+    public long? price_history_id { get; set; }
+
+    public int? quantity { get; set; }
+
+    public decimal? posted_amount { get; set; }
+
+    public decimal? charged_amount { get; set; }
+
+    public DateTime? purchased_at { get; set; }
+
+    public DateTime? due_at { get; set; }
+
+    public string? resolution { get; set; }
+
+    public string? resolution_note { get; set; }
+
+    public decimal? refund_amount { get; set; }
+
     public virtual UserAccount? UserAccount { get; set; }
+
+    public virtual MenuItem? menu_item { get; set; }
+
+    public virtual MenuItemPriceHistory? price_history { get; set; }
 
     public virtual ICollection<Violation> Violations { get; set; } = new List<Violation>();
 
