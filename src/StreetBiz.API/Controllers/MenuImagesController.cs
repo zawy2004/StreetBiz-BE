@@ -12,9 +12,16 @@ namespace StreetBiz.API.Controllers;
 /// </summary>
 [ApiController]
 [Route("api/uploads/menu-images")]
-public sealed class MenuImagesController(IFileStorage storage, ICurrentUser currentUser) : ControllerBase
+public sealed class MenuImagesController(
+    IFileStorage storage, ICurrentUser currentUser, IImageProcessor images) : ControllerBase
 {
-    /// <summary>Uploads one dish photo (JPG/PNG/WEBP, max 5 MB) and returns its URL.</summary>
+    /// <summary>Longest edge a stored dish or store photo keeps: sharp on any screen, a few hundred KB.</summary>
+    public const int MaxEdgePixels = 1600;
+
+    /// <summary>
+    /// Uploads one dish or storefront photo (JPG/PNG/WEBP, max 5 MB) and returns its URL. The file is
+    /// re-encoded without metadata and scaled to at most <see cref="MaxEdgePixels"/> on its longest edge.
+    /// </summary>
     [HttpPost]
     [Authorize]
     [Consumes("multipart/form-data")]
@@ -48,14 +55,28 @@ public sealed class MenuImagesController(IFileStorage storage, ICurrentUser curr
         var extension = MenuImageFiles.DetectExtension(header.AsSpan(0, read))
             ?? throw FileError(MenuImageFiles.InvalidType);
 
-        var fileName = EvidenceFiles.NewFileName(extension);
-        await using (var content = file.OpenReadStream())
+        // Public photo: re-encoded so the phone's EXIF (GPS position of the stall or home) is gone.
+        Stream clean;
+        try
         {
-            await storage.SaveAsync(MenuImageFiles.StoragePath(userId, fileName), content, cancellationToken);
+            await using var upload = file.OpenReadStream();
+            clean = await images.SanitizePhotoAsync(upload, extension, MaxEdgePixels, cancellationToken);
+        }
+        catch (InvalidImageException ex)
+        {
+            throw FileError(ex.Message);
+        }
+
+        var fileName = EvidenceFiles.NewFileName(extension);
+        long size;
+        await using (clean)
+        {
+            size = clean.Length;
+            await storage.SaveAsync(MenuImageFiles.StoragePath(userId, fileName), clean, cancellationToken);
         }
 
         return Ok(new UploadedFileResponse(
-            MenuImageFiles.BuildUrl(userId, fileName), EvidenceFiles.ContentTypes[extension], file.Length));
+            MenuImageFiles.BuildUrl(userId, fileName), EvidenceFiles.ContentTypes[extension], size));
     }
 
     [HttpGet("{ownerUserId:long}/{fileName}")]

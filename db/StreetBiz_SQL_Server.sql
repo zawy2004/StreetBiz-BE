@@ -156,6 +156,8 @@ CREATE TABLE UserAccounts (
     -- Set out of band by a platform admin, never typed by the officer; NULL = this account
     -- cannot sign sanction decisions.
     sanction_authority_title NVARCHAR(100)   NULL,
+    -- Profile photo: a URL issued by POST /api/account/avatar (public, re-encoded 256x256 JPEG).
+    avatar_url               NVARCHAR(500)   NULL,
     CONSTRAINT CK_UserAccounts_Status
         CHECK (account_status IN ('ACTIVE','SUSPENDED','DEACTIVATED')),
     -- redundant as a key (user_id is already unique), but required as the

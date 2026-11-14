@@ -6,4 +6,5 @@ public sealed record UserDto(
     string? FullName,
     string RoleCode,
     int? WardUnitId,
-    string AccountStatus);
+    string AccountStatus,
+    string? AvatarUrl = null);

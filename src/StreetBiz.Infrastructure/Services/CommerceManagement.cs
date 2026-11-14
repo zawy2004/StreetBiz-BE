@@ -16,6 +16,8 @@ public sealed class CommerceManagement(StreetBizDbContext db, IVendorContext ven
     ICustomerContext customers, IFileStorage storage, TimeProvider clock, IPermitLinks? permitLinks = null,
     IPermitTokenService? permitTokens = null) : ICommerceManagement
 {
+    public const string StoreImageInvalid = "Ảnh gian hàng không hợp lệ; tải ảnh lên lại.";
+
     private DateTime Now => clock.GetUtcNow().UtcDateTime;
     private DateOnly Today => DateOnly.FromDateTime(Now.AddHours(7));
 
@@ -24,7 +26,8 @@ public sealed class CommerceManagement(StreetBizDbContext db, IVendorContext ven
         var vendor = await vendors.RequireVendorIdAsync(ct);
         return await db.Storefronts.AsNoTracking().Where(x => x.registration.vendor_id == vendor)
             .OrderBy(x => x.storefront_id).Select(x => new StorefrontDto(x.storefront_id,
-                x.registration_id, x.contract_id, x.storefront_name, x.description, x.availability_status)).ToListAsync(ct);
+                x.registration_id, x.contract_id, x.storefront_name, x.description, x.availability_status,
+                x.image_url)).ToListAsync(ct);
     }
 
     public async Task<StorefrontDto> SaveStore(long? id, StorefrontInput input, CancellationToken ct)
@@ -34,6 +37,15 @@ public sealed class CommerceManagement(StreetBizDbContext db, IVendorContext ven
         OptionalText(input.Description, 1000);
         if (input.AvailabilityStatus is not ("OPEN" or "PAUSED" or "CLOSED"))
             throw new DomainRuleException("Trạng thái gian hàng không hợp lệ.");
+        // null keeps the current photo (older clients never send it); "" removes it.
+        var imageUrl = input.ImageUrl?.Trim();
+        if (!string.IsNullOrEmpty(imageUrl))
+        {
+            var ownerUserId = await db.Vendors.Where(x => x.vendor_id == vendor).Select(x => x.user_id).SingleAsync(ct);
+            if (!MenuImageFiles.TryParseUrl(imageUrl, out var owner, out var fileName) || owner != ownerUserId ||
+                !await storage.ExistsAsync(MenuImageFiles.StoragePath(owner, fileName), ct))
+                throw new DomainRuleException(StoreImageInvalid);
+        }
         var storeId = await Write(async () =>
         {
             var store = id.HasValue ? await OwnedStore(id.Value, vendor, ct) : new Storefront();
@@ -64,6 +76,7 @@ public sealed class CommerceManagement(StreetBizDbContext db, IVendorContext ven
             store.storefront_name = input.Name.Trim();
             store.description = input.Description?.Trim();
             store.availability_status = input.AvailabilityStatus;
+            if (imageUrl is not null) store.image_url = imageUrl.Length == 0 ? null : imageUrl;
             store.updated_at = Now;
             await db.SaveChangesAsync(ct);
             return store.storefront_id;

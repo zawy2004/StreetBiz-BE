@@ -123,6 +123,17 @@ public sealed class UserAccountRepository(
                 .SetProperty(u => u.lockout_until, (DateTime?)null), cancellationToken);
     }
 
+    public async Task<string?> SetAvatarUrlAsync(long userId, string? avatarUrl, CancellationToken cancellationToken)
+    {
+        var user = await dbContext.UserAccounts.FirstOrDefaultAsync(u => u.user_id == userId, cancellationToken)
+            ?? throw new NotFoundException(AppMessages.AccountNotFound);
+        var previous = user.avatar_url;
+        user.avatar_url = avatarUrl;
+        user.updated_at = clock.UtcNow;
+        await dbContext.SaveChangesAsync(cancellationToken);
+        return previous;
+    }
+
     // SQL Server error 2601 = duplicate key on a unique index, 2627 = on a unique constraint.
     private static bool IsUniquePhoneViolation(DbUpdateException ex) =>
         ex.InnerException is SqlException { Number: 2601 or 2627 };
@@ -130,5 +141,5 @@ public sealed class UserAccountRepository(
     private static AppUser Map(UserAccount u) => new(
         u.user_id, u.phone_number, u.password_hash, u.full_name, u.role_code,
         u.ward_unit_id, u.account_status, u.phone_verified_at, u.lockout_until,
-        u.sanction_authority_title);
+        u.sanction_authority_title, u.avatar_url);
 }

@@ -1,4 +1,5 @@
 using System.Text;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.IdentityModel.Tokens;
 using StreetBiz.Application.Common.Interfaces;
@@ -12,7 +13,38 @@ public static class AuthenticationSetup
     public static IServiceCollection AddApiServices(
         this IServiceCollection services, IConfiguration configuration)
     {
-        services.AddControllers();
+        services.AddControllers().ConfigureApiBehaviorOptions(options =>
+        {
+            // An upload over a [RequestSizeLimit] fails while model binding reads the form, so it
+            // arrives as a model-state error with the framework's English text, not as the 413
+            // BadHttpRequestException the GlobalExceptionHandler translates. Answer it the same way.
+            var standard = options.InvalidModelStateResponseFactory;
+            options.InvalidModelStateResponseFactory = context =>
+            {
+                // Kestrel says "Request body too large"; the multipart reader says "Multipart body
+                // length limit ... exceeded". Both mean the file is over the limit.
+                var tooLarge = context.ModelState.Values.SelectMany(v => v.Errors).Any(e =>
+                    (e.ErrorMessage + e.Exception?.Message) is var text
+                    && (text.Contains("body too large", StringComparison.OrdinalIgnoreCase)
+                        || text.Contains("body length limit", StringComparison.OrdinalIgnoreCase)));
+                if (!tooLarge)
+                {
+                    return standard(context);
+                }
+
+                return new ObjectResult(new ProblemDetails
+                {
+                    Status = StatusCodes.Status413PayloadTooLarge,
+                    Title = "bad_request",
+                    Type = "bad_request",
+                    Detail = EvidenceFiles.TooLarge,
+                })
+                {
+                    StatusCode = StatusCodes.Status413PayloadTooLarge,
+                    ContentTypes = { "application/problem+json" },
+                };
+            };
+        });
         services.AddHttpContextAccessor();
         services.AddScoped<ICurrentUser, CurrentUser>();
         services.AddExceptionHandler<GlobalExceptionHandler>();

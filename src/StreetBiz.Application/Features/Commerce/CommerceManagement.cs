@@ -3,9 +3,11 @@ using StreetBiz.Application.DTOs.Community;
 namespace StreetBiz.Application.Features.Commerce;
 
 public sealed record StorefrontDto(long StorefrontId, long RegistrationId, long ContractId,
-    string Name, string? Description, string AvailabilityStatus);
+    string Name, string? Description, string AvailabilityStatus, string? ImageUrl = null);
+/// <param name="ImageUrl">The store photo: a URL returned by POST /api/uploads/menu-images (the
+/// vendor's own public photo), an empty string to remove it, or null to keep the current one.</param>
 public sealed record StorefrontInput(long RegistrationId, long ContractId, string Name,
-    string? Description, string AvailabilityStatus);
+    string? Description, string AvailabilityStatus, string? ImageUrl = null);
 /// <param name="FoodSafetyStatus">One of <c>DishFoodSafetyStatuses</c>: whether this dish needs
 /// an ATTP certificate and where it stands. MISSING/PENDING dishes are off sale.</param>
 /// <param name="PriceUnit">The unit the price is for ("ổ", "ly", "kg"...), as on the price board.</param>
