@@ -230,17 +230,22 @@ mới trên server; **không dùng lại** khoá trên máy của bạn hay kho�
 |---|---|
 | `Cors__AllowedOrigins__0` | `<FE_DOMAIN>`. Sai hoặc thiếu thì trình duyệt chặn mọi request từ web. Thêm `__1`, `__2` nếu có tên miền riêng. |
 | `Permit__PublicScanBaseUrl` | `<FE_DOMAIN>`. QR in trên bảng giá trỏ tới `<FE_DOMAIN>/q/<mã>`. |
-| `Sms__Provider`, `Sms__Endpoint`, `Sms__ApiKey`, `Sms__Sender` | Cổng gửi OTP, xem lưu ý bên dưới. Thiếu thì đăng ký tài khoản mới và quên mật khẩu báo lỗi; đăng nhập bằng mật khẩu vẫn chạy. |
+| `Sms__Provider` (+ `Sms__ApiKey`, `Sms__SecretKey` cho `Esms`; hoặc `Sms__Endpoint` cho `Http`) | Cổng gửi OTP, xem lưu ý bên dưới. Thiếu thì đăng ký tài khoản mới, quên mật khẩu và đăng nhập OTP báo lỗi; đăng nhập bằng mật khẩu vẫn chạy. |
 | `Payments__PayOs__CredentialKey` | Kết quả `openssl rand -base64 32`. Thiếu thì payOS tắt. **Đổi khoá sau này thì các kênh payOS đã kết nối không đọc được nữa**, mỗi hộ/phường phải kết nối lại. |
 | `Payments__PayOs__PublicWebhookBaseUrl` | `https://<API_DOMAIN>` (không có `/api`). payOS gọi webhook về `https://<API_DOMAIN>/api/payments/payos/callback/...`. |
 | `Payments__PayOs__FrontendBaseUrl` | `<FE_DOMAIN>`: trang payOS đưa người trả tiền quay về. |
 | `Payments__SandboxEnabled` | `false` trên server thật. |
 
-**Lưu ý về SMS.** API gửi `POST {Sms__Endpoint}` với body JSON
-`{"to": "<số điện thoại>", "from": "<Sms__Sender>", "message": "<nội dung>"}` và header
-`Authorization: Bearer <Sms__ApiKey>`, và coi mọi mã 2xx là thành công. Các nhà cung cấp SMS ở Việt Nam (eSMS,
-SpeedSMS…) dùng định dạng riêng, nên cần một dịch vụ trung gian nhỏ để chuyển đổi, hoặc viết thêm adapter cho đúng
-nhà cung cấp trong code (`StreetBiz.Infrastructure/Notifications`).
+**Lưu ý về SMS.** Có hai cách gửi OTP, chọn bằng `Sms__Provider`:
+
+- **`Esms` (eSMS.vn).** Đặt `Sms__ApiKey`, `Sms__SecretKey` (lấy ở "Quản lý API eSMS") và `Sms__SmsType=8` (mặc định): tin đầu số
+  cố định, không cần đăng ký brandname; loại `2` cần `Sms__Brandname` đã đăng ký. `Sms__Sandbox=true` chỉ kiểm tra request,
+  không gửi và không tính phí; trên server thật phải để `false`. Mã `100` chỉ nghĩa là eSMS đã nhận yêu cầu, không phải tin
+  đã tới máy. Khi eSMS từ chối, log API ghi `CodeResult`: `101` sai key, `103` thiếu số dư, `104` brandname sai, `140` IP máy chủ
+  chưa được eSMS cho phép.
+- **`Http` (cổng khác).** API gửi `POST {Sms__Endpoint}` với body JSON `{"to": "<số điện thoại>", "from": "<Sms__Sender>",
+  "message": "<nội dung>"}` và header `Authorization: Bearer <Sms__ApiKey>`, coi mọi mã 2xx là thành công. Các nhà cung cấp khác
+  dùng định dạng riêng nên cần dịch vụ trung gian hoặc một adapter trong `StreetBiz.Infrastructure/Notifications`.
 
 **Tuỳ chọn** (đã có sẵn dạng chú thích trong `api.env.example`; bỏ `#` ở đầu dòng để bật):
 
