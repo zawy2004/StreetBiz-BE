@@ -23,7 +23,20 @@ public sealed class ImageSharpImageProcessor : IImageProcessor
     public const string UnreadableImage = "Ảnh bị lỗi hoặc không đọc được. Vui lòng chọn ảnh khác.";
     public const string ImageTooLarge = "Ảnh có kích thước quá lớn. Vui lòng chọn ảnh nhỏ hơn.";
 
-    private static readonly DecoderOptions Decoder = new() { MaxFrames = 1 };
+    /// <summary>
+    /// Only the three formats an upload may be. ImageSharp's default configuration also registers
+    /// TIFF, BMP, GIF, TGA, PBM and QOI decoders; a file is matched to a decoder by its own header,
+    /// not by the upload sniff, so leaving them registered would expose their parsers to anything
+    /// that slips past it. 3.1.x has a heap overflow in the tiled-fax TIFF decoder
+    /// (GHSA-v76p-62qx-wwq2, fixed only in 3.2, which needs a paid licence): with no TIFF decoder
+    /// that code cannot run here.
+    /// </summary>
+    private static readonly Configuration PhotoFormats = new(
+        new JpegConfigurationModule(),
+        new PngConfigurationModule(),
+        new WebpConfigurationModule());
+
+    private static readonly DecoderOptions Decoder = new() { Configuration = PhotoFormats, MaxFrames = 1 };
 
     public async Task<Stream> SanitizePhotoAsync(
         Stream input, string extension, int maxEdgePixels, CancellationToken cancellationToken)
@@ -79,7 +92,8 @@ public sealed class ImageSharpImageProcessor : IImageProcessor
             buffer.Position = 0;
             return await Image.LoadAsync<Rgba32>(Decoder, buffer, cancellationToken);
         }
-        catch (Exception ex) when (ex is UnknownImageFormatException or InvalidImageContentException or NotSupportedException)
+        catch (Exception ex) when (ex is UnknownImageFormatException or InvalidImageContentException
+            or NotSupportedException or ImageFormatException)
         {
             throw new InvalidImageException(UnreadableImage, ex);
         }

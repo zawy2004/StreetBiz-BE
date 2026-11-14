@@ -135,7 +135,11 @@ dotnet run --project src/StreetBiz.API --launch-profile https
 
 ### Demo accounts
 
-The demo seed creates these accounts. Every password is `Password123!`.
+The demo seed creates these accounts for a **local** database. Every password is `Password123!`.
+
+> [!IMPORTANT]
+> These passwords are public. A server built with the demo seed must change every one of them before
+> anyone else gets the link (see [docs/deploy-vps.md](docs/deploy-vps.md)); the production accounts do not use them.
 
 | Role | Phone |
 | --- | --- |
