@@ -3,6 +3,14 @@
 # workflow copies this folder there on every deploy. See docs/deploy-vps.md.
 name: streetbiz
 
+# Container logs rotate at 10 MB x 3 files per service (at most ~90 MB in all), so they never
+# fill the VPS disk. `docker compose logs` still shows the latest lines.
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   sqlserver:
     image: mcr.microsoft.com/mssql/server:2022-latest
@@ -28,6 +36,7 @@ services:
       retries: 10
       start_period: 40s
     restart: unless-stopped
+    logging: *logging
 
   api:
     image: ${API_IMAGE:-ghcr.io/zawy2004/streetbiz-api}:${IMAGE_TAG:?Set IMAGE_TAG in .env}
@@ -49,6 +58,7 @@ services:
         condition: service_healthy
     networks: [backend, web]
     restart: unless-stopped
+    logging: *logging
 
   caddy:
     image: caddy:2.8.4
@@ -65,6 +75,7 @@ services:
     depends_on: [api]
     networks: [web]
     restart: unless-stopped
+    logging: *logging
 
 networks:
   # internal: the database has no route to or from the Internet.
