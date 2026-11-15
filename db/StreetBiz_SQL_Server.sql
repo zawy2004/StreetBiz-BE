@@ -207,7 +207,7 @@ CREATE TABLE OtpChallenges (
     challenge_id    BIGINT IDENTITY(1,1)  PRIMARY KEY,
     phone_number    NVARCHAR(15)          NOT NULL,
     purpose         NVARCHAR(20)          NOT NULL,
-    code_hash       VARBINARY(32)         NOT NULL,  -- SHA-256 of the OTP
+    code_hash       VARBINARY(32)         NOT NULL,  -- HMAC-SHA256 of the OTP, keyed by Otp:HashKey (never the plain code)
     attempt_count   TINYINT               NOT NULL DEFAULT 0,
     max_attempts    TINYINT               NOT NULL DEFAULT 5,
     expires_at      DATETIME2             NOT NULL,

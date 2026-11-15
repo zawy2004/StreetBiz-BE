@@ -23,7 +23,7 @@ namespace StreetBiz.API.Controllers;
 [Route("api/auth")]
 public sealed class AuthController(ISender sender) : ControllerBase
 {
-    /// <summary>AUTH-02: send a phone OTP (SIGNUP or PASSWORD_RESET).</summary>
+    /// <summary>AUTH-02: send a phone OTP (REGISTRATION, PASSWORD_RESET or LOGIN).</summary>
     [EnableRateLimiting(AuthRateLimitSetup.OtpRequest)]
     [HttpPost("send-otp")]
     public async Task<IActionResult> SendOtp(SendOtpRequest request, CancellationToken cancellationToken)

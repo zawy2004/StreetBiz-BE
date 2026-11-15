@@ -155,6 +155,42 @@ public sealed class AiAssistanceLogs(StreetBizDbContext db, TimeProvider clock) 
         return (log.ai_log_id, now);
     }
 
+    public async Task<bool> MarkAcceptedByAuthorAsync(
+        long aiLogId, string featureCode, string entityType, long entityId, long authorUserId, CancellationToken ct)
+    {
+        var log = await db.AIAssistanceLogs.SingleOrDefaultAsync(
+            x => x.ai_log_id == aiLogId
+                && x.feature_code == featureCode
+                && x.entity_type == entityType
+                && x.entity_id == entityId,
+            ct);
+        if (log is null)
+        {
+            return false;
+        }
+
+        if (log.accepted == true)
+        {
+            return true;
+        }
+
+        var now = Now;
+        log.accepted = true;
+        log.reviewed_by = authorUserId;
+        log.reviewed_at = now;
+        db.AuditLogs.Add(new AuditLog
+        {
+            actor_user_id = authorUserId,
+            action = "AI_DRAFT_ACCEPTED_BY_AUTHOR",
+            entity_type = "AIAssistanceLog",
+            entity_id = log.ai_log_id,
+            details = JsonSerializer.Serialize(new { featureCode, entityType, entityId }, JsonOptions),
+            created_at = now,
+        });
+        await db.SaveChangesAsync(ct);
+        return true;
+    }
+
     private static NotFoundException NotFound() => new("Không tìm thấy gợi ý AI tại địa bàn phường của bạn.");
 
     /// <summary>One case per AiLogEntities constant. An unrecognized entity_type returns false --

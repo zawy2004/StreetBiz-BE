@@ -30,6 +30,11 @@ public sealed class RequestPasswordResetCommandHandler(
             {
                 await otpService.IssueAsync(request.PhoneNumber, OtpPurposes.PasswordReset, cancellationToken);
             }
+            catch (SmsDeliveryException)
+            {
+                // Only registered phones get here, so a 503 would reveal the account exists (SEC-05).
+                // The sender logged the cause; the person can ask again.
+            }
             catch (TooManyRequestsException)
             {
                 // A code was sent moments ago and is still valid. Surfacing the cooldown

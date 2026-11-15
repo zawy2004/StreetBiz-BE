@@ -194,6 +194,35 @@ public sealed class BusinessRegistrationRepositoryTests
     }
 
     [Fact]
+    public async Task A_new_document_of_the_same_type_replaces_the_old_one()
+    {
+        var (db, repo, id) = await Draft();
+        using var _ = db;
+        await repo.AddEvidenceAsync(id, new NewRegistrationEvidence(EvidenceTypes.IdentityDocument, "/api/uploads/evidence/12/old.jpg", null), default);
+        await repo.AddEvidenceAsync(id, new NewRegistrationEvidence(EvidenceTypes.IdentityDocumentBack, "/api/uploads/evidence/12/back.jpg", null), default);
+
+        await repo.AddEvidenceAsync(id, new NewRegistrationEvidence(EvidenceTypes.IdentityDocument, "/api/uploads/evidence/12/new.jpg", null), default);
+
+        var rows = await repo.ListEvidenceAsync(id, default);
+        Assert.Equal(2, rows.Count);
+        Assert.Equal("/api/uploads/evidence/12/new.jpg", Assert.Single(rows, r => r.EvidenceType == EvidenceTypes.IdentityDocument).FileUrl);
+        Assert.Single(rows, r => r.EvidenceType == EvidenceTypes.IdentityDocumentBack);
+        Assert.False(await repo.IsEvidenceFileUsedAsync("/api/uploads/evidence/12/old.jpg", default));
+    }
+
+    [Fact]
+    public async Task Free_form_documents_of_type_other_pile_up_instead_of_replacing_each_other()
+    {
+        var (db, repo, id) = await Draft();
+        using var _ = db;
+
+        await repo.AddEvidenceAsync(id, new NewRegistrationEvidence(EvidenceTypes.Other, "/api/uploads/evidence/12/o1.jpg", null), default);
+        await repo.AddEvidenceAsync(id, new NewRegistrationEvidence(EvidenceTypes.Other, "/api/uploads/evidence/12/o2.jpg", null), default);
+
+        Assert.Equal(2, (await repo.ListEvidenceAsync(id, default)).Count);
+    }
+
+    [Fact]
     public async Task Evidence_is_visible_only_to_its_own_ward_and_owner()
     {
         var (db, repo, id) = await Draft();

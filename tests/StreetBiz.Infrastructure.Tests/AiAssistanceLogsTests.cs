@@ -64,6 +64,34 @@ public sealed class AiAssistanceLogsTests
     }
     #endregion
 
+    #region AIP-01: the vendor uses the suggested text
+    [Fact]
+    public async Task A_vendor_marks_only_its_own_logged_suggestion_accepted_and_only_once()
+    {
+        using var f = await Fixture.Create();
+        var logs = f.NewLogs();
+        var logId = await logs.RecordAsync("AIP-01", "Vendor", 3, "k", new { description = "Ngon" }, null, default);
+
+        Assert.False(await logs.MarkAcceptedByAuthorAsync(logId, "AIP-01", "Vendor", 4, 10, default));
+        Assert.False(await logs.MarkAcceptedByAuthorAsync(logId, AiFeatureCodes.ProposalSite, "Vendor", 3, 10, default));
+        Assert.False(await logs.MarkAcceptedByAuthorAsync(logId + 99, "AIP-01", "Vendor", 3, 10, default));
+        using (var untouched = f.NewDb())
+        {
+            Assert.Null((await untouched.AIAssistanceLogs.SingleAsync(x => x.ai_log_id == logId)).accepted);
+        }
+
+        Assert.True(await logs.MarkAcceptedByAuthorAsync(logId, "AIP-01", "Vendor", 3, 10, default));
+        Assert.True(await f.NewLogs().MarkAcceptedByAuthorAsync(logId, "AIP-01", "Vendor", 3, 10, default));
+
+        using var db = f.NewDb();
+        var row = await db.AIAssistanceLogs.SingleAsync(x => x.ai_log_id == logId);
+        Assert.True(row.accepted);
+        Assert.Equal(10, row.reviewed_by);
+        Assert.NotNull(row.reviewed_at);
+        Assert.Equal(1, await db.AuditLogs.CountAsync(a => a.action == "AI_DRAFT_ACCEPTED_BY_AUTHOR"));
+    }
+    #endregion
+
     #region RecordAsync / FindLatestAsync
     [Fact]
     public async Task Recorded_output_round_trips_through_find_latest_with_the_same_key()
