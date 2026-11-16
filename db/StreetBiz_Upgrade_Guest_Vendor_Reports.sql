@@ -26,10 +26,12 @@ IF EXISTS (SELECT 1 FROM sys.columns
 BEGIN
     BEGIN TRAN;
 
-    -- The column cannot change while an index or a foreign key depends on it.
-    DROP INDEX UQ_VendorReports_OnePendingPerReporter ON dbo.VendorReports;
-    DROP INDEX IX_VendorReports_Reporter ON dbo.VendorReports;
-    ALTER TABLE dbo.VendorReports DROP CONSTRAINT FK_VendorReports_Reporter;
+    -- The column cannot change while an index or a foreign key depends on it. A database built
+    -- from an older schema may lack some of them, so each is dropped only if it is there.
+    DROP INDEX IF EXISTS UQ_VendorReports_OnePendingPerReporter ON dbo.VendorReports;
+    DROP INDEX IF EXISTS IX_VendorReports_Reporter ON dbo.VendorReports;
+    IF OBJECT_ID(N'dbo.FK_VendorReports_Reporter', N'F') IS NOT NULL
+        ALTER TABLE dbo.VendorReports DROP CONSTRAINT FK_VendorReports_Reporter;
 
     ALTER TABLE dbo.VendorReports ALTER COLUMN reporter_user_id BIGINT NULL;
 
