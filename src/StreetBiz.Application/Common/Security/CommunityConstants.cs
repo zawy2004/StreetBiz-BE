@@ -125,6 +125,7 @@ public sealed class VendorReportSettings
 
 public static class CommunityMessages
 {
+    public const string GuestCannotAttachPhoto = "Đăng nhập để đính kèm ảnh; báo cáo không đăng nhập chỉ gửi được nội dung.";
     public const string VendorNotFound = "Active vendor not found.";
     public const string ReportReferenceMismatch = "The selected slot or permit does not belong to this vendor.";
     public const string DuplicatePendingReport =

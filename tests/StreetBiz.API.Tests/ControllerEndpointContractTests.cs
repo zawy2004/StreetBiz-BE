@@ -416,7 +416,7 @@ public sealed class ControllerEndpointContractTests
         (HttpMethod.Post, "/api/auth/logout"),
         (HttpMethod.Post, "/api/auth/change-password"),
         (HttpMethod.Put, "/api/community/vendors/1/comment"),
-        (HttpMethod.Post, "/api/community/vendors/1/reports"),
+        // POST /api/community/vendors/{id}/reports is open to guests (BUY-05): see CommunityGuestReportTests.
         (HttpMethod.Get, "/api/community/my-reports"),
         (HttpMethod.Get, "/api/cart"),
         (HttpMethod.Post, "/api/cart/items"),

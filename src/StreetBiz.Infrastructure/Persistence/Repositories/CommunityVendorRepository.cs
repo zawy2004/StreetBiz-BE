@@ -237,7 +237,7 @@ public sealed class CommunityVendorRepository(
 
     public async Task<long> AddReportAsync(
         long vendorId,
-        long customerUserId,
+        long? reporterUserId,
         CustomerVendorReport report,
         NewVendorReportNotices notices,
         CancellationToken cancellationToken)
@@ -250,7 +250,7 @@ public sealed class CommunityVendorRepository(
                 var entity = new VendorReport
                 {
                     vendor_id = vendorId,
-                    reporter_user_id = customerUserId,
+                    reporter_user_id = reporterUserId,
                     slot_id = report.SlotId,
                     scanned_permit_id = report.ScannedPermitId,
                     report_reason = report.Reason,
@@ -302,7 +302,7 @@ public sealed class CommunityVendorRepository(
             // Two submissions racing past the handler's check: UQ_VendorReports_OnePendingPerReporter
             // lets one in. The other gets the same answer the check gives.
             dbContext.ChangeTracker.Clear();
-            if (await HasPendingReportAsync(customerUserId, vendorId, cancellationToken))
+            if (reporterUserId is { } reporter && await HasPendingReportAsync(reporter, vendorId, cancellationToken))
             {
                 throw new ConflictException(CommunityMessages.DuplicatePendingReport);
             }
