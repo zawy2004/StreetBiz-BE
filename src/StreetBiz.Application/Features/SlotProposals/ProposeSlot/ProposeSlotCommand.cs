@@ -1,6 +1,7 @@
 using FluentValidation;
 using MediatR;
 using StreetBiz.Application.Common.Exceptions;
+using StreetBiz.Application.Common.Geo;
 using StreetBiz.Application.Common.Interfaces;
 using StreetBiz.Application.Common.Models;
 using StreetBiz.Application.Common.Security;
@@ -25,11 +26,17 @@ public sealed class ProposeSlotCommandValidator : AbstractValidator<ProposeSlotC
         RuleFor(x => x.ZoneId).GreaterThan(0);
         RuleFor(x => x.Latitude).InclusiveBetween(-90, 90);
         RuleFor(x => x.Longitude).InclusiveBetween(-180, 180);
+        // DECIMAL(5,2) columns; a negative or zero size describes no place on the pavement.
+        RuleFor(x => x.WidthMeters).Must(BeARealSize).WithMessage(SideMessages.ProposalDimensionInvalid);
+        RuleFor(x => x.LengthMeters).Must(BeARealSize).WithMessage(SideMessages.ProposalDimensionInvalid);
         // WARD-16 asks an officer to judge a location off the ward's own grid; without a photo
         // there is nothing to judge, and CK_SidewalkSlots_ProposalCoherent would reject the
         // insert anyway -- catching it here turns a possible 500 into a clean 400.
         RuleFor(x => x.ProposalPhotoUrl).NotEmpty().WithMessage(SideMessages.ProposalPhotoRequired);
     }
+
+    /// <summary>A size is optional; when given it must fit DECIMAL(5,2) and be more than nothing.</summary>
+    private static bool BeARealSize(decimal? meters) => meters is null or (> 0m and <= 999.99m);
 }
 
 public sealed class ProposeSlotCommandHandler(
@@ -62,6 +69,8 @@ public sealed class ProposeSlotCommandHandler(
             });
         }
 
+        await RequireFreeSpotAsync(request, cancellationToken);
+
         var proposal = new NewSlotProposal(
             request.ZoneId, request.Latitude, request.Longitude,
             request.WidthMeters, request.LengthMeters, request.ProposalPhotoUrl);
@@ -85,6 +94,49 @@ public sealed class ProposeSlotCommandHandler(
 
         throw new ConflictException(SideMessages.SlotCodeGenerationFailed);
     }
+
+    /// <summary>
+    /// Two slots closer than one metre are the same spot; with sizes, their footprints (circles of
+    /// half the longer side, as the ward's own placement check draws them) must not overlap.
+    /// </summary>
+    public const double SameSpotMeters = 1.0;
+
+    /// <summary>Largest footprint radius looked for around the point (a 999.99 m slot is not real).</summary>
+    private const double SearchRadiusMeters = 100;
+
+    /// <summary>
+    /// SIDE-11 is for an address that is not on the ward's grid. A proposal on top of an existing
+    /// slot (or of another vendor's pending proposal) is a duplicate: the vendor should apply for
+    /// that slot instead, and the officer would only reject it.
+    /// </summary>
+    private async Task RequireFreeSpotAsync(ProposeSlotCommand request, CancellationToken cancellationToken)
+    {
+        var lat = (double)request.Latitude;
+        var lng = (double)request.Longitude;
+        var radius = Radius(request.WidthMeters, request.LengthMeters);
+        var box = GeoMath.BoundingBox(lat, lng, SearchRadiusMeters + radius);
+        var nearby = await slots.ListFootprintsInAsync(
+            new SlotSearchArea((decimal)box.MinLat, (decimal)box.MaxLat, (decimal)box.MinLon, (decimal)box.MaxLon,
+                null, null, IncludeUnavailable: true),
+            cancellationToken);
+
+        var clash = nearby
+            .Select(slot => (slot.SlotCode, Distance: GeoMath.DistanceMeters(lat, lng, (double)slot.Latitude, (double)slot.Longitude),
+                Reach: Math.Max(SameSpotMeters, radius + Radius(slot.WidthMeters, slot.LengthMeters))))
+            .Where(x => x.Distance < x.Reach)
+            .OrderBy(x => x.Distance)
+            .FirstOrDefault();
+
+        if (clash.SlotCode is not null)
+        {
+            throw new ConflictException(
+                $"Vị trí này trùng hoặc chồng lấn ô {clash.SlotCode} đã có (cách {clash.Distance:0.0} m). " +
+                "Hãy đăng ký ô đó hoặc chọn vị trí khác.");
+        }
+    }
+
+    private static double Radius(decimal? width, decimal? length) =>
+        (double)Math.Max(width ?? 0m, length ?? 0m) / 2;
 
     private static string GenerateSlotCode(int zoneId) =>
         $"VP-{zoneId}-{DateTime.UtcNow:yyyyMMddHHmmssfff}";

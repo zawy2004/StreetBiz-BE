@@ -20,6 +20,12 @@ public interface ISidewalkSlotRepository
     /// </summary>
     Task<long> ProposeAsync(long registrationId, NewSlotProposal proposal, string slotCode, CancellationToken cancellationToken);
 
+    /// <summary>
+    /// Every slot inside the box, whatever its zone, status or source, except rejected proposals:
+    /// what a new proposal must not land on (SIDE-11).
+    /// </summary>
+    Task<IReadOnlyList<SlotFootprintRow>> ListFootprintsInAsync(SlotSearchArea area, CancellationToken cancellationToken);
+
     Task<SlotProposalRow?> GetProposalByIdAsync(long slotId, CancellationToken cancellationToken);
 
     Task<IReadOnlyList<SlotProposalRow>> ListProposalsByVendorAsync(long vendorId, CancellationToken cancellationToken);

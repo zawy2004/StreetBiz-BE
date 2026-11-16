@@ -90,6 +90,14 @@ public sealed class SidewalkSlotRepository(StreetBizDbContext dbContext, IDateTi
         return entity.slot_id;
     }
 
+    public async Task<IReadOnlyList<SlotFootprintRow>> ListFootprintsInAsync(SlotSearchArea area, CancellationToken cancellationToken) =>
+        await dbContext.SidewalkSlots.AsNoTracking()
+            .Where(s => s.proposal_review_status == null || s.proposal_review_status != ProposalReviewStatuses.Rejected)
+            .Where(s => s.latitude >= area.MinLatitude && s.latitude <= area.MaxLatitude
+                     && s.longitude >= area.MinLongitude && s.longitude <= area.MaxLongitude)
+            .Select(s => new SlotFootprintRow(s.slot_code, s.latitude, s.longitude, s.width_meters, s.length_meters))
+            .ToListAsync(cancellationToken);
+
     public Task<SlotProposalRow?> GetProposalByIdAsync(long slotId, CancellationToken cancellationToken) =>
         dbContext.SidewalkSlots.AsNoTracking()
             .Where(s => s.slot_id == slotId)

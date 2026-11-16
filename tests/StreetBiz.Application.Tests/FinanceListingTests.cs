@@ -8,6 +8,7 @@ using StreetBiz.Application.Features.Finance.ListFeeItems;
 using StreetBiz.Application.Features.Finance.ListPayments;
 using StreetBiz.Application.Features.Finance.ListPenalties;
 using StreetBiz.Application.Features.Finance.ListViolations;
+using StreetBiz.Application.Features.Finance.PenaltySchedules;
 
 namespace StreetBiz.Application.Tests;
 
@@ -122,6 +123,27 @@ public sealed class FinanceListingTests
             .Handle(new ListVendorViolationsQuery(), CancellationToken.None);
 
         finance.Verify(x => x.ListVendorViolationsAsync(4, It.IsAny<CancellationToken>()));
+    }
+
+    [Fact]
+    public async Task Penalty_rates_are_grouped_by_ward_for_today_in_vietnam()
+    {
+        // 18:00 UTC on 31 December is already 1 January in Đà Nẵng: the new year's rates apply.
+        var clock = new Mock<IDateTimeProvider>();
+        clock.SetupGet(c => c.UtcNow).Returns(new DateTime(2026, 12, 31, 18, 0, 0, DateTimeKind.Utc));
+        var finance = new Mock<IFinanceRepository>();
+        finance.Setup(x => x.ListWardPenaltyRatesAsync(4, new DateOnly(2027, 1, 1), It.IsAny<CancellationToken>()))
+            .ReturnsAsync([
+                new WardPenaltyRateRow(1, "Phường Hải Châu", "OUTSIDE_SLOT", "Bán ngoài ô", 500_000m, "NĐ 123"),
+                new WardPenaltyRateRow(1, "Phường Hải Châu", "NO_PERMIT", "Không có giấy phép", 1_500_000m, null),
+                new WardPenaltyRateRow(2, "Phường Thanh Khê", "OUTSIDE_SLOT", "Bán ngoài ô", 700_000m, null),
+            ]);
+
+        var wards = await new ListVendorPenaltySchedulesQueryHandler(VendorContext(), finance.Object, clock.Object)
+            .Handle(new ListVendorPenaltySchedulesQuery(), CancellationToken.None);
+
+        wards.Select(w => (w.WardName, w.Rates.Count)).Should().Equal(("Phường Hải Châu", 2), ("Phường Thanh Khê", 1));
+        wards[0].Rates[1].Should().Be(new StreetBiz.Application.DTOs.Finance.VendorPenaltyRateDto("NO_PERMIT", "Không có giấy phép", 1_500_000m, null));
     }
 
     private static IVendorContext VendorContext()

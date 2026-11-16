@@ -139,6 +139,12 @@ public interface IFinanceRepository
     /// <summary>FinanceHome's "Biên bản phạt" tab: every penalty against the vendor, optionally filtered by status.</summary>
     Task<IReadOnlyList<PenaltyListRow>> ListPenaltiesAsync(long vendorId, string? status, CancellationToken cancellationToken);
 
+    /// <summary>
+    /// WARD-03 rates in force on <paramref name="day"/> in every ward where the vendor holds a
+    /// registration that is not rejected or withdrawn, so the vendor knows what a violation costs there.
+    /// </summary>
+    Task<IReadOnlyList<WardPenaltyRateRow>> ListWardPenaltyRatesAsync(long vendorId, DateOnly day, CancellationToken cancellationToken);
+
     /// <summary>FEE-05: the vendor's payment attempts (fee and penalty purposes only — Orders keeps its own), most recent first.</summary>
     Task<IReadOnlyList<PaymentTransactionRow>> ListPaymentTransactionsAsync(long vendorId, CancellationToken cancellationToken);
 
