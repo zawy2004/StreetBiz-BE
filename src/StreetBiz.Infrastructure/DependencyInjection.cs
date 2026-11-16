@@ -114,6 +114,7 @@ public static class DependencyInjection
 
             return sp.GetRequiredService<HttpSmsSender>();
         });
+        services.AddSingleton<OtpIpGuard>();
         services.AddOptions<OtpSettings>()
             .Bind(configuration.GetSection(OtpSettings.SectionName))
             .PostConfigure<IHostEnvironment>((settings, env) =>

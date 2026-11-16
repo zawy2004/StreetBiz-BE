@@ -87,6 +87,14 @@ public interface IAiAssistanceLogs
     /// </summary>
     Task<(long AiLogId, DateTime ReviewedAt)> RecordAcceptedByAuthorAsync(
         string featureCode, string entityType, long entityId, long authorUserId, object output, CancellationToken ct);
+
+    /// <summary>
+    /// Marks an already-logged suggestion as accepted by the person it was shown to (AIP-01: the vendor
+    /// pressing "Dùng mô tả này"). The row must be the given feature's log for that very entity, so one
+    /// vendor can never mark another's. False when there is no such row; a second call changes nothing.
+    /// </summary>
+    Task<bool> MarkAcceptedByAuthorAsync(
+        long aiLogId, string featureCode, string entityType, long entityId, long authorUserId, CancellationToken ct);
 }
 #endregion
 

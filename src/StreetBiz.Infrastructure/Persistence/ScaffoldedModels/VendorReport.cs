@@ -7,7 +7,7 @@ public partial class VendorReport
 {
     public long report_id { get; set; }
 
-    public long reporter_user_id { get; set; }
+    public long? reporter_user_id { get; set; }
 
     public long? vendor_id { get; set; }
 
@@ -61,7 +61,7 @@ public partial class VendorReport
 
     public virtual ICollection<Violation> Violations { get; set; } = new List<Violation>();
 
-    public virtual UserAccount reporter_user { get; set; } = null!;
+    public virtual UserAccount? reporter_user { get; set; }
 
     public virtual DigitalPermit? scanned_permit { get; set; }
 

@@ -38,6 +38,27 @@ public sealed class SearchSlotsQueryTests
 
     // ---- validation ---------------------------------------------------------------------
 
+    [Theory]
+    [InlineData(200, 108.22)]
+    [InlineData(-91, 108.22)]
+    [InlineData(16.06, 181)]
+    [InlineData(16.06, -200)]
+    public void A_centre_off_the_globe_is_a_validation_error(double lat, double lng) =>
+        new SearchSlotsQueryValidator()
+            .Validate(new SearchSlotsQuery((decimal)lat, (decimal)lng, 500, null, null, null, null, null, null))
+            .IsValid.Should().BeFalse();
+
+    [Fact]
+    public void A_box_off_the_globe_or_upside_down_is_a_validation_error()
+    {
+        var validator = new SearchSlotsQueryValidator();
+        validator.Validate(new SearchSlotsQuery(null, null, null, 16m, 200m, 108m, 108.3m, null, null)).IsValid.Should().BeFalse();
+        validator.Validate(new SearchSlotsQuery(null, null, null, 16m, 16.1m, 108m, 190m, null, null)).IsValid.Should().BeFalse();
+        validator.Validate(new SearchSlotsQuery(null, null, null, 16.1m, 16m, 108m, 108.3m, null, null)).IsValid.Should().BeFalse();
+        validator.Validate(new SearchSlotsQuery(null, null, null, 16m, 16.1m, 108.3m, 108m, null, null)).IsValid.Should().BeFalse();
+        validator.Validate(new SearchSlotsQuery(null, null, null, 16m, 16.1m, 108m, 108.3m, null, null)).IsValid.Should().BeTrue();
+    }
+
     [Fact]
     public void A_search_with_no_area_at_all_is_refused()
     {

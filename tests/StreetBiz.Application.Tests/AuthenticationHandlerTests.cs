@@ -58,6 +58,32 @@ public sealed class AuthenticationHandlerTests
     }
 
     [Fact]
+    public async Task Password_reset_hides_a_gateway_failure_so_registered_phones_are_not_revealed()
+    {
+        users.Setup(u => u.PhoneExistsAsync(Phone, It.IsAny<CancellationToken>())).ReturnsAsync(true);
+        otp.Setup(o => o.IssueAsync(Phone, OtpPurposes.PasswordReset, It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new SmsDeliveryException(AppMessages.SmsUnavailable));
+        var handler = new RequestPasswordResetCommandHandler(users.Object, otp.Object);
+
+        var act = () => handler.Handle(new RequestPasswordResetCommand(Phone), CancellationToken.None);
+
+        await act.Should().NotThrowAsync();
+    }
+
+    [Fact]
+    public async Task Registration_otp_reports_a_gateway_failure_as_a_503()
+    {
+        users.Setup(u => u.PhoneExistsAsync(Phone, It.IsAny<CancellationToken>())).ReturnsAsync(false);
+        otp.Setup(o => o.IssueAsync(Phone, OtpPurposes.Signup, It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new SmsDeliveryException(AppMessages.SmsUnavailable));
+        var handler = new SendOtpCommandHandler(otp.Object, users.Object, Mock.Of<ISender>());
+
+        var act = () => handler.Handle(new SendOtpCommand(Phone, OtpPurposes.Signup), CancellationToken.None);
+
+        (await act.Should().ThrowAsync<SmsDeliveryException>()).Which.StatusCode.Should().Be(503);
+    }
+
+    [Fact]
     public async Task Password_reset_for_an_unknown_phone_sends_nothing_and_succeeds()
     {
         var handler = new RequestPasswordResetCommandHandler(users.Object, otp.Object);

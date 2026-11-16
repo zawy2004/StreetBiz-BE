@@ -91,7 +91,8 @@ public sealed class SubmitAdjacentApplicationCommandHandler(
 
         var applicationId = await applications.CreateAsync(
             request.RegistrationId, request.SlotId, ApplicationMethods.AutoAdjacent,
-            request.RequestedTermDays, null, cancellationToken);
+            request.RequestedTermDays, null, cancellationToken)
+            ?? throw new ConflictException(SideMessages.ApplicationAlreadyOpenForSlot);
 
         await holds.ReleaseAsync(request.SlotId, request.RegistrationId, cancellationToken);
 

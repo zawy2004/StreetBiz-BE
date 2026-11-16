@@ -1,4 +1,6 @@
 using FluentAssertions;
+using SixLabors.ImageSharp;
+using SixLabors.ImageSharp.PixelFormats;
 using Microsoft.AspNetCore.Http;
 using Moq;
 using StreetBiz.API.Controllers;
@@ -9,6 +11,7 @@ using StreetBiz.Application.Features.AiMarketplace;
 using StreetBiz.Application.Features.FoodSafety;
 using StreetBiz.Application.Features.PenaltyReceipts;
 using StreetBiz.Application.Features.WardSlots;
+using StreetBiz.Infrastructure.Storage;
 
 namespace StreetBiz.API.Tests;
 
@@ -25,6 +28,7 @@ public sealed class UploadsControllerTests
         IPenaltyReceiptRepository? penaltyReceipts = null) =>
         new(storage ?? Mock.Of<IFileStorage>(),
             currentUser,
+            new ImageSharpImageProcessor(),
             wardActors ?? Mock.Of<IWardActorResolver>(),
             registrations ?? Mock.Of<IBusinessRegistrationRepository>(),
             Mock.Of<IFoodSafetyService>(),
@@ -193,5 +197,89 @@ public sealed class UploadsControllerTests
         var act = () => controller.Download(ownerUserId: 7, FileName, CancellationToken.None);
 
         await act.Should().ThrowAsync<ForbiddenException>();
+    }
+
+    private sealed class RecordingStorage : IFileStorage
+    {
+        public Dictionary<string, byte[]> Saved { get; } = [];
+
+        public async Task SaveAsync(string relativePath, Stream content, CancellationToken cancellationToken)
+        {
+            using var copy = new MemoryStream();
+            await content.CopyToAsync(copy, cancellationToken);
+            Saved[relativePath] = copy.ToArray();
+        }
+
+        public Task<Stream?> OpenReadAsync(string relativePath, CancellationToken cancellationToken) =>
+            Task.FromResult<Stream?>(Saved.TryGetValue(relativePath, out var bytes) ? new MemoryStream(bytes) : null);
+
+        public Task<IReadOnlyList<StoredFile>> ListAsync(string folder, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
+        public Task<bool> ExistsAsync(string relativePath, CancellationToken cancellationToken) =>
+            Task.FromResult(Saved.ContainsKey(relativePath));
+
+        public Task DeleteAsync(string relativePath, CancellationToken cancellationToken)
+        {
+            Saved.Remove(relativePath);
+            return Task.CompletedTask;
+        }
+    }
+
+    private static IFormFile Upload(byte[] bytes, string name) =>
+        new FormFile(new MemoryStream(bytes), 0, bytes.Length, "file", name);
+
+    [Fact]
+    public async Task An_evidence_photo_is_stored_scaled_down_and_re_encoded()
+    {
+        // A phone photo (4000x3000 here) must not be kept at full size: it is re-encoded, its longest
+        // edge capped, and the size in the answer is what was actually stored.
+        byte[] original;
+        using (var image = new Image<Rgb24>(4000, 3000, Color.SkyBlue))
+        using (var buffer = new MemoryStream())
+        {
+            await image.SaveAsJpegAsync(buffer, new SixLabors.ImageSharp.Formats.Jpeg.JpegEncoder { Quality = 100 });
+            original = buffer.ToArray();
+        }
+
+        var storage = new RecordingStorage();
+        var controller = Build(User(8, RoleCodes.Customer).Object, storage: storage);
+
+        var result = await controller.Upload(Upload(original, "photo.jpg"), CancellationToken.None);
+
+        var stored = storage.Saved.Values.Should().ContainSingle().Subject;
+        var info = Image.Identify(stored);
+        info.Width.Should().Be(UploadsController.MaxEdgePixels);
+        info.Height.Should().Be(1920);
+        var body = result.Result.Should().BeOfType<Microsoft.AspNetCore.Mvc.OkObjectResult>().Subject.Value
+            .Should().BeOfType<UploadedFileResponse>().Subject;
+        body.SizeBytes.Should().Be(stored.Length);
+        body.FileUrl.Should().EndWith(".jpg");
+    }
+
+    [Fact]
+    public async Task An_evidence_pdf_is_stored_as_uploaded()
+    {
+        var pdf = "%PDF-1.4 test document"u8.ToArray();
+        var storage = new RecordingStorage();
+        var controller = Build(User(7, RoleCodes.Vendor).Object, storage: storage);
+
+        await controller.Upload(Upload(pdf, "paper.pdf"), CancellationToken.None);
+
+        storage.Saved.Values.Should().ContainSingle().Which.Should().Equal(pdf);
+    }
+
+    [Fact]
+    public async Task A_file_that_only_looks_like_an_image_is_refused()
+    {
+        // JPEG magic bytes followed by garbage: passes the sniff, fails the decode, never stored.
+        byte[] fake = [0xFF, 0xD8, 0xFF, 0xE0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
+        var storage = new RecordingStorage();
+        var controller = Build(User(7, RoleCodes.Vendor).Object, storage: storage);
+
+        var act = () => controller.Upload(Upload(fake, "photo.jpg"), CancellationToken.None);
+
+        await act.Should().ThrowAsync<ValidationAppException>();
+        storage.Saved.Should().BeEmpty();
     }
 }

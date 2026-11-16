@@ -190,6 +190,51 @@ public sealed class KycResultRepositoryTests
         Assert.Equal("FPT.AI", ocr.Provider);
     }
 
+    private static KycIdCardExtraction OcrWithNumber(string? number) =>
+        new(number, "NGUYEN VAN A", null, null, null, null, null, null, null, 92, false, Array.Empty<string>(), true, "ok");
+
+    [Fact]
+    public async Task The_number_read_off_the_card_reaches_the_registration_so_duplicates_can_be_found()
+    {
+        using var db = await CreateAsync();
+        var clock = new TestClock(new DateTime(2026, 11, 1, 1, 0, 0));
+        var repository = new KycResultRepository(db.Db, clock);
+        await repository.RecordIdCardCheckAsync(VendorB, OcrWithNumber("048090000111"), default);
+        clock.UtcNow = clock.UtcNow.AddMinutes(5);
+        await repository.RecordIdCardCheckAsync(VendorB, OcrWithNumber("048090000222"), default); // the card was swapped
+
+        await repository.LinkPendingResultsAsync(VendorB, RegistrationB, default);
+
+        var stored = await db.NewContext().BusinessRegistrations.SingleAsync(r => r.registration_id == RegistrationB);
+        Assert.Equal("048090000222", stored.id_number);
+    }
+
+    [Fact]
+    public async Task A_misread_number_is_not_stored_and_does_not_break_the_scan()
+    {
+        using var db = await CreateAsync();
+        var repository = new KycResultRepository(db.Db, new TestClock(new DateTime(2026, 11, 1)));
+
+        await repository.RecordIdCardCheckAsync(VendorB, OcrWithNumber("0480900001234567"), default); // 16 digits
+        await repository.RecordIdCardCheckAsync(VendorB, OcrWithNumber("04809000O123"), default);     // letter O
+        await repository.LinkPendingResultsAsync(VendorB, RegistrationB, default);
+
+        Assert.All(await db.NewContext().KycVerificationResults.ToListAsync(), r => Assert.Null(r.extracted_id_number));
+        Assert.Null((await db.NewContext().BusinessRegistrations.SingleAsync(r => r.registration_id == RegistrationB)).id_number);
+    }
+
+    [Fact]
+    public async Task A_scan_never_writes_into_someone_elses_registration()
+    {
+        using var db = await CreateAsync();
+        var repository = new KycResultRepository(db.Db, new TestClock(new DateTime(2026, 11, 1)));
+        await repository.RecordIdCardCheckAsync(VendorC, OcrWithNumber("048090000333"), default);
+
+        await repository.LinkPendingResultsAsync(VendorC, RegistrationB, default); // RegistrationB belongs to VendorB
+
+        Assert.Null((await db.NewContext().BusinessRegistrations.SingleAsync(r => r.registration_id == RegistrationB)).id_number);
+    }
+
     [Fact]
     public async Task Very_long_warnings_are_cut_to_the_column_size()
     {

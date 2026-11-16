@@ -68,7 +68,8 @@ public sealed class SubmitOpenSlotApplicationCommandHandler(
 
         var applicationId = await applications.CreateAsync(
             request.RegistrationId, request.SlotId, ApplicationMethods.ManualSelected,
-            request.RequestedTermDays, now, cancellationToken);
+            request.RequestedTermDays, now, cancellationToken)
+            ?? throw new ConflictException(SideMessages.ApplicationAlreadyOpenForSlot);
 
         await holds.ReleaseAsync(request.SlotId, request.RegistrationId, cancellationToken);
 

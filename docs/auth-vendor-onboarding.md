@@ -2,8 +2,8 @@
 
 Implements the **Authentication subsystem (AUTH-01…AUTH-09)** from Report 3 (SRS),
 built on the existing Clean Architecture scaffold (MediatR / FluentValidation /
-EF Core database-first). Vendor Business Registration (REG-01…05) and the
-AI / Storefront use cases are the next increments.
+EF Core database-first). Vendor Business Registration (REG-01…05) is documented below;
+the AI and storefront use cases live in their own feature folders.
 
 ## Endpoints
 

@@ -254,3 +254,32 @@ public sealed class RecognizeDishImageCommandHandler(
 }
 
 #endregion
+
+/// <summary>AIP-01: the vendor used the suggested text, so its log row is marked accepted (BR-41).</summary>
+public sealed record AcceptDishDescriptionCommand(long AiLogId) : IRequest;
+
+public sealed class AcceptDishDescriptionCommandHandler(
+    IVendorContext vendors,
+    ICurrentUser currentUser,
+    IAiAssistanceLogs logs) : IRequestHandler<AcceptDishDescriptionCommand>
+{
+    public async Task Handle(AcceptDishDescriptionCommand request, CancellationToken cancellationToken)
+    {
+        var vendorId = await vendors.RequireVendorIdAsync(cancellationToken);
+        var userId = currentUser.UserId ?? throw new UnauthorizedAccessException();
+
+        var marked = await logs.MarkAcceptedByAuthorAsync(
+            request.AiLogId,
+            AiMarketplaceFeatures.DishDescription,
+            AiLogEntitiesMarketplace.Vendor,
+            vendorId,
+            userId,
+            cancellationToken);
+
+        // A log that is not this vendor's own AIP-01 row is simply "not found" -- it never says whose it is.
+        if (!marked)
+        {
+            throw new NotFoundException("Không tìm thấy gợi ý AI này.");
+        }
+    }
+}

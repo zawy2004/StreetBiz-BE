@@ -57,7 +57,7 @@ public sealed class PriceQrComplaintApiTests
             .ReturnsAsync(new PostedPriceRow(12, 1, "Bún chả Cô Lan", "A-01", 77, "Bún chả", "suất", 45_000, true, DateTime.UtcNow.AddDays(-9)));
         CustomerVendorReport? saved = null;
         community.Setup(x => x.AddReportAsync(2, CustomerId, It.IsAny<CustomerVendorReport>(), It.IsAny<NewVendorReportNotices>(), It.IsAny<CancellationToken>()))
-            .Callback<long, long, CustomerVendorReport, NewVendorReportNotices, CancellationToken>((_, _, report, _, _) => saved = report)
+            .Callback<long, long?, CustomerVendorReport, NewVendorReportNotices, CancellationToken>((_, _, report, _, _) => saved = report)
             .ReturnsAsync(41);
         using var host = Host(community: community.Object);
         using var client = CustomerClient(host);
@@ -95,6 +95,43 @@ public sealed class PriceQrComplaintApiTests
         // The first five reach the handler (the vendor is unknown here, so 404); the sixth is refused before it.
         Assert.All(statuses.Take(5), status => Assert.Equal(HttpStatusCode.NotFound, status));
         Assert.Equal(HttpStatusCode.TooManyRequests, statuses[5]);
+    }
+
+    [Fact]
+    public async Task A_guest_without_a_session_may_report_and_is_filed_without_a_reporter()
+    {
+        var community = ReportableVendor();
+        community.Setup(x => x.AddReportAsync(2, null, It.IsAny<CustomerVendorReport>(), It.IsAny<NewVendorReportNotices>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(55);
+        using var host = Host(community: community.Object);
+        using var client = host.CreateClient(new() { BaseAddress = new("https://localhost") });
+
+        var response = await client.PostAsJsonAsync("/api/community/vendors/2/reports", new { reason = "Lấn vỉa hè" });
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        community.Verify(x => x.AddReportAsync(2, null, It.IsAny<CustomerVendorReport>(), It.IsAny<NewVendorReportNotices>(), It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
+
+    [Fact]
+    public async Task Guests_get_fewer_reports_an_hour_than_customers_and_in_a_bucket_of_their_own()
+    {
+        var community = new Mock<ICommunityVendorRepository>();
+        using var host = Host(community: community.Object);
+        using var guest = host.CreateClient(new() { BaseAddress = new("https://localhost") });
+        using var customer = CustomerClient(host);
+
+        var statuses = new List<HttpStatusCode>();
+        for (var i = 0; i <= StreetBiz.API.Extensions.CommunityApiSetup.ReportsPerHourGuest; i++)
+        {
+            statuses.Add((await guest.PostAsJsonAsync("/api/community/vendors/2/reports", new { reason = "Lấn vỉa hè" })).StatusCode);
+        }
+
+        Assert.All(statuses.Take(StreetBiz.API.Extensions.CommunityApiSetup.ReportsPerHourGuest), status => Assert.Equal(HttpStatusCode.NotFound, status));
+        Assert.Equal(HttpStatusCode.TooManyRequests, statuses[^1]);
+        // The guests from the same address have used up theirs, not the signed-in customer's.
+        Assert.Equal(HttpStatusCode.NotFound,
+            (await customer.PostAsJsonAsync("/api/community/vendors/2/reports", new { reason = "Lấn vỉa hè" })).StatusCode);
     }
 
     [Fact]

@@ -101,6 +101,15 @@ public sealed record PenaltyListRow(
     DateTime IssuedAt,
     DateTime? PaidAt);
 
+/// <summary>One penalty rate in force in a ward where the vendor has a registration.</summary>
+public sealed record WardPenaltyRateRow(
+    int WardUnitId,
+    string WardName,
+    string ViolationType,
+    string ViolationTypeName,
+    decimal PenaltyAmount,
+    string? LegalBasis);
+
 /// <summary>FinanceHome's top summary card.</summary>
 public sealed record FinanceSummaryRow(
     decimal FeeDue,

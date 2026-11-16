@@ -152,6 +152,28 @@ public sealed class AiComplianceServiceTests
     }
 
     [Fact]
+    public async Task The_newest_front_of_the_card_is_read_not_an_older_replaced_one_and_never_the_back()
+    {
+        var fetched = new List<string>();
+        var handler = new StubHandler(req =>
+        {
+            fetched.Add(req.RequestUri!.ToString());
+            return new HttpResponseMessage(HttpStatusCode.NotFound);
+        });
+        var service = BuildService(handler);
+
+        var evidence = new[]
+        {
+            new WardEvidenceDto(5, "IDENTITY_DOCUMENT_BACK", "CCCD mặt sau", "https://files.test/back.jpg"),
+            new WardEvidenceDto(3, "IDENTITY_DOCUMENT", "CCCD mặt trước", "https://files.test/old-front.jpg"),
+            new WardEvidenceDto(9, "IDENTITY_DOCUMENT", "CCCD mặt trước", "https://files.test/new-front.jpg"),
+        };
+        await service.ExtractIdDocumentAsync(evidence, default);
+
+        fetched.Should().ContainSingle().Which.Should().Be("https://files.test/new-front.jpg");
+    }
+
+    [Fact]
     public async Task Vision_call_sends_the_actual_image_bytes_not_just_a_URL_string()
     {
         var imageBytes = new byte[] { 0xFF, 0xD8, 0xFF, 0xE0 }; // minimal JPEG-ish header

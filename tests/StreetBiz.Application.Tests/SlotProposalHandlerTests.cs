@@ -20,7 +20,13 @@ public sealed class SlotProposalHandlerTests
     private readonly Mock<ISidewalkSlotRepository> slots = new();
     private readonly Mock<ICurrentUser> currentUser = new();
 
-    public SlotProposalHandlerTests() => currentUser.SetupGet(u => u.UserId).Returns(VendorUserId);
+    public SlotProposalHandlerTests()
+    {
+        currentUser.SetupGet(u => u.UserId).Returns(VendorUserId);
+        // No slot nearby unless a test says otherwise.
+        slots.Setup(s => s.ListFootprintsInAsync(It.IsAny<SlotSearchArea>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync([]);
+    }
 
     private static ProposeSlotCommand ValidCommand() => new(
         RegistrationId, ZoneId, 16.0130m, 108.2400m, 2, 3, OwnPhoto);
@@ -38,6 +44,64 @@ public sealed class SlotProposalHandlerTests
 
         (await act.Should().ThrowAsync<ValidationAppException>()).Which.Errors.Should().ContainKey("ProposalPhotoUrl");
         slots.Verify(s => s.ZoneExistsAsync(It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Theory]
+    [InlineData(-2, 3)]
+    [InlineData(0, 3)]
+    [InlineData(2, -1)]
+    [InlineData(1000, 3)]
+    public void A_negative_zero_or_impossible_size_is_a_validation_error(double width, double length)
+    {
+        var result = new ProposeSlotCommandValidator()
+            .Validate(ValidCommand() with { WidthMeters = (decimal)width, LengthMeters = (decimal)length });
+
+        result.IsValid.Should().BeFalse();
+        result.Errors.Should().Contain(e => e.ErrorMessage == SideMessages.ProposalDimensionInvalid);
+    }
+
+    [Fact]
+    public void A_proposal_without_a_size_is_still_valid()
+    {
+        new ProposeSlotCommandValidator()
+            .Validate(ValidCommand() with { WidthMeters = null, LengthMeters = null })
+            .IsValid.Should().BeTrue();
+    }
+
+    [Theory]
+    [InlineData(0, null, null)]          // exactly on an existing slot
+    [InlineData(0.00002, null, null)]    // about 2 m away, the existing one is 2x3 m and the new one too
+    public async Task A_proposal_on_top_of_an_existing_slot_is_refused(double latOffset, double? width, double? length)
+    {
+        slots.Setup(s => s.ZoneExistsAsync(ZoneId, It.IsAny<CancellationToken>())).ReturnsAsync(true);
+        slots.Setup(s => s.ListFootprintsInAsync(It.IsAny<SlotSearchArea>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync([new SlotFootprintRow("NVL-07", 16.0130m + (decimal)latOffset, 108.2400m,
+                width is null ? 2m : (decimal)width, length is null ? 3m : (decimal)length)]);
+        var handler = new ProposeSlotCommandHandler(vendorContext.Object, slots.Object, currentUser.Object);
+
+        var act = () => handler.Handle(ValidCommand(), CancellationToken.None);
+
+        (await act.Should().ThrowAsync<ConflictException>()).Which.Message.Should().Contain("NVL-07");
+        slots.Verify(s => s.ProposeAsync(It.IsAny<long>(), It.IsAny<NewSlotProposal>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task A_proposal_clear_of_every_slot_nearby_is_saved()
+    {
+        slots.Setup(s => s.ZoneExistsAsync(ZoneId, It.IsAny<CancellationToken>())).ReturnsAsync(true);
+        // About 11 m north: two 2x3 m slots that far apart do not touch.
+        slots.Setup(s => s.ListFootprintsInAsync(It.IsAny<SlotSearchArea>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync([new SlotFootprintRow("NVL-07", 16.0131m, 108.2400m, 2m, 3m)]);
+        slots.Setup(s => s.ProposeAsync(RegistrationId, It.IsAny<NewSlotProposal>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(42);
+        slots.Setup(s => s.GetProposalByIdAsync(42, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new SlotProposalRow(42, "VP-1-x", 16.0130m, 108.2400m,
+                ProposalReviewStatuses.Pending, OwnPhoto, null, DateTime.UtcNow));
+        var handler = new ProposeSlotCommandHandler(vendorContext.Object, slots.Object, currentUser.Object);
+
+        var created = await handler.Handle(ValidCommand(), CancellationToken.None);
+
+        created.SlotId.Should().Be(42);
     }
 
     [Fact]

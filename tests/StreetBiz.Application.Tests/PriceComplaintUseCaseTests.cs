@@ -137,7 +137,7 @@ public sealed class PriceComplaintUseCaseTests
         NewVendorReportNotices? notices = null;
         repository.Setup(x => x.AddReportAsync(VendorId, CustomerId, It.IsAny<CustomerVendorReport>(),
                 It.IsAny<NewVendorReportNotices>(), It.IsAny<CancellationToken>()))
-            .Callback<long, long, CustomerVendorReport, NewVendorReportNotices, CancellationToken>((_, _, r, n, _) => (saved, notices) = (r, n))
+            .Callback<long, long?, CustomerVendorReport, NewVendorReportNotices, CancellationToken>((_, _, r, n, _) => (saved, notices) = (r, n))
             .ReturnsAsync(41);
 
         var receipt = await Report(Overcharge(quantity: 2, charged: 120_000, purchasedAt));
@@ -247,7 +247,7 @@ public sealed class PriceComplaintUseCaseTests
         NewVendorReportNotices? notices = null;
         repository.Setup(x => x.AddReportAsync(VendorId, CustomerId, It.IsAny<CustomerVendorReport>(),
                 It.IsAny<NewVendorReportNotices>(), It.IsAny<CancellationToken>()))
-            .Callback<long, long, CustomerVendorReport, NewVendorReportNotices, CancellationToken>((_, _, _, n, _) => notices = n)
+            .Callback<long, long?, CustomerVendorReport, NewVendorReportNotices, CancellationToken>((_, _, _, n, _) => notices = n)
             .ReturnsAsync(41);
 
         await Report(Overcharge(quantity: 2, charged: 120_000, Now.AddHours(-1),
@@ -385,8 +385,15 @@ public sealed class PriceComplaintUseCaseTests
             .Handle(new VerifyPublicPermitCommand(payload, null, null, null, printed), default);
 
     private Task<VendorReportReceiptDto> Report(ReportSuspiciousVendorCommand command) =>
-        new ReportSuspiciousVendorCommandHandler(customer.Object, repository.Object, new VendorReportSettings(), new FixedClock(Now))
+        new ReportSuspiciousVendorCommandHandler(SignedInCustomer(), customer.Object, repository.Object, new VendorReportSettings(), new FixedClock(Now))
             .Handle(command, default);
+
+    private static ICurrentUser SignedInCustomer()
+    {
+        var user = new Mock<ICurrentUser>();
+        user.SetupGet(x => x.UserId).Returns(1);
+        return user.Object;
+    }
 
     private sealed class FixedClock(DateTimeOffset now) : TimeProvider
     {

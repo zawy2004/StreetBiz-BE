@@ -49,6 +49,10 @@ public sealed class SendOtpCommandHandler(
                 {
                     await otpService.IssueAsync(request.PhoneNumber, OtpPurposes.Login, cancellationToken);
                 }
+                catch (SmsDeliveryException)
+                {
+                    // Same reason as the cooldown below: only a registered phone reaches the gateway.
+                }
                 catch (TooManyRequestsException)
                 {
                     // Only a registered phone can hit the cooldown, so reporting it would leak.

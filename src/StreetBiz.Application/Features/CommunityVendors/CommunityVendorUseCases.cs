@@ -282,6 +282,7 @@ public sealed class ReportSuspiciousVendorCommandValidator : AbstractValidator<R
 /// the vendor's permit is not valid, which is exactly when a customer is told to report.
 /// </summary>
 public sealed class ReportSuspiciousVendorCommandHandler(
+    ICurrentUser currentUser,
     ICustomerContext customer,
     ICommunityVendorRepository vendors,
     VendorReportSettings settings,
@@ -293,11 +294,27 @@ public sealed class ReportSuspiciousVendorCommandHandler(
         ReportSuspiciousVendorCommand request,
         CancellationToken cancellationToken)
     {
-        var customerUserId = await customer.RequireCustomerUserIdAsync(cancellationToken);
+        // BUY-05: a guest (no session at all) may report too. Signed in, only an active customer
+        // account may: a vendor or an officer has no business filing citizen reports.
+        long? customerUserId = currentUser.UserId is null
+            ? null
+            : await customer.RequireCustomerUserIdAsync(cancellationToken);
+
+        // A guest cannot upload, so any photo address from a guest is someone else's file.
+        if (customerUserId is null && !string.IsNullOrWhiteSpace(request.EvidenceUrl))
+        {
+            throw new ValidationAppException(new Dictionary<string, string[]>
+            {
+                ["EvidenceUrl"] = [CommunityMessages.GuestCannotAttachPhoto],
+            });
+        }
+
         // The photo must be one this customer uploaded: the ward officer's screen downloads it
         // with the officer's own token, so a planted link (javascript:, another host, someone
         // else's file) must never be stored.
-        if (request.EvidenceUrl?.Trim() is { Length: > 0 } evidenceUrl && !EvidenceFiles.IsOwnUpload(evidenceUrl, customerUserId))
+        if (customerUserId is { } uploader
+            && request.EvidenceUrl?.Trim() is { Length: > 0 } evidenceUrl
+            && !EvidenceFiles.IsOwnUpload(evidenceUrl, uploader))
         {
             throw new ValidationAppException(new Dictionary<string, string[]>
             {
@@ -317,7 +334,9 @@ public sealed class ReportSuspiciousVendorCommandHandler(
             throw new DomainRuleException(CommunityMessages.ReportReferenceMismatch);
         }
 
-        if (await vendors.HasPendingReportAsync(customerUserId, request.VendorId, cancellationToken))
+        // One open report per person per vendor. A guest has no identity to count against; the
+        // anonymous rate limit (per IP) is what keeps guest reports from flooding a ward.
+        if (customerUserId is { } reporter && await vendors.HasPendingReportAsync(reporter, request.VendorId, cancellationToken))
         {
             throw new ConflictException(CommunityMessages.DuplicatePendingReport);
         }

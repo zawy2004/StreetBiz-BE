@@ -26,7 +26,7 @@ public sealed class KycResultRepository(
             check_type = KycCheckTypes.IdCardOcr,
             provider = Provider,
             confidence_percent = extraction.ConfidencePercent,
-            extracted_id_number = extraction.IdNumber,
+            extracted_id_number = ValidIdNumber(extraction.IdNumber),
             warnings = Join(extraction.Warnings),
             created_at = clock.UtcNow,
         });
@@ -71,6 +71,26 @@ public sealed class KycResultRepository(
             row.registration_id = registrationId;
         }
 
+        // The registration has no CCCD number field of its own: the number read off the card is what
+        // AIC-03 compares across accounts, so it must reach BusinessRegistrations.id_number here and not
+        // only after an officer re-runs the document check. The newest scan wins (the applicant may have
+        // swapped the card), and only the owner's own registration is touched. The officer still verifies
+        // identity by hand (BR-41); a number only ever feeds an advisory duplicate warning.
+        var scanned = pending
+            .Where(r => r.check_type == KycCheckTypes.IdCardOcr && r.extracted_id_number != null)
+            .OrderByDescending(r => r.created_at)
+            .Select(r => r.extracted_id_number)
+            .FirstOrDefault();
+        if (scanned is not null)
+        {
+            var registration = await dbContext.BusinessRegistrations
+                .FirstOrDefaultAsync(r => r.registration_id == registrationId && r.vendor.user_id == userId, ct);
+            if (registration is not null)
+            {
+                registration.id_number = scanned;
+            }
+        }
+
         await dbContext.SaveChangesAsync(ct);
     }
 
@@ -89,6 +109,14 @@ public sealed class KycResultRepository(
                 r.check_type, r.provider, r.is_match, r.similarity_percent,
                 r.confidence_percent, r.warnings, r.created_at))
             .ToList();
+    }
+
+    /// <summary>A CCCD number is exactly 12 digits; anything else (a misread, a passport) is not stored,
+    /// which also keeps it inside the NVARCHAR(12) column instead of failing the scan with a 500.</summary>
+    internal static string? ValidIdNumber(string? idNumber)
+    {
+        var trimmed = idNumber?.Trim();
+        return trimmed is { Length: 12 } && trimmed.All(char.IsDigit) ? trimmed : null;
     }
 
     private static string? Join(IReadOnlyList<string> warnings)

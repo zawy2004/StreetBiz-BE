@@ -166,3 +166,6 @@ public sealed record SlotHoldRow(
     long RegistrationId,
     DateTime HeldAt,
     DateTime ExpiresAt);
+
+/// <summary>Where a slot is and how big it is, for overlap checks.</summary>
+public sealed record SlotFootprintRow(string SlotCode, decimal Latitude, decimal Longitude, decimal? WidthMeters, decimal? LengthMeters);

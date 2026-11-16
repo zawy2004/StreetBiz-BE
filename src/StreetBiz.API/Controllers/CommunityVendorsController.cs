@@ -76,8 +76,10 @@ public sealed class CommunityVendorsController(ISender sender) : ControllerBase
     /// BUY-05 / BUY-07: report a vendor to the responsible ward. An OVERCHARGE names the dish, the
     /// quantity, the amount charged and when; the posted price is the server's, from the price history
     /// at that moment. 409 while the caller already has a pending report about this vendor.
+    /// A guest (no session) may report too, without a photo and without following it afterwards;
+    /// a signed-in caller must be an active customer.
     /// </summary>
-    [Authorize]
+    [AllowAnonymous]
     [EnableRateLimiting("CommunityReport")]
     [HttpPost("vendors/{vendorId:long}/reports")]
     public async Task<ActionResult<VendorReportReceiptDto>> Report(

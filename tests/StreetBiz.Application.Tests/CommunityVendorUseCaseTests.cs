@@ -111,6 +111,54 @@ public sealed class CommunityVendorUseCaseTests
     }
 
     [Fact]
+    public async Task A_guest_without_a_session_reports_with_no_reporter_and_no_duplicate_check()
+    {
+        var customer = new Mock<ICustomerContext>(MockBehavior.Strict); // never asked: there is no session
+        var repository = new Mock<ICommunityVendorRepository>();
+        repository.Setup(x => x.GetReportTargetAsync(2, null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ReportTargetRow(2, "Vendor", null));
+        repository.Setup(x => x.ReportReferencesBelongToVendorAsync(2, null, null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+        repository.Setup(x => x.AddReportAsync(2, null, It.IsAny<CustomerVendorReport>(), It.IsAny<NewVendorReportNotices>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(41);
+
+        var receipt = await ReportHandler(customer.Object, repository.Object, sessionUserId: null)
+            .Handle(new ReportSuspiciousVendorCommand(2, "Lấn vỉa hè", null, null, null), CancellationToken.None);
+
+        receipt.ReportId.Should().Be(41);
+        repository.Verify(x => x.HasPendingReportAsync(It.IsAny<long>(), It.IsAny<long>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task A_guest_cannot_attach_a_photo()
+    {
+        var repository = new Mock<ICommunityVendorRepository>();
+
+        var act = () => ReportHandler(Mock.Of<ICustomerContext>(), repository.Object, sessionUserId: null)
+            .Handle(new ReportSuspiciousVendorCommand(2, "Lấn vỉa hè", EvidenceFiles.BuildUrl(9, "0123456789abcdef0123456789abcdef.jpg"), null, null),
+                CancellationToken.None);
+
+        (await act.Should().ThrowAsync<ValidationAppException>()).Which.Errors["EvidenceUrl"]
+            .Should().Equal(CommunityMessages.GuestCannotAttachPhoto);
+        repository.VerifyNoOtherCalls();
+    }
+
+    [Fact]
+    public async Task A_signed_in_non_customer_still_cannot_report()
+    {
+        var customer = new Mock<ICustomerContext>();
+        customer.Setup(x => x.RequireCustomerUserIdAsync(It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new ForbiddenException("Only active customer accounts can perform this action."));
+        var repository = new Mock<ICommunityVendorRepository>();
+
+        var act = () => ReportHandler(customer.Object, repository.Object, sessionUserId: 40)
+            .Handle(new ReportSuspiciousVendorCommand(2, "Lấn vỉa hè", null, null, null), CancellationToken.None);
+
+        await act.Should().ThrowAsync<ForbiddenException>();
+        repository.VerifyNoOtherCalls();
+    }
+
+    [Fact]
     public async Task Report_handler_rejects_a_slot_or_permit_owned_by_another_vendor()
     {
         var customer = new Mock<ICustomerContext>();
@@ -212,8 +260,15 @@ public sealed class CommunityVendorUseCaseTests
     }
 
     private static ReportSuspiciousVendorCommandHandler ReportHandler(
-        ICustomerContext customer, ICommunityVendorRepository repository) =>
-        new(customer, repository, new VendorReportSettings(), TimeProvider.System);
+        ICustomerContext customer, ICommunityVendorRepository repository, long? sessionUserId = 7) =>
+        new(SignedIn(sessionUserId), customer, repository, new VendorReportSettings(), TimeProvider.System);
+
+    private static ICurrentUser SignedIn(long? userId)
+    {
+        var user = new Mock<ICurrentUser>();
+        user.SetupGet(x => x.UserId).Returns(userId);
+        return user.Object;
+    }
 
     private static ActiveVendorLocationRow Location(long vendorId, decimal latitude, decimal longitude) => new(
         vendorId, vendorId, $"Vendor {vendorId}", VendorTypes.Itinerant, null,

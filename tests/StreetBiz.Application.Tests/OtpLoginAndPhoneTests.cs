@@ -94,6 +94,19 @@ public sealed class OtpLoginAndPhoneTests
         await act.Should().NotThrowAsync();
     }
 
+    [Fact]
+    public async Task A_login_code_gateway_failure_is_swallowed_so_it_cannot_reveal_a_registered_phone()
+    {
+        users.Setup(u => u.PhoneExistsAsync(Phone, It.IsAny<CancellationToken>())).ReturnsAsync(true);
+        otp.Setup(o => o.IssueAsync(Phone, OtpPurposes.Login, It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new SmsDeliveryException(AppMessages.SmsUnavailable));
+        var handler = new SendOtpCommandHandler(otp.Object, users.Object, Mock.Of<ISender>());
+
+        var act = () => handler.Handle(new SendOtpCommand(Phone, OtpPurposes.Login), CancellationToken.None);
+
+        await act.Should().NotThrowAsync();
+    }
+
     [Theory]
     [InlineData("+84905000001", "0905000001")]
     [InlineData("0905000001", "0905000001")]

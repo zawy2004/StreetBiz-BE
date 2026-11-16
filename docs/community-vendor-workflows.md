@@ -10,7 +10,7 @@ Only vendors with an active account, an approved registration and a currently
 | BUY-02 | `POST /api/community/permits/verify` | Anonymous, rate limited | Verifies the signed QR payload against live permit status and records a `PUBLIC_CHECK` scan log. |
 | BUY-03 | `GET /api/community/vendors/{vendorId}` | Anonymous | Returns public identity, permit, slot, ratings and the newest 50 community comments. |
 | BUY-04 | `PUT /api/community/vendors/{vendorId}/comment` | Customer JWT | Creates or replaces that customer's unique rating/comment for the vendor. |
-| BUY-05 | `POST /api/community/vendors/{vendorId}/reports` | Customer JWT | Creates a `PENDING` report; supplied slot/permit references must belong to the vendor. |
+| BUY-05 | `POST /api/community/vendors/{vendorId}/reports` | None (guest) or customer JWT | Creates a `PENDING` report; supplied slot/permit references must belong to the vendor. A guest's report has no reporter (`reporter_user_id` NULL): no photo, no "Phản ánh của tôi", no outcome notice, 3 reports an hour per IP. A customer may attach a photo, follows the report, has 5 an hour and one pending report per vendor. A signed-in vendor or officer gets 403. |
 
 The authenticated handlers re-read the user from StreetBizDB and require both
 role `CUSTOMER` and account status `ACTIVE`; trusting the JWT role alone is not
