@@ -1513,7 +1513,7 @@ public partial class StreetBizDbContext : DbContext
 
             entity.HasIndex(e => new { e.reporter_user_id, e.vendor_id }, "UQ_VendorReports_OnePendingPerReporter")
                 .IsUnique()
-                .HasFilter("([report_status]='PENDING' AND [vendor_id] IS NOT NULL)");
+                .HasFilter("([report_status]='PENDING' AND [vendor_id] IS NOT NULL AND [reporter_user_id] IS NOT NULL)");
 
             entity.Property(e => e.ai_extracted_location).HasMaxLength(200);
             entity.Property(e => e.charged_amount).HasColumnType("decimal(18, 0)");

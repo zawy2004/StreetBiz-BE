@@ -324,6 +324,30 @@ public sealed class PriceQrComplaintTests
     #region Closing a report (WARD-19)
 
     [Fact]
+    public async Task A_guest_report_has_no_reporter_and_two_guests_may_report_the_same_stall()
+    {
+        using var f = await Fixture.Create();
+
+        var first = await f.ReportHandler(customerId: null).Handle(new ReportSuspiciousVendorCommand(10, "Lấn vỉa hè", null, null, null), default);
+        // The one-pending-report index skips reports without a reporter: NULLs would otherwise collide.
+        await f.ReportHandler(customerId: null).Handle(new ReportSuspiciousVendorCommand(10, "Chắn lối đi", null, null, null), default);
+
+        var reports = await f.Db.VendorReports.AsNoTracking().OrderBy(r => r.report_id).ToListAsync();
+        Assert.Equal(2, reports.Count);
+        Assert.All(reports, r => Assert.Null(r.reporter_user_id));
+        Assert.Equal(VendorReportStatuses.Pending, first.Status);
+        // The ward and the vendor are told as for any report.
+        Assert.Contains(await f.Db.Notifications.AsNoTracking().ToListAsync(), n => n.user_id == 1);
+
+        // Resolving it tells the vendor; there is nobody else to tell.
+        await f.Decisions().ResolveAsync(f.Officer1, reports[0].report_id, new ResolveVendorReportRequest(
+            VendorReportStatuses.Pending, VendorReportResolutions.Dismissed, "Đã kiểm tra, quầy bán đúng vị trí."), default);
+        var resolved = await f.Db.Notifications.AsNoTracking()
+            .Where(n => n.notification_type == VendorReportNotificationTypes.Resolved).ToListAsync();
+        Assert.Equal(1L, Assert.Single(resolved).user_id);
+    }
+
+    [Fact]
     public async Task Dismissing_records_who_when_why_audits_it_and_tells_both_sides_the_vendor_without_the_note()
     {
         using var f = await Fixture.Create();
@@ -706,11 +730,17 @@ public sealed class PriceQrComplaintTests
 
         public AiMarketplaceRepository Inbox() => new(Db, new CommerceRepository(Db, Clock), Clock);
 
-        public ReportSuspiciousVendorCommandHandler ReportHandler(long customerId)
+        public ReportSuspiciousVendorCommandHandler ReportHandler(long? customerId)
         {
             var customer = new Mock<ICustomerContext>();
-            customer.Setup(x => x.RequireCustomerUserIdAsync(It.IsAny<CancellationToken>())).ReturnsAsync(customerId);
-            return new ReportSuspiciousVendorCommandHandler(customer.Object, Community(), new VendorReportSettings(), Clock);
+            if (customerId is { } id)
+            {
+                customer.Setup(x => x.RequireCustomerUserIdAsync(It.IsAny<CancellationToken>())).ReturnsAsync(id);
+            }
+
+            var session = new Mock<ICurrentUser>();
+            session.SetupGet(x => x.UserId).Returns(customerId);
+            return new ReportSuspiciousVendorCommandHandler(session.Object, customer.Object, Community(), new VendorReportSettings(), Clock);
         }
 
         public async Task<long> AddDish(string name, decimal price, string unit, string? nameEn = null)

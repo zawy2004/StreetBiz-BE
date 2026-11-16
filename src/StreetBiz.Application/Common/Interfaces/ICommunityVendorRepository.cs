@@ -41,9 +41,10 @@ public interface ICommunityVendorRepository
     /// Inserts the report and, in the same transaction, the notices: <c>ForWard</c> to every active
     /// officer of the report's ward(s), <c>ForVendor</c> to the vendor's account.
     /// </summary>
+    /// <param name="reporterUserId">The signed-in customer; null for a guest's report (BUY-05).</param>
     Task<long> AddReportAsync(
         long vendorId,
-        long customerUserId,
+        long? reporterUserId,
         CustomerVendorReport report,
         NewVendorReportNotices notices,
         CancellationToken cancellationToken);

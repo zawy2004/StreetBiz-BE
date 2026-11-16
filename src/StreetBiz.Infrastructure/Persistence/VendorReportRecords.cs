@@ -139,8 +139,12 @@ internal static class VendorReportRecords
 
         var (name, slotCode) = await SubjectAsync(db, report, cancellationToken);
         var subject = VendorReportNotices.Subject(name, slotCode);
-        Notify(db, report.reporter_user_id, VendorReportNotices.ResolvedForReporter(resolution, subject, note, refundAmount),
-            report.report_id, nowUtc);
+        // A guest's report has no reporter to tell.
+        if (report.reporter_user_id is { } reporterUserId)
+        {
+            Notify(db, reporterUserId, VendorReportNotices.ResolvedForReporter(resolution, subject, note, refundAmount),
+                report.report_id, nowUtc);
+        }
         if (report.vendor_id is { } vendorId
             && await db.Vendors.AsNoTracking().Where(vendor => vendor.vendor_id == vendorId)
                 .Select(vendor => (long?)vendor.user_id).SingleOrDefaultAsync(cancellationToken) is { } vendorUserId)

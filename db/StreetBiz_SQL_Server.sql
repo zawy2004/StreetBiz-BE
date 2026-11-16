@@ -978,7 +978,7 @@ CREATE TABLE VendorComments (
 -- any) or VIOLATION_RECORDED (a biên bản raised from it: Violations.source_report_id).
 CREATE TABLE VendorReports (
     report_id                BIGINT IDENTITY(1,1)  PRIMARY KEY,
-    reporter_user_id         BIGINT                NOT NULL,
+    reporter_user_id         BIGINT                NULL,  -- NULL: a guest's report (BUY-05), no account to follow it
     vendor_id                BIGINT                NULL,
     slot_id                  BIGINT                NULL,
     scanned_permit_id        BIGINT                NULL,
@@ -1055,10 +1055,11 @@ CREATE INDEX IX_VendorReports_Vendor ON VendorReports(vendor_id);
 CREATE INDEX IX_VendorReports_Reporter ON VendorReports(reporter_user_id, created_at);
 CREATE INDEX IX_VendorReports_StatusDue ON VendorReports(report_status, due_at);
 -- One open report per person per vendor: a second one while the first waits adds noise, not
--- evidence. vendor_id IS NOT NULL keeps slot-only reports out (a unique index treats NULLs as equal).
+-- evidence. vendor_id IS NOT NULL keeps slot-only reports out and reporter_user_id IS NOT NULL
+-- keeps guests' reports out (a unique index treats NULLs as equal).
 CREATE UNIQUE INDEX UQ_VendorReports_OnePendingPerReporter
     ON VendorReports(reporter_user_id, vendor_id)
-    WHERE report_status = 'PENDING' AND vendor_id IS NOT NULL;
+    WHERE report_status = 'PENDING' AND vendor_id IS NOT NULL AND reporter_user_id IS NOT NULL;
 
 
 /* ============================================================
