@@ -34,10 +34,28 @@ public sealed class SearchSlotsQueryValidator : AbstractValidator<SearchSlotsQue
             .Must(HaveCenterOrBoundingBoxOrZone)
             .WithMessage("Provide either lat/lng/radiusMeters, minLat/maxLat/minLng/maxLng, or zoneId.");
 
+        // A point off the globe (lat 200) would otherwise search a box no slot can be in and
+        // answer an empty 200, hiding the client's bug behind "no slots here".
+        RuleFor(x => x.Lat).InclusiveBetween(-90m, 90m).WithMessage(LatitudeRange).When(x => x.Lat.HasValue);
+        RuleFor(x => x.MinLat).InclusiveBetween(-90m, 90m).WithMessage(LatitudeRange).When(x => x.MinLat.HasValue);
+        RuleFor(x => x.MaxLat).InclusiveBetween(-90m, 90m).WithMessage(LatitudeRange).When(x => x.MaxLat.HasValue);
+        RuleFor(x => x.Lng).InclusiveBetween(-180m, 180m).WithMessage(LongitudeRange).When(x => x.Lng.HasValue);
+        RuleFor(x => x.MinLng).InclusiveBetween(-180m, 180m).WithMessage(LongitudeRange).When(x => x.MinLng.HasValue);
+        RuleFor(x => x.MaxLng).InclusiveBetween(-180m, 180m).WithMessage(LongitudeRange).When(x => x.MaxLng.HasValue);
+        RuleFor(x => x.MaxLat).GreaterThanOrEqualTo(x => x.MinLat!.Value)
+            .WithMessage("maxLat must not be less than minLat.")
+            .When(x => x.MinLat.HasValue && x.MaxLat.HasValue);
+        RuleFor(x => x.MaxLng).GreaterThanOrEqualTo(x => x.MinLng!.Value)
+            .WithMessage("maxLng must not be less than minLng.")
+            .When(x => x.MinLng.HasValue && x.MaxLng.HasValue);
+
         RuleFor(x => x.RadiusMeters).GreaterThan(0).When(x => x.RadiusMeters.HasValue);
         RuleFor(x => x.ZoneId).GreaterThan(0).When(x => x.ZoneId.HasValue);
         RuleFor(x => x.Take).InclusiveBetween(1, 500);
     }
+
+    private const string LatitudeRange = "Latitude must be between -90 and 90.";
+    private const string LongitudeRange = "Longitude must be between -180 and 180.";
 
     private static bool HaveCenterOrBoundingBoxOrZone(SearchSlotsQuery query)
     {

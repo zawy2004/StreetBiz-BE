@@ -20,14 +20,24 @@ namespace StreetBiz.API.Controllers;
 public sealed class UploadsController(
     IFileStorage storage,
     ICurrentUser currentUser,
+    IImageProcessor images,
     IWardActorResolver wardActors,
     IBusinessRegistrationRepository registrations,
     IFoodSafetyService foodSafety,
     IAiMarketplaceRepository vendorReports,
     IPenaltyReceiptRepository penaltyReceipts) : ControllerBase
 {
+    /// <summary>
+    /// Longest edge a stored evidence photo keeps. Larger than a public photo's because an officer
+    /// may need to read a permit number or an ID card off it, still a fraction of a phone original.
+    /// </summary>
+    public const int MaxEdgePixels = 2560;
 
-    /// <summary>Uploads one evidence file (JPG/PNG/WEBP/PDF, max 5 MB) and returns its URL.</summary>
+    /// <summary>
+    /// Uploads one evidence file (JPG/PNG/WEBP/PDF, max 5 MB) and returns its URL. A photo is
+    /// re-encoded at most <see cref="MaxEdgePixels"/> on its longest edge, without metadata (the GPS
+    /// position in a photo of an ID card taken at home); a PDF is stored as uploaded.
+    /// </summary>
     [HttpPost]
     [Consumes("multipart/form-data")]
     [RequestSizeLimit(EvidenceFiles.MaxBytes + 64 * 1024)]
@@ -69,14 +79,34 @@ public sealed class UploadsController(
         var extension = EvidenceFiles.DetectExtension(header.AsSpan(0, read))
             ?? throw FileError(EvidenceFiles.InvalidType);
 
-        var fileName = EvidenceFiles.NewFileName(extension);
-        await using (var content = file.OpenReadStream())
+        Stream content;
+        if (extension == ".pdf")
         {
+            content = file.OpenReadStream();
+        }
+        else
+        {
+            try
+            {
+                await using var upload = file.OpenReadStream();
+                content = await images.SanitizePhotoAsync(upload, extension, MaxEdgePixels, cancellationToken);
+            }
+            catch (InvalidImageException ex)
+            {
+                throw FileError(ex.Message);
+            }
+        }
+
+        var fileName = EvidenceFiles.NewFileName(extension);
+        long size;
+        await using (content)
+        {
+            size = content.Length;
             await storage.SaveAsync(EvidenceFiles.StoragePath(userId, fileName), content, cancellationToken);
         }
 
         return Ok(new UploadedFileResponse(
-            EvidenceFiles.BuildUrl(userId, fileName), EvidenceFiles.ContentTypes[extension], file.Length));
+            EvidenceFiles.BuildUrl(userId, fileName), EvidenceFiles.ContentTypes[extension], size));
     }
 
     /// <summary>

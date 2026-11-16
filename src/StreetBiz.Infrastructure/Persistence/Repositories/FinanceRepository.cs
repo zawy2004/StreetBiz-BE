@@ -1320,6 +1320,34 @@ public sealed class FinanceRepository(
         return rows.OrderByDescending(row => row.DueDate).ToList();
     }
 
+    public async Task<IReadOnlyList<WardPenaltyRateRow>> ListWardPenaltyRatesAsync(
+        long vendorId, DateOnly day, CancellationToken cancellationToken)
+    {
+        var wardIds = db.BusinessRegistrations.AsNoTracking()
+            .Where(registration => registration.vendor_id == vendorId
+                && registration.registration_status != RegistrationStatuses.Rejected
+                && registration.registration_status != RegistrationStatuses.Withdrawn)
+            .Select(registration => registration.ward_unit_id);
+
+        return await db.PenaltyFeeSchedules.AsNoTracking()
+            .Where(schedule => wardIds.Contains(schedule.ward_unit_id)
+                && schedule.violation_typeNavigation.is_active
+                && schedule.effective_from <= day
+                && (schedule.effective_to == null || schedule.effective_to > day))
+            .OrderBy(schedule => schedule.ward_unit_id)
+            .ThenBy(schedule => schedule.penalty_schedule_id)
+            .Select(schedule => new WardPenaltyRateRow(
+                schedule.ward_unit_id,
+                // By id: the navigation keys on (ward_unit_id, ward_unit_type), a computed column.
+                db.AdministrativeUnits.Where(unit => unit.unit_id == schedule.ward_unit_id)
+                    .Select(unit => unit.unit_name).FirstOrDefault() ?? string.Empty,
+                schedule.violation_type,
+                schedule.violation_typeNavigation.description,
+                schedule.penalty_amount,
+                schedule.legal_basis))
+            .ToListAsync(cancellationToken);
+    }
+
     public async Task<IReadOnlyList<PenaltyListRow>> ListPenaltiesAsync(
         long vendorId, string? status, CancellationToken cancellationToken)
     {

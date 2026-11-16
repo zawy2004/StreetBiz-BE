@@ -33,6 +33,19 @@ public sealed record PenaltyDto(
     decimal Amount,
     string PenaltyStatus);
 
+/// <summary>The penalty rates in force in one ward where the vendor has a registration.</summary>
+public sealed record VendorWardPenaltyScheduleDto(
+    int WardUnitId,
+    string WardName,
+    IReadOnlyList<VendorPenaltyRateDto> Rates);
+
+/// <summary>One violation type and what it costs in that ward (WARD-03, BR-33).</summary>
+public sealed record VendorPenaltyRateDto(
+    string ViolationType,
+    string ViolationTypeName,
+    decimal PenaltyAmount,
+    string? LegalBasis);
+
 /// <summary>One penalty in FinanceHome's "Biên bản phạt" tab.</summary>
 public sealed record PenaltyListDto(
     long PenaltyId,

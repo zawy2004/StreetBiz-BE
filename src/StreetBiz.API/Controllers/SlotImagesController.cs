@@ -13,9 +13,13 @@ namespace StreetBiz.API.Controllers;
 /// </summary>
 [ApiController]
 [Route("api/uploads/slot-images")]
-public sealed class SlotImagesController(IFileStorage storage, ICurrentUser currentUser) : ControllerBase
+public sealed class SlotImagesController(
+    IFileStorage storage, ICurrentUser currentUser, IImageProcessor images) : ControllerBase
 {
-    /// <summary>Uploads one slot photo (JPG/PNG/WEBP, max 5 MB) and returns its URL.</summary>
+    /// <summary>
+    /// Uploads one slot photo (JPG/PNG/WEBP, max 5 MB) and returns its URL. Public photo: re-encoded
+    /// without metadata and scaled like a dish photo (<see cref="MenuImagesController.MaxEdgePixels"/>).
+    /// </summary>
     [HttpPost]
     [Authorize]
     [Consumes("multipart/form-data")]
@@ -49,14 +53,27 @@ public sealed class SlotImagesController(IFileStorage storage, ICurrentUser curr
         var extension = SlotImageFiles.DetectExtension(header.AsSpan(0, read))
             ?? throw FileError(SlotImageFiles.InvalidType);
 
-        var fileName = EvidenceFiles.NewFileName(extension);
-        await using (var content = file.OpenReadStream())
+        Stream clean;
+        try
         {
-            await storage.SaveAsync(SlotImageFiles.StoragePath(userId, fileName), content, cancellationToken);
+            await using var upload = file.OpenReadStream();
+            clean = await images.SanitizePhotoAsync(upload, extension, MenuImagesController.MaxEdgePixels, cancellationToken);
+        }
+        catch (InvalidImageException ex)
+        {
+            throw FileError(ex.Message);
+        }
+
+        var fileName = EvidenceFiles.NewFileName(extension);
+        long size;
+        await using (clean)
+        {
+            size = clean.Length;
+            await storage.SaveAsync(SlotImageFiles.StoragePath(userId, fileName), clean, cancellationToken);
         }
 
         return Ok(new UploadedFileResponse(
-            SlotImageFiles.BuildUrl(userId, fileName), EvidenceFiles.ContentTypes[extension], file.Length));
+            SlotImageFiles.BuildUrl(userId, fileName), EvidenceFiles.ContentTypes[extension], size));
     }
 
     [HttpGet("{ownerUserId:long}/{fileName}")]

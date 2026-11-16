@@ -15,6 +15,7 @@ using StreetBiz.Application.Features.Finance.ListPayments;
 using StreetBiz.Application.Features.Finance.ListPenalties;
 using StreetBiz.Application.Features.Finance.ListViolations;
 using StreetBiz.Application.Features.Finance.PayFee;
+using StreetBiz.Application.Features.Finance.PenaltySchedules;
 using StreetBiz.Application.Features.Finance.SyncPayment;
 using StreetBiz.Application.Features.Finance.VendorContracts;
 using StreetBiz.Application.Features.PayoutAccounts;
@@ -51,6 +52,12 @@ public sealed class FinanceController(
     public async Task<ActionResult<IReadOnlyList<PenaltyListDto>>> ListPenalties(
         [FromQuery] string? status, CancellationToken cancellationToken) =>
         Ok(await sender.Send(new ListPenaltiesQuery(status), cancellationToken));
+
+    /// <summary>WARD-03 penalty rates in force today in each ward where the vendor has a registration.</summary>
+    [HttpGet("penalty-schedules")]
+    public async Task<ActionResult<IReadOnlyList<VendorWardPenaltyScheduleDto>>> ListPenaltySchedules(
+        CancellationToken cancellationToken) =>
+        Ok(await sender.Send(new ListVendorPenaltySchedulesQuery(), cancellationToken));
 
     /// <summary>FEE-05: the caller's fee/penalty payment attempts, most recent first.</summary>
     [HttpGet("payments")]

@@ -17,7 +17,7 @@ public sealed class RentalApplicationRepositoryTests
         var repository = new RentalApplicationRepository(db.Db);
         var accepted = new DateTime(2026, 10, 1, 3, 0, 0, DateTimeKind.Utc);
 
-        var id = await repository.CreateAsync(RegistrationB, SlotFree, ApplicationMethods.ManualSelected, 60, accepted, default);
+        var id = (await repository.CreateAsync(RegistrationB, SlotFree, ApplicationMethods.ManualSelected, 60, accepted, default))!.Value;
 
         var row = await repository.GetByIdAsync(id, default);
         Assert.NotNull(row);
@@ -36,7 +36,7 @@ public sealed class RentalApplicationRepositoryTests
         var repository = new RentalApplicationRepository(db.Db);
 
         Assert.False(await repository.HasOpenApplicationForSlotAsync(SlotFree, default));
-        var id = await repository.CreateAsync(RegistrationB, SlotFree, ApplicationMethods.ManualSelected, 30, null, default);
+        var id = (await repository.CreateAsync(RegistrationB, SlotFree, ApplicationMethods.ManualSelected, 30, null, default))!.Value;
         Assert.True(await repository.HasOpenApplicationForSlotAsync(SlotFree, default));
 
         await repository.SetStatusAsync(id, ApplicationStatuses.UnderReview, default);
@@ -48,13 +48,27 @@ public sealed class RentalApplicationRepositoryTests
     }
 
     [Fact]
+    public async Task A_second_application_for_a_slot_with_an_open_one_is_not_created()
+    {
+        // The open-application check runs inside the create, under the slot's row lock, so a double
+        // submit (8 taps on "Gửi đơn") ends with one row; the handler turns the null into a 409.
+        using var db = await CreateAsync();
+        var repository = new RentalApplicationRepository(db.Db);
+
+        Assert.NotNull(await repository.CreateAsync(RegistrationB, SlotFree, ApplicationMethods.ManualSelected, 30, null, default));
+        Assert.Null(await repository.CreateAsync(RegistrationB, SlotFree, ApplicationMethods.ManualSelected, 30, null, default));
+
+        Assert.Equal(1, await db.NewContext().RentalApplications.CountAsync(a => a.slot_id == SlotFree));
+    }
+
+    [Fact]
     public async Task A_vendor_lists_only_its_own_applications_newest_first()
     {
         using var db = await CreateAsync();
         var repository = new RentalApplicationRepository(db.Db);
-        var first = await repository.CreateAsync(RegistrationB, SlotFree, ApplicationMethods.ManualSelected, 30, null, default);
+        var first = (await repository.CreateAsync(RegistrationB, SlotFree, ApplicationMethods.ManualSelected, 30, null, default))!.Value;
         await Task.Delay(20);
-        var second = await repository.CreateAsync(RegistrationB, SlotFree2, ApplicationMethods.ManualSelected, 30, null, default);
+        var second = (await repository.CreateAsync(RegistrationB, SlotFree2, ApplicationMethods.ManualSelected, 30, null, default))!.Value;
 
         var mine = await repository.ListByVendorAsync(VendorB, default);
         var theirs = await repository.ListByVendorAsync(VendorA, default);

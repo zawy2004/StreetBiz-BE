@@ -1,3 +1,4 @@
+using System.Data;
 using Microsoft.EntityFrameworkCore;
 using StreetBiz.Application.Common.Interfaces;
 using StreetBiz.Application.Common.Models;
@@ -12,24 +13,38 @@ public sealed class RentalApplicationRepository(StreetBizDbContext dbContext) : 
         dbContext.RentalApplications.AsNoTracking()
             .AnyAsync(a => a.slot_id == slotId && ApplicationStatuses.Open.Contains(a.application_status), cancellationToken);
 
-    public async Task<long> CreateAsync(
+    public Task<long?> CreateAsync(
         long registrationId, long slotId, string applicationMethod, int requestedTermDays,
-        DateTime? commitmentsAcceptedAt, CancellationToken cancellationToken)
-    {
-        var entity = new RentalApplication
+        DateTime? commitmentsAcceptedAt, CancellationToken cancellationToken) =>
+        dbContext.ExecuteInTransactionAsync<long?>(async transaction =>
         {
-            registration_id = registrationId,
-            slot_id = slotId,
-            application_method = applicationMethod,
-            requested_term_days = requestedTermDays,
-            commitments_accepted_at = commitmentsAcceptedAt,
-            // application_status and created_at are database defaults — never set here.
-        };
+            // A no-op UPDATE takes the slot row's exclusive lock until commit, so submissions for
+            // the same slot queue here one at a time. The one behind sees the application the first
+            // one committed and gets null. A plain "check, then insert" lets all of them pass the check.
+            await dbContext.SidewalkSlots
+                .Where(slot => slot.slot_id == slotId)
+                .ExecuteUpdateAsync(set => set.SetProperty(slot => slot.slot_status, slot => slot.slot_status), cancellationToken);
 
-        dbContext.RentalApplications.Add(entity);
-        await dbContext.SaveChangesAsync(cancellationToken);
-        return entity.application_id;
-    }
+            if (await HasOpenApplicationForSlotAsync(slotId, cancellationToken))
+            {
+                return null;
+            }
+
+            var entity = new RentalApplication
+            {
+                registration_id = registrationId,
+                slot_id = slotId,
+                application_method = applicationMethod,
+                requested_term_days = requestedTermDays,
+                commitments_accepted_at = commitmentsAcceptedAt,
+                // application_status and created_at are database defaults — never set here.
+            };
+
+            dbContext.RentalApplications.Add(entity);
+            await dbContext.SaveChangesAsync(cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
+            return entity.application_id;
+        }, IsolationLevel.ReadCommitted, cancellationToken, clearTracker: false);
 
     public Task<RentalApplicationRow?> GetByIdAsync(long applicationId, CancellationToken cancellationToken) =>
         dbContext.RentalApplications.AsNoTracking()

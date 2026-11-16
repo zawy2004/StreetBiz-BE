@@ -319,6 +319,7 @@ public sealed class ControllerEndpointContractTests
         "GET /api/vendor/finance/fees/{feeItemId}/payment-options",
         "POST /api/vendor/finance/fees/{feeItemId}/checkout",
         "GET /api/vendor/finance/penalties/{penaltyId}/treasury",
+        "GET /api/vendor/finance/penalty-schedules",
         "POST /api/vendor/finance/penalties/{penaltyId}/receipts",
         "GET /api/vendor/payout-account",
         "PUT /api/vendor/payout-account",
