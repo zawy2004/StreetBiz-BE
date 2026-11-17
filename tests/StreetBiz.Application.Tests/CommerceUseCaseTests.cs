@@ -322,6 +322,126 @@ public sealed class CommerceUseCaseTests
         result.ToUtc.Should().Be(now.UtcDateTime);
     }
 
+    [Fact]
+    public async Task Changing_a_cart_line_trims_the_note_and_returns_the_cart()
+    {
+        var repository = new Mock<ICommerceRepository>();
+        repository.Setup(x => x.UpdateCartItemAsync(7, 11, 3, "Không hành", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new CartMutationResult(CartMutationOutcome.Updated, Cart()));
+
+        var cart = await new UpdateCartItemCommandHandler(CustomerContext(), repository.Object)
+            .Handle(new UpdateCartItemCommand(11, 3, "  Không hành  "), CancellationToken.None);
+
+        cart.CartId.Should().Be(3);
+        repository.VerifyAll();
+    }
+
+    [Theory]
+    [InlineData(CartMutationOutcome.NotFound, typeof(NotFoundException))]
+    [InlineData(CartMutationOutcome.MenuItemUnavailable, typeof(DomainRuleException))]
+    [InlineData(CartMutationOutcome.StorefrontUnavailable, typeof(DomainRuleException))]
+    [InlineData(CartMutationOutcome.CheckoutPending, typeof(ConflictException))]
+    [InlineData(CartMutationOutcome.QuantityLimit, typeof(DomainRuleException))]
+    [InlineData(CartMutationOutcome.Conflict, typeof(ConflictException))]
+    public async Task A_cart_line_that_cannot_change_says_why(CartMutationOutcome outcome, Type expected)
+    {
+        var repository = new Mock<ICommerceRepository>();
+        repository.Setup(x => x.UpdateCartItemAsync(7, 11, 3, null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new CartMutationResult(outcome, null));
+
+        var act = () => new UpdateCartItemCommandHandler(CustomerContext(), repository.Object)
+            .Handle(new UpdateCartItemCommand(11, 3, "   "), CancellationToken.None);
+
+        (await act.Should().ThrowAsync<Exception>()).Which.Should().BeOfType(expected);
+    }
+
+    [Theory]
+    [InlineData(0, false)]
+    [InlineData(1, true)]
+    [InlineData(99, true)]
+    [InlineData(100, false)]
+    public void A_cart_line_holds_one_to_ninety_nine(int quantity, bool valid) =>
+        new UpdateCartItemCommandValidator().Validate(new UpdateCartItemCommand(11, quantity, null))
+            .IsValid.Should().Be(valid);
+
+    [Fact]
+    public async Task Removing_the_last_line_returns_no_cart()
+    {
+        var repository = new Mock<ICommerceRepository>();
+        repository.Setup(x => x.RemoveCartItemAsync(7, 11, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new CartMutationResult(CartMutationOutcome.Updated, null));
+
+        var cart = await new RemoveCartItemCommandHandler(CustomerContext(), repository.Object)
+            .Handle(new RemoveCartItemCommand(11), CancellationToken.None);
+
+        cart.Should().BeNull();
+    }
+
+    [Theory]
+    [InlineData(CartMutationOutcome.NotFound, typeof(NotFoundException))]
+    [InlineData(CartMutationOutcome.CheckoutPending, typeof(ConflictException))]
+    [InlineData(CartMutationOutcome.Conflict, typeof(ConflictException))]
+    public async Task A_line_that_cannot_be_removed_says_why(CartMutationOutcome outcome, Type expected)
+    {
+        var repository = new Mock<ICommerceRepository>();
+        repository.Setup(x => x.RemoveCartItemAsync(7, 11, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new CartMutationResult(outcome, null));
+
+        var act = () => new RemoveCartItemCommandHandler(CustomerContext(), repository.Object)
+            .Handle(new RemoveCartItemCommand(11), CancellationToken.None);
+
+        (await act.Should().ThrowAsync<Exception>()).Which.Should().BeOfType(expected);
+    }
+
+    [Fact]
+    public async Task Clearing_the_cart_clears_the_callers_own()
+    {
+        var repository = new Mock<ICommerceRepository>();
+
+        await new ClearCartCommandHandler(CustomerContext(), repository.Object).Handle(new ClearCartCommand(), CancellationToken.None);
+
+        repository.Verify(x => x.ClearCartAsync(7, It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task A_seller_moves_an_order_on_as_the_signed_in_user()
+    {
+        var user = new Mock<ICurrentUser>();
+        user.SetupGet(x => x.UserId).Returns(40);
+        var repository = new Mock<ICommerceRepository>();
+        repository.Setup(x => x.UpdateSellerOrderStatusAsync(4, 40, 15, OrderStatuses.ReadyForPickup, OrderStatuses.Preparing, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OrderMutationResult(OrderMutationOutcome.Updated, Order(OrderStatuses.ReadyForPickup)));
+
+        var order = await new UpdateSellerOrderStatusCommandHandler(VendorContext(), user.Object, repository.Object)
+            .Handle(new UpdateSellerOrderStatusCommand(15, OrderStatuses.ReadyForPickup, OrderStatuses.Preparing), CancellationToken.None);
+
+        order.OrderStatus.Should().Be(OrderStatuses.ReadyForPickup);
+    }
+
+    [Fact]
+    public async Task A_seller_order_that_moved_on_meanwhile_is_a_conflict()
+    {
+        var user = new Mock<ICurrentUser>();
+        user.SetupGet(x => x.UserId).Returns(40);
+        var repository = new Mock<ICommerceRepository>();
+        repository.Setup(x => x.UpdateSellerOrderStatusAsync(4, 40, 15, It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OrderMutationResult(OrderMutationOutcome.Conflict, null));
+
+        var act = () => new UpdateSellerOrderStatusCommandHandler(VendorContext(), user.Object, repository.Object)
+            .Handle(new UpdateSellerOrderStatusCommand(15, OrderStatuses.Preparing, OrderStatuses.Accepted), CancellationToken.None);
+
+        await act.Should().ThrowAsync<ConflictException>().WithMessage(CommerceMessages.OrderConflict);
+    }
+
+    [Theory]
+    [InlineData(OrderStatuses.Preparing, OrderStatuses.Accepted, true)]
+    [InlineData(OrderStatuses.ReadyForPickup, OrderStatuses.Preparing, true)]
+    [InlineData(OrderStatuses.Completed, OrderStatuses.ReadyForPickup, false)]
+    [InlineData(OrderStatuses.Preparing, OrderStatuses.Placed, false)]
+    public void A_seller_only_moves_an_order_to_preparing_or_ready(string target, string expected, bool valid) =>
+        new UpdateSellerOrderStatusCommandValidator().Validate(new UpdateSellerOrderStatusCommand(15, target, expected))
+            .IsValid.Should().Be(valid);
+
     private static ICustomerContext CustomerContext()
     {
         var context = new Mock<ICustomerContext>();
