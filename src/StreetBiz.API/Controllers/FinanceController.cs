@@ -78,7 +78,8 @@ public sealed class FinanceController(
     [HttpGet("fees/{feeItemId:long}/payment-options")]
     public async Task<IActionResult> FeePaymentOptions(long feeItemId, CancellationToken cancellationToken) =>
         Ok(PaymentOptions.Build(
-            SandboxEnabled, configuration, await sender.Send(new GetFeePayeeQuery(feeItemId), cancellationToken)));
+            SandboxEnabled, configuration, await sender.Send(new GetFeePayeeQuery(feeItemId), cancellationToken),
+            forOrder: false));
 
     /// <summary>FEE-01: open a checkout for one fee instalment.</summary>
     [HttpPost("fees/{feeItemId:long}/checkout")]

@@ -32,6 +32,9 @@ public sealed class ConfiguredPaymentGateway(
     private bool UsesPayOs(string provider) =>
         provider == PaymentProviders.PayOs && settings.PayOs.Enabled && httpClientFactory is not null;
 
+    public bool IsOrdersOnly(string provider) =>
+        provider != PaymentProviders.PayOs && settings.For(provider).OrdersOnly;
+
     public bool IsProviderAvailable(string provider) =>
         !string.IsNullOrWhiteSpace(settings.For(provider).CheckoutUrlTemplate)
         || UsesMomo(provider)

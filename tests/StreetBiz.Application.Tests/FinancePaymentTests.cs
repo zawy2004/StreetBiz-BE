@@ -147,6 +147,25 @@ public sealed class FinancePaymentTests
             Times.Never);
     }
 
+    [Fact]
+    public async Task Pay_fee_refuses_a_wallet_switched_on_for_customer_orders_only()
+    {
+        var finance = new Mock<IFinanceRepository>();
+        finance.Setup(x => x.GetFeeItemForCheckoutAsync(4, 2, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(FeeItem(status: FeeItemStatuses.Pending));
+        var gateway = new Mock<IPaymentGateway>();
+        gateway.Setup(x => x.IsProviderAvailable("MOMO")).Returns(true);
+        gateway.Setup(x => x.IsOrdersOnly("MOMO")).Returns(true);
+
+        var act = () => new PayFeeCommandHandler(VendorContext(), finance.Object, gateway.Object)
+            .Handle(new PayFeeCommand(2, "momo", "idem-1"), CancellationToken.None);
+
+        await act.Should().ThrowAsync<DomainRuleException>().WithMessage(FinanceMessages.ProviderForOrdersOnly);
+        finance.Verify(x => x.CreateFeeCheckoutAsync(
+            It.IsAny<long>(), It.IsAny<long>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
     private static FeeItemCheckoutRow FeeItem(string status) => new(
         2, 4, 5, "NVL-01", 2, 3, new DateOnly(2026, 10, 2), 1_040_000m, status);
 

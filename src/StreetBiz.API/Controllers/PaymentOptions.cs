@@ -10,21 +10,36 @@ namespace StreetBiz.API.Controllers;
 /// </summary>
 internal static class PaymentOptions
 {
-    public static object Build(bool sandboxEnabled, IConfiguration configuration, PayeeSummary? payee = null)
+    /// <param name="forOrder">
+    /// True for a customer's order, false for a ward's rental fee. A wallet configured with
+    /// <c>Payments:{Momo|ZaloPay}:OrdersOnly</c> is left out of a fee's options.
+    /// </param>
+    public static object Build(
+        bool sandboxEnabled, IConfiguration configuration, PayeeSummary? payee = null, bool forOrder = true)
     {
+        // The same fields the gateway needs before it will open a MoMo checkout (IsMomoConfigured),
+        // so the screen never offers MoMo that the checkout would then refuse.
         var momoLive =
-            !string.IsNullOrWhiteSpace(configuration["Payments:Momo:PartnerCode"])
-            && !string.IsNullOrWhiteSpace(configuration["Payments:Momo:SecretKey"]);
+            !string.IsNullOrWhiteSpace(configuration["Payments:Momo:ApiBaseUrl"])
+            && !string.IsNullOrWhiteSpace(configuration["Payments:Momo:PartnerCode"])
+            && !string.IsNullOrWhiteSpace(configuration["Payments:Momo:AccessKey"])
+            && !string.IsNullOrWhiteSpace(configuration["Payments:Momo:SecretKey"])
+            && !string.IsNullOrWhiteSpace(configuration["Payments:Momo:ReturnUrl"])
+            && !string.IsNullOrWhiteSpace(configuration["Payments:Momo:NotifyUrl"])
+            && (forOrder || !configuration.GetValue<bool>("Payments:Momo:OrdersOnly"));
         var zaloLive =
             configuration.GetValue<bool>("Payments:ZaloPay:Enabled")
             && !string.IsNullOrWhiteSpace(configuration["Payments:ZaloPay:AppId"])
             && !string.IsNullOrWhiteSpace(configuration["Payments:ZaloPay:Key1"])
-            && !string.IsNullOrWhiteSpace(configuration["Payments:ZaloPay:Key2"]);
+            && !string.IsNullOrWhiteSpace(configuration["Payments:ZaloPay:Key2"])
+            && (forOrder || !configuration.GetValue<bool>("Payments:ZaloPay:OrdersOnly"));
         var payOsLive = configuration.GetValue("Payments:PayOs:Enabled", true) && payee is { Active: true };
 
         // The simulator is only ever offered in Development; a real gateway is offered wherever it is configured.
         var platform = sandboxEnabled
             ? new[] { "MOMO", "ZALOPAY" }
+                .Where(p => forOrder || !configuration.GetValue<bool>($"Payments:{(p == "MOMO" ? "Momo" : "ZaloPay")}:OrdersOnly"))
+                .ToArray()
             : new[] { momoLive ? "MOMO" : null, zaloLive ? "ZALOPAY" : null }
                 .OfType<string>().ToArray();
         var providers = payOsLive ? ["PAYOS", .. platform] : platform;
