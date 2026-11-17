@@ -76,7 +76,7 @@ public static class DependencyInjection
         services.AddSingleton<IJwtTokenService, JwtTokenService>();
         services.Configure<SmsSettings>(configuration.GetSection(SmsSettings.SectionName));
         services.AddHttpClient<HttpSmsSender>(client => client.Timeout = TimeSpan.FromSeconds(15));
-        services.AddHttpClient<EsmsSmsSender>(client => client.Timeout = TimeSpan.FromSeconds(15));
+        services.AddHttpClient<SpeedSmsSender>(client => client.Timeout = TimeSpan.FromSeconds(15));
         // OTP codes must never reach production logs: the logging sender is Development-only,
         // and any other environment refuses to start without a real provider and an OTP hash key.
         services.AddSingleton<ISmsSender>(sp =>
@@ -84,32 +84,37 @@ public static class DependencyInjection
             var env = sp.GetRequiredService<IHostEnvironment>();
             var sms = sp.GetRequiredService<IOptions<SmsSettings>>().Value;
             var isHttp = string.Equals(sms.Provider, "Http", StringComparison.OrdinalIgnoreCase);
-            var isEsms = string.Equals(sms.Provider, "Esms", StringComparison.OrdinalIgnoreCase);
+            var isSpeedSms = string.Equals(sms.Provider, "SpeedSms", StringComparison.OrdinalIgnoreCase);
 
-            if (env.IsDevelopment() && !isHttp && !isEsms)
+            if (env.IsDevelopment() && !isHttp && !isSpeedSms)
             {
                 return ActivatorUtilities.CreateInstance<LoggingSmsSender>(sp);
             }
 
-            if (isEsms)
+            if (isSpeedSms)
             {
-                if (string.IsNullOrWhiteSpace(sms.ApiKey) || string.IsNullOrWhiteSpace(sms.SecretKey))
+                if (string.IsNullOrWhiteSpace(sms.ApiKey))
                 {
-                    throw new InvalidOperationException("Sms:Provider=Esms needs Sms:ApiKey and Sms:SecretKey.");
+                    throw new InvalidOperationException("Sms:Provider=SpeedSms needs Sms:ApiKey (the SpeedSMS access token).");
                 }
 
-                if (sms.SmsType != "8" && string.IsNullOrWhiteSpace(sms.Brandname))
+                if (sms.SmsType is not ("2" or "3" or "4" or "5" or "6"))
                 {
-                    throw new InvalidOperationException("Sms:SmsType other than 8 needs Sms:Brandname.");
+                    throw new InvalidOperationException("Sms:SmsType must be 2, 3, 4, 5 or 6 for SpeedSms.");
                 }
 
-                return sp.GetRequiredService<EsmsSmsSender>();
+                if (sms.SmsType is "3" or "5" && string.IsNullOrWhiteSpace(sms.Sender))
+                {
+                    throw new InvalidOperationException("Sms:SmsType 3 or 5 needs Sms:Sender (brandname or Android deviceId).");
+                }
+
+                return sp.GetRequiredService<SpeedSmsSender>();
             }
 
             if (!isHttp || string.IsNullOrWhiteSpace(sms.Endpoint))
             {
                 throw new InvalidOperationException(
-                    "Sms:Provider must be \"Esms\", or \"Http\" with Sms:Endpoint, outside Development.");
+                    "Sms:Provider must be \"SpeedSms\", or \"Http\" with Sms:Endpoint, outside Development.");
             }
 
             return sp.GetRequiredService<HttpSmsSender>();
