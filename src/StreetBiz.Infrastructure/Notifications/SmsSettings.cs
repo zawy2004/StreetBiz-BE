@@ -8,25 +8,21 @@ public sealed class SmsSettings
 {
     public const string SectionName = "Sms";
 
-    /// <summary>"Logging" (development only), "Http" (generic JSON gateway) or "Esms" (eSMS.vn).</summary>
+    /// <summary>"Logging" (development only), "Http" (generic JSON gateway) or "SpeedSms" (SpeedSMS.vn).</summary>
     public string Provider { get; set; } = "Logging";
 
-    /// <summary>Http: provider endpoint that accepts a JSON POST of {to, message}. Esms: optional override of eSMS's URL.</summary>
+    /// <summary>Http: provider endpoint that accepts a JSON POST of {to, message}. SpeedSms: optional override of SpeedSMS's URL.</summary>
     public string Endpoint { get; set; } = string.Empty;
 
+    /// <summary>Http: bearer key. SpeedSms: the API access token (connect.speedsms.vn -> Tai khoan).</summary>
     public string ApiKey { get; set; } = string.Empty;
 
+    /// <summary>Http: "from". SpeedSms: the registered brandname (type 3) or Android deviceId (type 5); unused otherwise.</summary>
     public string Sender { get; set; } = "StreetBiz";
 
-    /// <summary>Esms only.</summary>
-    public string SecretKey { get; set; } = string.Empty;
-
-    /// <summary>Esms only: "8" = fixed number (no brandname), "2" = customer care (needs a registered brandname).</summary>
-    public string SmsType { get; set; } = "8";
-
-    /// <summary>Esms only: required when <see cref="SmsType"/> is 2.</summary>
-    public string Brandname { get; set; } = string.Empty;
-
-    /// <summary>Esms only: true asks eSMS to validate the request without sending or charging.</summary>
-    public bool Sandbox { get; set; }
+    /// <summary>
+    /// SpeedSms only: "2" customer care (random number, no registration), "3" brandname (needs <see cref="Sender"/>),
+    /// "4" default brandname Notify, "5" own Android phone (needs <see cref="Sender"/>), "6" fixed number.
+    /// </summary>
+    public string SmsType { get; set; } = "2";
 }
