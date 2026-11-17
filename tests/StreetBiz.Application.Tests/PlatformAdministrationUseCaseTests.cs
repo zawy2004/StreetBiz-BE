@@ -208,6 +208,97 @@ public sealed class PlatformAdministrationUseCaseTests
         repository.VerifyAll();
     }
 
+    [Fact]
+    public async Task Renaming_a_category_trims_the_name_and_records_the_admin()
+    {
+        var repository = new Mock<IPlatformAdministrationRepository>();
+        repository.Setup(x => x.FoodCategoryNameExistsAsync("Bún, phở", 3, It.IsAny<CancellationToken>())).ReturnsAsync(false);
+        repository.Setup(x => x.RenameFoodCategoryAsync(3, "Bún, phở", 7, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new FoodCategoryRow(3, "Bún, phở", 12, "Admin"));
+
+        var result = await new RenameFoodCategoryCommandHandler(AdminContext().Object, repository.Object)
+            .Handle(new RenameFoodCategoryCommand(3, "  Bún, phở  "), CancellationToken.None);
+
+        (result.CategoryId, result.CategoryName).Should().Be((3, "Bún, phở"));
+        repository.VerifyAll();
+    }
+
+    [Fact]
+    public async Task Renaming_a_category_to_another_categorys_name_is_a_conflict()
+    {
+        var repository = new Mock<IPlatformAdministrationRepository>();
+        repository.Setup(x => x.FoodCategoryNameExistsAsync("Đồ uống", 3, It.IsAny<CancellationToken>())).ReturnsAsync(true);
+
+        var act = () => new RenameFoodCategoryCommandHandler(AdminContext().Object, repository.Object)
+            .Handle(new RenameFoodCategoryCommand(3, "Đồ uống"), CancellationToken.None);
+
+        await act.Should().ThrowAsync<ConflictException>().WithMessage(PlatformAdministrationMessages.CategoryDuplicate);
+        repository.Verify(x => x.RenameFoodCategoryAsync(It.IsAny<int>(), It.IsAny<string>(), It.IsAny<long>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task Renaming_an_unknown_category_is_not_found()
+    {
+        var repository = new Mock<IPlatformAdministrationRepository>();
+        repository.Setup(x => x.FoodCategoryNameExistsAsync("Món mới", 99, It.IsAny<CancellationToken>())).ReturnsAsync(false);
+        repository.Setup(x => x.RenameFoodCategoryAsync(99, "Món mới", 7, It.IsAny<CancellationToken>())).ReturnsAsync((FoodCategoryRow?)null);
+
+        var act = () => new RenameFoodCategoryCommandHandler(AdminContext().Object, repository.Object)
+            .Handle(new RenameFoodCategoryCommand(99, "Món mới"), CancellationToken.None);
+
+        await act.Should().ThrowAsync<NotFoundException>().WithMessage(PlatformAdministrationMessages.CategoryNotFound);
+    }
+
+    [Theory]
+    [InlineData(0, "Đồ uống", false)]
+    [InlineData(3, "", false)]
+    [InlineData(3, "Đồ uống", true)]
+    public void A_rename_needs_a_category_and_a_name(int id, string name, bool valid) =>
+        new RenameFoodCategoryCommandValidator().Validate(new RenameFoodCategoryCommand(id, name)).IsValid.Should().Be(valid);
+
+    [Fact]
+    public void A_category_name_is_at_most_100_characters() =>
+        new RenameFoodCategoryCommandValidator().Validate(new RenameFoodCategoryCommand(3, new string('a', 101)))
+            .IsValid.Should().BeFalse();
+
+    [Fact]
+    public async Task The_reported_content_list_reads_the_status_case_insensitively_and_keeps_the_page()
+    {
+        var repository = new Mock<IPlatformAdministrationRepository>();
+        var row = new ReportedContentRow(5, "MENU_ITEM", 11, "Bánh mì", null, "VISIBLE", true, "Khách", "Ảnh sai món",
+            "PENDING", null, DateTime.UtcNow, null);
+        repository.Setup(x => x.ListReportedContentAsync("PENDING", 2, 20, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PlatformPage<ReportedContentRow>([row], 2, 20, 21));
+
+        var page = await new ListReportedContentQueryHandler(AdminContext().Object, repository.Object)
+            .Handle(new ListReportedContentQuery("pending", 2, 20), CancellationToken.None);
+
+        (page.Page, page.PageSize, page.TotalCount).Should().Be((2, 20, 21));
+        page.Items.Should().ContainSingle().Which.ReportId.Should().Be(5);
+    }
+
+    [Fact]
+    public async Task The_reported_content_list_without_a_status_lists_every_status()
+    {
+        var repository = new Mock<IPlatformAdministrationRepository>();
+        repository.Setup(x => x.ListReportedContentAsync(null, 1, 50, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PlatformPage<ReportedContentRow>([], 1, 50, 0));
+
+        var page = await new ListReportedContentQueryHandler(AdminContext().Object, repository.Object)
+            .Handle(new ListReportedContentQuery("  "), CancellationToken.None);
+
+        page.Items.Should().BeEmpty();
+        repository.VerifyAll();
+    }
+
+    [Theory]
+    [InlineData("PENDING", 1, 50, true)]
+    [InlineData("NOT_A_STATUS", 1, 50, false)]
+    [InlineData(null, 0, 50, false)]
+    [InlineData(null, 1, 101, false)]
+    public void The_reported_content_list_checks_status_and_paging(string? status, int pageNo, int size, bool valid) =>
+        new ListReportedContentQueryValidator().Validate(new ListReportedContentQuery(status, pageNo, size)).IsValid.Should().Be(valid);
+
     private static Mock<IPlatformAdminContext> AdminContext()
     {
         var actor = new Mock<IPlatformAdminContext>();
