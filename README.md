@@ -47,7 +47,7 @@ vendors an online storefront. One API serves five roles:
 
 | Area | Highlights |
 | --- | --- |
-| **Identity** | Phone + password or phone + OTP sign-in, OTP by SMS through eSMS.vn, JWT with rotating refresh tokens, session and login history, rate limiting |
+| **Identity** | Phone + password or phone + OTP sign-in, OTP by SMS through SpeedSMS.vn, JWT with rotating refresh tokens, session and login history, rate limiting |
 | **Onboarding** | Business registration with evidence files and FPT.AI eKYC, ward review queue with full audit trail |
 | **Sidewalk slots** | Pricing zones, slot proposals, rental applications, contracts, renewals, transfers, address conflicts, geofencing with Nominatim |
 | **Permits** | Digital permits with signed QR codes and a public verification page |
@@ -67,7 +67,7 @@ vendors an online storefront. One API serves five roles:
 | Data | Entity Framework Core 8 (database-first), SQL Server 2022 |
 | Logging and health | Serilog, ASP.NET Core health checks |
 | Documents and images | ClosedXML, DocumentFormat.OpenXml, PdfSharpCore, ImageSharp |
-| Integrations | eSMS.vn, FPT.AI, Gemini, Groq, payOS, MoMo, ZaloPay, Nominatim |
+| Integrations | SpeedSMS.vn, FPT.AI, Gemini, Groq, payOS, MoMo, ZaloPay, Nominatim |
 | Tests | xUnit, FluentAssertions, Moq, WebApplicationFactory, SQLite in-memory |
 | Delivery | Docker, GitHub Actions, GHCR, Caddy (automatic HTTPS) |
 
@@ -174,7 +174,7 @@ section separator (for example `Sms__ApiKey`).
 | `Otp:HashKey` | HMAC key for stored OTP codes | ✅ |
 | `Permit:SigningKey` | Signs permit QR codes | ✅ |
 | `OrderPickup:SigningKey` | Signs order pickup codes | ✅ |
-| `Sms` | eSMS.vn `ApiKey`, `SecretKey`, `SmsType` (8 = fixed number) | For OTP |
+| `Sms` | SpeedSMS.vn `ApiKey` (access token), `SmsType` (2 = random number) | For OTP |
 | `Cors:AllowedOrigins` | Web origins allowed to call the API | ✅ |
 | `Payments:PayOs` | Credential encryption key, webhook and return URLs | For payOS |
 | `AiCompliance` | FPT.AI eKYC, Gemini and Groq keys | For AI features |
@@ -204,7 +204,7 @@ dotnet test StreetBiz.Backend.sln -c Release
 | --- | --- |
 | `StreetBiz.Domain.Tests` | Domain rules |
 | `StreetBiz.Application.Tests` | Handlers, validators and pipeline behaviours |
-| `StreetBiz.Infrastructure.Tests` | Repositories on SQLite, adapters (eSMS, payOS, AI) with fake HTTP |
+| `StreetBiz.Infrastructure.Tests` | Repositories on SQLite, adapters (SpeedSMS, payOS, AI) with fake HTTP |
 | `StreetBiz.API.Tests` | HTTP endpoints through `WebApplicationFactory` |
 
 CI runs the whole suite and builds the Docker image on every pull request. Manual test

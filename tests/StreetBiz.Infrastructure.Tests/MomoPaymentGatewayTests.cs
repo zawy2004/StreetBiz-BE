@@ -115,6 +115,22 @@ public sealed class MomoPaymentGatewayTests
         Assert.Null(await gateway.QueryPaymentAsync("MOMO", "SB-T42", default));
     }
 
+    [Fact]
+    public void Orders_only_marks_the_wallet_never_payos()
+    {
+        var gateway = new ConfiguredPaymentGateway(
+            Options.Create(new PaymentGatewaySettings
+            {
+                Momo = new PaymentProviderSettings { OrdersOnly = true },
+                ZaloPay = new PaymentProviderSettings { OrdersOnly = false },
+            }),
+            new FakeFactory(new FakeMomo("{}")));
+
+        Assert.True(gateway.IsOrdersOnly("MOMO"));
+        Assert.False(gateway.IsOrdersOnly("ZALOPAY"));
+        Assert.False(gateway.IsOrdersOnly("PAYOS"));
+    }
+
     private static ConfiguredPaymentGateway Gateway(FakeMomo momo) =>
         new(Options.Create(new PaymentGatewaySettings
         {

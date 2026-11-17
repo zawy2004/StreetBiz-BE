@@ -102,8 +102,12 @@ public sealed class ZaloPayContractTests
     public void Both_gateways_can_be_live_together()
     {
         var settings = ZaloPay(enabled: true);
+        settings["Payments:Momo:ApiBaseUrl"] = "https://test-payment.momo.vn/v2/gateway/api";
         settings["Payments:Momo:PartnerCode"] = "MOMO";
+        settings["Payments:Momo:AccessKey"] = "access";
         settings["Payments:Momo:SecretKey"] = "secret";
+        settings["Payments:Momo:ReturnUrl"] = "https://web.example/customer/orders/{referenceId}/payment";
+        settings["Payments:Momo:NotifyUrl"] = "https://api.example/api/payments/momo/callback";
 
         var options = PaymentOptions(Options(settings));
 

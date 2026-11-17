@@ -12,7 +12,9 @@ channel, and the payer's VietQR transfer lands in that account:
 A household without a connected channel takes no online order ("Quán chưa nhận thanh toán
 online"); a ward without one shows no online option for its fees. payOS is the only bank-transfer
 provider; the MoMo and ZaloPay wallets stay, and are offered only where they are configured (or
-both simulated in Development).
+both simulated in Development). `Payments:Momo:OrdersOnly` (and `Payments:ZaloPay:OrdersOnly`)
+limits a wallet to customer orders: it is left out of a ward fee's payment options and a fee
+checkout with it is refused. Production runs MoMo this way, against MoMo's test environment.
 
 Why: collecting other people's money and passing it on needs a payment-intermediary licence
 (Nghị định 52/2024) and makes StreetBiz the party that must refund. Paying straight to the payee

@@ -55,6 +55,12 @@ public sealed class PayFeeCommandHandler(
             throw new DomainRuleException(FinanceMessages.ProviderNotConfigured);
         }
 
+        // A wallet switched on for customer orders only is not a way to pay a ward.
+        if (paymentGateway.IsOrdersOnly(provider))
+        {
+            throw new DomainRuleException(FinanceMessages.ProviderForOrdersOnly);
+        }
+
         PayeeSummary? payee = null;
         if (provider == PaymentProviders.PayOs)
         {

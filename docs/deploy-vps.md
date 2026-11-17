@@ -230,7 +230,7 @@ mới trên server; **không dùng lại** khoá trên máy của bạn hay kho�
 |---|---|
 | `Cors__AllowedOrigins__0` | `<FE_DOMAIN>`. Sai hoặc thiếu thì trình duyệt chặn mọi request từ web. Thêm `__1`, `__2` nếu có tên miền riêng. |
 | `Permit__PublicScanBaseUrl` | `<FE_DOMAIN>`. QR in trên bảng giá trỏ tới `<FE_DOMAIN>/q/<mã>`. |
-| `Sms__Provider` (+ `Sms__ApiKey`, `Sms__SecretKey` cho `Esms`; hoặc `Sms__Endpoint` cho `Http`) | Cổng gửi OTP, xem lưu ý bên dưới. Thiếu thì đăng ký tài khoản mới, quên mật khẩu và đăng nhập OTP báo lỗi; đăng nhập bằng mật khẩu vẫn chạy. |
+| `Sms__Provider` (+ `Sms__ApiKey` cho `SpeedSms`; hoặc `Sms__Endpoint` cho `Http`) | Cổng gửi OTP, xem lưu ý bên dưới. Thiếu thì đăng ký tài khoản mới, quên mật khẩu và đăng nhập OTP báo lỗi; đăng nhập bằng mật khẩu vẫn chạy. |
 | `Payments__PayOs__CredentialKey` | Kết quả `openssl rand -base64 32`. Thiếu thì payOS tắt. **Đổi khoá sau này thì các kênh payOS đã kết nối không đọc được nữa**, mỗi hộ/phường phải kết nối lại. |
 | `Payments__PayOs__PublicWebhookBaseUrl` | `https://<API_DOMAIN>` (không có `/api`). payOS gọi webhook về `https://<API_DOMAIN>/api/payments/payos/callback/...`. |
 | `Payments__PayOs__FrontendBaseUrl` | `<FE_DOMAIN>`: trang payOS đưa người trả tiền quay về. |
@@ -238,11 +238,14 @@ mới trên server; **không dùng lại** khoá trên máy của bạn hay kho�
 
 **Lưu ý về SMS.** Có hai cách gửi OTP, chọn bằng `Sms__Provider`:
 
-- **`Esms` (eSMS.vn).** Đặt `Sms__ApiKey`, `Sms__SecretKey` (lấy ở "Quản lý API eSMS") và `Sms__SmsType=8` (mặc định): tin đầu số
-  cố định, không cần đăng ký brandname; loại `2` cần `Sms__Brandname` đã đăng ký. `Sms__Sandbox=true` chỉ kiểm tra request,
-  không gửi và không tính phí; trên server thật phải để `false`. Mã `100` chỉ nghĩa là eSMS đã nhận yêu cầu, không phải tin
-  đã tới máy. Khi eSMS từ chối, log API ghi `CodeResult`: `101` sai key, `103` thiếu số dư, `104` brandname sai, `140` IP máy chủ
-  chưa được eSMS cho phép.
+- **`SpeedSms` (SpeedSMS.vn).** Đặt `Sms__ApiKey` là access token (đăng nhập connect.speedsms.vn, menu "Tài khoản") và
+  `Sms__SmsType`: `2` (mặc định) tin CSKH đầu số ngẫu nhiên, không cần đăng ký; `3` brandname (đặt thêm `Sms__Sender` là tên đã
+  đăng ký); `4` brandname mặc định Notify; `5` gửi bằng số di động cá nhân qua app Android (`Sms__Sender` là deviceId); `6` đầu số
+  cố định. SpeedSMS không có sandbox: mỗi tin OTP đều được gửi và tính phí. Token đi trong header Basic, không nằm trong URL hay
+  log. `status: success` chỉ nghĩa là SpeedSMS đã nhận yêu cầu, không phải tin đã tới máy. Khi SpeedSMS từ chối, log API ghi `code`:
+  `007` IP bị khoá (máy chủ chưa được cho phép), `008` tài khoản bị khoá, `009` tài khoản không được gọi API, `101` thiếu hoặc sai
+  tham số, `105` số điện thoại sai, `113` nội dung quá dài, `300` thiếu số dư. Tin OTP là ASCII không dấu vì tin brandname và đầu số
+  cố định chưa hỗ trợ tiếng Việt có dấu.
 - **`Http` (cổng khác).** API gửi `POST {Sms__Endpoint}` với body JSON `{"to": "<số điện thoại>", "from": "<Sms__Sender>",
   "message": "<nội dung>"}` và header `Authorization: Bearer <Sms__ApiKey>`, coi mọi mã 2xx là thành công. Các nhà cung cấp khác
   dùng định dạng riêng nên cần dịch vụ trung gian hoặc một adapter trong `StreetBiz.Infrastructure/Notifications`.

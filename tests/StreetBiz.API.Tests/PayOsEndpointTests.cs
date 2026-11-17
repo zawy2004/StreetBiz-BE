@@ -77,11 +77,24 @@ public sealed class PayOsEndpointTests
 
     private static readonly PayeeSummary Ward = new(11, "WARD", "Phường Hải Châu", "MB Bank", "••••••6789", "UBND PHUONG", true);
 
-    private static JsonElement Options(bool sandbox, PayeeSummary? payee, Dictionary<string, string?>? config = null)
+    private static JsonElement Options(
+        bool sandbox, PayeeSummary? payee, Dictionary<string, string?>? config = null, bool forOrder = true)
     {
         var configuration = new ConfigurationBuilder().AddInMemoryCollection(config ?? []).Build();
-        return JsonSerializer.SerializeToElement(PaymentOptions.Build(sandbox, configuration, payee));
+        return JsonSerializer.SerializeToElement(PaymentOptions.Build(sandbox, configuration, payee, forOrder));
     }
+
+    /// <summary>Everything the gateway needs before it opens a MoMo checkout.</summary>
+    private static Dictionary<string, string?> MomoConfig(bool ordersOnly = false) => new()
+    {
+        ["Payments:Momo:ApiBaseUrl"] = "https://test-payment.momo.vn/v2/gateway/api",
+        ["Payments:Momo:PartnerCode"] = "p",
+        ["Payments:Momo:AccessKey"] = "a",
+        ["Payments:Momo:SecretKey"] = "s",
+        ["Payments:Momo:ReturnUrl"] = "https://web.example/customer/orders/{referenceId}/payment",
+        ["Payments:Momo:NotifyUrl"] = "https://api.example/api/payments/momo/callback",
+        ["Payments:Momo:OrdersOnly"] = ordersOnly ? "true" : "false",
+    };
 
     private static string?[] Providers(JsonElement options) =>
         [.. options.GetProperty("providers").EnumerateArray().Select(p => p.GetString())];
@@ -126,13 +139,44 @@ public sealed class PayOsEndpointTests
     [Fact]
     public void The_platform_wide_options_are_unchanged_when_there_is_no_payee()
     {
-        var configured = Options(sandbox: false, null, new()
+        var configured = Options(sandbox: false, null, MomoConfig());
+
+        Assert.Equal(["MOMO"], Providers(configured));
+        Assert.Equal("LIVE", configured.GetProperty("mode").GetString());
+    }
+
+    [Fact]
+    public void Momo_with_only_some_of_its_keys_is_not_offered()
+    {
+        // Offering MoMo that the checkout then refuses ("not configured") would strand the buyer.
+        var partial = Options(sandbox: false, null, new()
         {
             ["Payments:Momo:PartnerCode"] = "p", ["Payments:Momo:SecretKey"] = "s",
         });
 
-        Assert.Equal(["MOMO"], Providers(configured));
-        Assert.Equal("LIVE", configured.GetProperty("mode").GetString());
+        Assert.Empty(Providers(partial));
+    }
+
+    [Fact]
+    public void An_orders_only_momo_is_offered_to_customers_and_not_for_ward_fees()
+    {
+        var order = Options(sandbox: false, Ward, MomoConfig(ordersOnly: true));
+        var fee = Options(sandbox: false, Ward, MomoConfig(ordersOnly: true), forOrder: false);
+        var feeWithoutPayos = Options(sandbox: false, null, MomoConfig(ordersOnly: true), forOrder: false);
+        var everywhere = Options(sandbox: false, Ward, MomoConfig(ordersOnly: false), forOrder: false);
+
+        Assert.Equal(["PAYOS", "MOMO"], Providers(order));
+        Assert.Equal(["PAYOS"], Providers(fee));
+        Assert.Empty(Providers(feeWithoutPayos));
+        Assert.Equal(["PAYOS", "MOMO"], Providers(everywhere));
+    }
+
+    [Fact]
+    public void The_development_simulator_also_keeps_an_orders_only_wallet_out_of_fees()
+    {
+        var fee = Options(sandbox: true, Ward, new() { ["Payments:Momo:OrdersOnly"] = "true" }, forOrder: false);
+
+        Assert.Equal(["PAYOS", "ZALOPAY"], Providers(fee));
     }
 
     private static WebApplicationFactory<Program> Host(ISender sender) =>
