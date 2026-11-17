@@ -99,6 +99,12 @@ public interface IPaymentGateway
     /// </summary>
     bool IsProviderAvailable(string provider);
 
+    /// <summary>
+    /// True when this provider is configured for customer orders only (Payments:{Provider}:OrdersOnly),
+    /// so a rental-fee checkout must refuse it even though <see cref="IsProviderAvailable"/> is true.
+    /// </summary>
+    bool IsOrdersOnly(string provider) => false;
+
     Task<PaymentGatewayCheckoutResult> CreateCheckoutAsync(
         PaymentGatewayCheckoutRequest request,
         CancellationToken cancellationToken);

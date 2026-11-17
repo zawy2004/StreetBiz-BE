@@ -92,6 +92,14 @@ public sealed class PaymentProviderSettings
     /// <summary>v2 request type; "captureWallet" opens the MoMo wallet / QR page.</summary>
     public string RequestType { get; set; } = "captureWallet";
 
+    /// <summary>
+    /// True: this wallet is offered and accepted only for a customer's order, never for a ward's
+    /// rental fee. A platform-wide wallet collects into StreetBiz's own merchant account, which is
+    /// acceptable for a buyer paying a stall in the wallet's test environment but not for money owed
+    /// to a ward (that goes straight to the ward through payOS). Default false: every purpose.
+    /// </summary>
+    public bool OrdersOnly { get; set; }
+
     // ---- ZaloPay Gateway v2 (https://docs.zalopay.vn). Switched off until Enabled is true AND every
     // credential below is present, so a half-filled section never starts a checkout. Keys belong in
     // user-secrets / environment variables, never in the committed appsettings.json.

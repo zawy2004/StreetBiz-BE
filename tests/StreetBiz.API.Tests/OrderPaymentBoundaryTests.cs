@@ -61,8 +61,12 @@ public sealed class OrderPaymentBoundaryTests
         environment.SetupGet(x => x.EnvironmentName).Returns("Production");
         var configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
         {
+            ["Payments:Momo:ApiBaseUrl"] = "https://test-payment.momo.vn/v2/gateway/api",
             ["Payments:Momo:PartnerCode"] = "p",
+            ["Payments:Momo:AccessKey"] = "a",
             ["Payments:Momo:SecretKey"] = "s",
+            ["Payments:Momo:ReturnUrl"] = "https://web.example/customer/orders/{referenceId}/payment",
+            ["Payments:Momo:NotifyUrl"] = "https://api.example/api/payments/momo/callback",
         }).Build();
         var controller = new OrderPaymentsController(environment.Object, configuration,
             Mock.Of<ISender>(), Mock.Of<IOrderPaymentTesting>(), Mock.Of<IOrderRealtimePublisher>());

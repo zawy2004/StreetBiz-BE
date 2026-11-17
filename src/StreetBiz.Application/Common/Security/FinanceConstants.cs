@@ -156,6 +156,8 @@ public static class FinanceMessages
     public const string TransactionAlreadyProcessed = "Giao dịch này đã được xử lý.";
 
     /// <summary>FEE-01/04: the chosen provider has neither merchant keys nor the Development sandbox.</summary>
+    public const string ProviderForOrdersOnly =
+        "Ví điện tử này chỉ dùng để khách thanh toán đơn hàng. Vui lòng trả phí thuê ô bằng chuyển khoản VietQR.";
     public const string ProviderNotConfigured =
         "Cổng thanh toán này chưa được cấu hình. Vui lòng chọn phương thức khác.";
 
