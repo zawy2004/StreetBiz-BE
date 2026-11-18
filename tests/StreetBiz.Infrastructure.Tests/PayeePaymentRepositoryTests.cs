@@ -171,22 +171,70 @@ public sealed class PayeePaymentRepositoryTests
     }
 
     [Fact]
-    public async Task The_order_sweep_lists_only_payee_payments_still_waiting()
+    public async Task An_unpaid_order_whose_window_is_over_is_cancelled_and_the_customer_told()
+    {
+        using var f = await Create();
+        var vendor = await f.ConnectVendorAsync();
+        var transactionId = await OpenOrderPaymentAsync(f, vendor.PayeeAccountId);
+        var commerce = new CommerceRepository(f.Db, f.Clock);
+
+        Assert.True(await commerce.ExpireUnpaidOrderAsync(transactionId, default));
+
+        var order = await f.Db.Orders.AsNoTracking().SingleAsync(o => o.order_id == OrderId);
+        Assert.Equal("CANCELLED", order.order_status);
+        Assert.NotNull(order.completed_at);
+        Assert.Equal("FAILED", (await f.Db.PaymentTransactions.AsNoTracking().SingleAsync(p => p.transaction_id == transactionId)).transaction_status);
+        Assert.True(await f.Db.Notifications.AnyAsync(n => n.title == "Đơn hàng đã hết hạn thanh toán"));
+
+        // Closing is not repeated, and a transfer that still lands later is raised as surplus, never applied.
+        Assert.False(await commerce.ExpireUnpaidOrderAsync(transactionId, default));
+        var late = await commerce.ApplyPaymentCallbackAsync(OrderReport(vendor.PayeeAccountId), default);
+        Assert.Equal(PaymentCallbackOutcome.Surplus, late.Outcome);
+        Assert.Equal("CANCELLED", (await f.Db.Orders.AsNoTracking().SingleAsync(o => o.order_id == OrderId)).order_status);
+    }
+
+    [Fact]
+    public async Task An_order_that_was_paid_in_the_meantime_is_not_cancelled_by_the_expiry()
+    {
+        using var f = await Create();
+        var vendor = await f.ConnectVendorAsync();
+        var transactionId = await OpenOrderPaymentAsync(f, vendor.PayeeAccountId);
+        var commerce = new CommerceRepository(f.Db, f.Clock);
+        await commerce.ApplyPaymentCallbackAsync(OrderReport(vendor.PayeeAccountId), default);
+
+        Assert.False(await commerce.ExpireUnpaidOrderAsync(transactionId, default));
+
+        Assert.Equal("PLACED", (await f.Db.Orders.AsNoTracking().SingleAsync(o => o.order_id == OrderId)).order_status);
+        Assert.Equal("SUCCESS", (await f.Db.PaymentTransactions.AsNoTracking().SingleAsync(p => p.transaction_id == transactionId)).transaction_status);
+    }
+
+    [Fact]
+    public async Task The_order_sweep_lists_every_online_order_payment_still_waiting_but_not_a_sandbox_one()
     {
         using var f = await Create();
         var vendor = await f.ConnectVendorAsync();
         var waiting = await OpenOrderPaymentAsync(f, vendor.PayeeAccountId);
-        f.Db.PaymentTransactions.Add(new PaymentTransaction
+        // A MoMo order has no payee but is just as unpaid: it must be reconciled and expire too.
+        var momo = new PaymentTransaction
         {
             idempotency_key = "key-old-momo", payment_purpose = "ORDER", order_id = OrderId, provider = "MOMO",
             provider_reference = "SB-T1-aaaa", amount = 65_000m, transaction_status = "PENDING", created_at = Now.UtcDateTime,
-        });
+        };
+        // A sandbox payment never opened a provider page (no reference) and is not asked about.
+        var sandbox = new PaymentTransaction
+        {
+            idempotency_key = "key-sandbox", payment_purpose = "ORDER", order_id = OrderId, provider = "MOMO",
+            amount = 65_000m, transaction_status = "PENDING", created_at = Now.UtcDateTime,
+        };
+        f.Db.PaymentTransactions.AddRange(momo, sandbox);
         await f.Db.SaveChangesAsync();
 
-        var stale = await f.Transactions.ListStalePayeeOrderPaymentsAsync(Now.UtcDateTime.AddMinutes(5), default);
-        var tooYoung = await f.Transactions.ListStalePayeeOrderPaymentsAsync(Now.UtcDateTime.AddMinutes(-5), default);
+        var stale = await f.Transactions.ListStaleOrderPaymentsAsync(Now.UtcDateTime.AddMinutes(5), default);
+        var tooYoung = await f.Transactions.ListStaleOrderPaymentsAsync(Now.UtcDateTime.AddMinutes(-5), default);
 
-        Assert.Equal([waiting], stale.Select(s => s.TransactionId));
+        Assert.Equal(
+            new[] { waiting, momo.transaction_id }.OrderBy(id => id),
+            stale.Select(s => s.TransactionId).OrderBy(id => id));
         Assert.Empty(tooYoung);
     }
 }

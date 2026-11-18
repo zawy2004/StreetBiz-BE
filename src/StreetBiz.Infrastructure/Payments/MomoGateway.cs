@@ -77,24 +77,29 @@ internal static class MomoGateway
             $"&orderId={orderId}&orderInfo={orderInfo}&partnerCode={momo.PartnerCode}" +
             $"&redirectUrl={redirectUrl}&requestId={requestId}&requestType={momo.RequestType}");
 
-        using var response = await http.PostAsJsonAsync(
-            Endpoint(momo, "create"),
-            new
-            {
-                partnerCode = momo.PartnerCode,
-                accessKey = momo.AccessKey,
-                requestId,
-                amount,
-                orderId,
-                orderInfo,
-                redirectUrl,
-                ipnUrl,
-                extraData,
-                requestType = momo.RequestType,
-                signature,
-                lang = "vi",
-            },
-            cancellationToken);
+        // orderExpireTime (minutes) is not part of the signed text. Left out, MoMo applies its own
+        // default, which StreetBiz cannot see, so a lifetime is always sent unless it is switched off.
+        var body = new Dictionary<string, object?>
+        {
+            ["partnerCode"] = momo.PartnerCode,
+            ["accessKey"] = momo.AccessKey,
+            ["requestId"] = requestId,
+            ["amount"] = amount,
+            ["orderId"] = orderId,
+            ["orderInfo"] = orderInfo,
+            ["redirectUrl"] = redirectUrl,
+            ["ipnUrl"] = ipnUrl,
+            ["extraData"] = extraData,
+            ["requestType"] = momo.RequestType,
+            ["signature"] = signature,
+            ["lang"] = "vi",
+        };
+        if (momo.MomoLifetime is { } lifetime)
+        {
+            body["orderExpireTime"] = (long)lifetime.TotalMinutes;
+        }
+
+        using var response = await http.PostAsJsonAsync(Endpoint(momo, "create"), body, cancellationToken);
         using var json = await ReadJsonAsync(response, cancellationToken);
         var root = json.RootElement;
         var resultCode = Int(root, "resultCode");

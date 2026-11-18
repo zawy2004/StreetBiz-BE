@@ -5,7 +5,8 @@ namespace StreetBiz.Application.DTOs.Payments;
 /// <summary>
 /// The VietQR and the details the payer needs for a bank transfer by payOS.
 /// <c>TransferContent</c> must be sent unchanged: it carries the code that matches the money to its
-/// payment. <c>QrContent</c> is the QR to draw, <c>CheckoutUrl</c> payOS's own hosted payment page.
+/// payment. <c>QrContent</c> is the QR to draw, <c>CheckoutUrl</c> payOS's own hosted payment page,
+/// <c>ExpiresAt</c> the moment the QR stops being payable (the screen counts down to it).
 /// </summary>
 public sealed record BankTransferDto(
     string BankName,
@@ -14,7 +15,8 @@ public sealed record BankTransferDto(
     decimal Amount,
     string TransferContent,
     string? QrContent = null,
-    string? CheckoutUrl = null)
+    string? CheckoutUrl = null,
+    DateTimeOffset? ExpiresAt = null)
 {
     public static BankTransferDto? From(BankTransferInstructions? instructions) =>
         instructions is null
@@ -26,5 +28,6 @@ public sealed record BankTransferDto(
                 instructions.Amount,
                 instructions.TransferContent,
                 instructions.QrContent,
-                instructions.CheckoutUrl);
+                instructions.CheckoutUrl,
+                instructions.ExpiresAt);
 }

@@ -644,6 +644,36 @@ public sealed partial class CommerceRepository(
         }, IsolationLevel.Serializable, cancellationToken);
     }
 
+    public async Task<bool> ExpireUnpaidOrderAsync(long paymentTransactionId, CancellationToken cancellationToken)
+    {
+        return await db.ExecuteInTransactionAsync(async transaction =>
+        {
+            var payment = await db.PaymentTransactions
+                .Include(row => row.order)
+                .SingleOrDefaultAsync(row => row.transaction_id == paymentTransactionId, cancellationToken);
+            var order = payment?.order;
+            if (payment is null
+                || order is null
+                || payment.payment_purpose != PaymentPurposeOrder
+                || payment.transaction_status != PaymentPending
+                || order.order_status != OrderStatuses.PendingPayment)
+            {
+                return false;
+            }
+
+            var now = Now;
+            payment.transaction_status = PaymentFailed;
+            Transition(order, OrderStatuses.Cancelled, null, "Payment window expired.", now);
+            order.completed_at = now;
+            Notify(order.customer_user_id, "ORDER", "Đơn hàng đã hết hạn thanh toán",
+                $"Đơn {order.order_code} đã bị huỷ vì chưa nhận được thanh toán; giỏ hàng vẫn còn hiệu lực.",
+                "ORDER", order.order_id);
+            await db.SaveChangesAsync(cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
+            return true;
+        }, IsolationLevel.Serializable, cancellationToken);
+    }
+
     public async Task<OrderMutationResult> ConfirmSandboxPaymentAsync(
         long customerUserId,
         long orderId,

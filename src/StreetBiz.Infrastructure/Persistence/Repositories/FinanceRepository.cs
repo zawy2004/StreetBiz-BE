@@ -426,6 +426,10 @@ public sealed class FinanceRepository(
     /// the retry would hit the UNIQUE constraint on idempotency_key and surface as a 500.
     /// Callers have already scoped the target to the calling vendor, so a match on the target id
     /// is also a match on ownership.
+    /// Only an attempt still PENDING is replayed. One that has ended (its payOS link expired, or the
+    /// sweep closed it) cannot take a new link: the new link would be stored nowhere, so its
+    /// transfer could never be matched to the fee. The client gets a conflict and opens a new
+    /// attempt with a new key.
     /// </summary>
     private async Task<FinanceCheckoutTransactionRow?> FindCheckoutReplayAsync(
         string idempotencyKey, long? feeItemId, long? penaltyId, string provider, CancellationToken cancellationToken)
@@ -439,6 +443,7 @@ public sealed class FinanceRepository(
                 payment.penalty_id,
                 payment.provider,
                 payment.amount,
+                payment.transaction_status,
             })
             .SingleOrDefaultAsync(cancellationToken);
 
@@ -449,7 +454,9 @@ public sealed class FinanceRepository(
 
         if (existing.fee_item_id == feeItemId && existing.penalty_id == penaltyId && existing.provider == provider)
         {
-            return new FinanceCheckoutTransactionRow(existing.transaction_id, idempotencyKey, provider, existing.amount);
+            return existing.transaction_status == PaymentStatuses.Pending
+                ? new FinanceCheckoutTransactionRow(existing.transaction_id, idempotencyKey, provider, existing.amount)
+                : throw new ConflictException(FinanceMessages.CheckoutAttemptEnded);
         }
 
         throw new ConflictException(FinanceMessages.IdempotencyKeyReused);

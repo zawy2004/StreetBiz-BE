@@ -177,8 +177,11 @@ public interface IPaymentTransactionRepository
     Task SaveCheckoutAsync(
         long transactionId, string providerReference, string? checkoutPayload, CancellationToken cancellationToken);
 
-    /// <summary>Order payments to a payee still PENDING after <paramref name="createdBefore"/>, for the reconciliation sweep.</summary>
-    Task<IReadOnlyList<PaymentCheckoutState>> ListStalePayeeOrderPaymentsAsync(
+    /// <summary>
+    /// Order payments still PENDING after <paramref name="createdBefore"/> that a provider page or
+    /// QR was opened for (payOS to a household, or MoMo), for the reconciliation sweep.
+    /// </summary>
+    Task<IReadOnlyList<PaymentCheckoutState>> ListStaleOrderPaymentsAsync(
         DateTime createdBefore, CancellationToken cancellationToken);
 }
 

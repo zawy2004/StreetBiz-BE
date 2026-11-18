@@ -75,6 +75,14 @@ public interface ICommerceRepository
         PaymentCallbackData callback,
         CancellationToken cancellationToken);
 
+    /// <summary>
+    /// The payment window of an unpaid online order is over and its provider reported no final
+    /// result: the payment is closed FAILED and the order CANCELLED (the cart is unfrozen), and the
+    /// customer is told. False when the order was no longer waiting (paid, cancelled or closed in
+    /// the meantime). A transfer that still arrives later is recorded and raised as surplus.
+    /// </summary>
+    Task<bool> ExpireUnpaidOrderAsync(long paymentTransactionId, CancellationToken cancellationToken);
+
     Task<OrderMutationResult> ConfirmSandboxPaymentAsync(
         long customerUserId,
         long orderId,

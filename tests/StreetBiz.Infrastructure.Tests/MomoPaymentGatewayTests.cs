@@ -40,6 +40,57 @@ public sealed class MomoPaymentGatewayTests
         Assert.Equal(Sign(raw), body.GetProperty("signature").GetString());
     }
 
+    [Theory]
+    [InlineData(30, 30L)] // the default: the same window as a payOS link
+    [InlineData(5, 10L)] // below MoMo's minimum: raised to it
+    [InlineData(5000, 1440L)] // above MoMo's maximum (a day): cut to it
+    public async Task Checkout_tells_momo_how_long_the_page_stays_payable_without_changing_the_signature(
+        int configuredMinutes, long expectedMinutes)
+    {
+        var momo = new FakeMomo("""{"resultCode":0,"message":"Thành công.","payUrl":"https://test-payment.momo.vn/pay"}""");
+        var gateway = Gateway(momo, configuredMinutes);
+
+        var result = await gateway.CreateCheckoutAsync(
+            new PaymentGatewayCheckoutRequest(19, "SB-000019", 42, "key-1", "MOMO", 50_000m), default);
+
+        using var sent = JsonDocument.Parse(momo.LastBody!);
+        var body = sent.RootElement;
+        Assert.Equal(expectedMinutes, body.GetProperty("orderExpireTime").GetInt64());
+        // orderExpireTime is not part of the signed text: the signature is the same as without it.
+        var raw = $"accessKey={AccessKey}&amount=50000&extraData={body.GetProperty("extraData").GetString()}" +
+            $"&ipnUrl={body.GetProperty("ipnUrl").GetString()}&orderId={result.ProviderReference}" +
+            $"&orderInfo={body.GetProperty("orderInfo").GetString()}&partnerCode=MOMO" +
+            $"&redirectUrl={body.GetProperty("redirectUrl").GetString()}&requestId={body.GetProperty("requestId").GetString()}" +
+            "&requestType=captureWallet";
+        Assert.Equal(Sign(raw), body.GetProperty("signature").GetString());
+        Assert.Equal(TimeSpan.FromMinutes(expectedMinutes), gateway.CheckoutLifetime("MOMO"));
+    }
+
+    [Fact]
+    public async Task A_lifetime_of_zero_leaves_it_to_momo_and_sets_no_deadline_of_our_own()
+    {
+        var momo = new FakeMomo("""{"resultCode":0,"message":"Thành công.","payUrl":"https://test-payment.momo.vn/pay"}""");
+        var gateway = Gateway(momo, 0);
+
+        await gateway.CreateCheckoutAsync(new PaymentGatewayCheckoutRequest(19, "SB-000019", 42, "key-1", "MOMO", 50_000m), default);
+
+        using var sent = JsonDocument.Parse(momo.LastBody!);
+        Assert.False(sent.RootElement.TryGetProperty("orderExpireTime", out _));
+        Assert.Null(gateway.CheckoutLifetime("MOMO"));
+    }
+
+    [Fact]
+    public void Only_providers_with_a_known_window_have_a_checkout_lifetime()
+    {
+        var gateway = new ConfiguredPaymentGateway(
+            Options.Create(new PaymentGatewaySettings { PayOs = new PayOsSettings { LinkLifetimeMinutes = 20 } }),
+            new FakeFactory(new FakeMomo("{}")));
+
+        Assert.Equal(TimeSpan.FromMinutes(20), gateway.CheckoutLifetime("PAYOS"));
+        Assert.Null(gateway.CheckoutLifetime("MOMO")); // not configured, so not in use
+        Assert.Null(gateway.CheckoutLifetime("ZALOPAY"));
+    }
+
     [Fact]
     public async Task A_retried_checkout_gets_a_new_orderId_because_MoMo_refuses_a_repeated_one()
     {
@@ -131,7 +182,7 @@ public sealed class MomoPaymentGatewayTests
         Assert.False(gateway.IsOrdersOnly("PAYOS"));
     }
 
-    private static ConfiguredPaymentGateway Gateway(FakeMomo momo) =>
+    private static ConfiguredPaymentGateway Gateway(FakeMomo momo, int orderLifetimeMinutes = 30) =>
         new(Options.Create(new PaymentGatewaySettings
         {
             Momo = new PaymentProviderSettings
@@ -142,6 +193,7 @@ public sealed class MomoPaymentGatewayTests
                 SecretKey = SecretKey,
                 ReturnUrl = "http://localhost:5173/customer/orders/{referenceId}/payment",
                 NotifyUrl = "http://localhost:5023/api/payments/momo/callback",
+                OrderLifetimeMinutes = orderLifetimeMinutes,
             },
         }), new FakeFactory(momo));
 

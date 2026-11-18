@@ -140,13 +140,45 @@ penalty checkout.
 | `ApiBaseUrl` | `https://api-merchant.payos.vn`, or `http://localhost:5199` for the fake server. |
 | `PublicWebhookBaseUrl` | Public https origin payOS can reach (ngrok, the deployed API). Empty = no webhook, reconciliation only. |
 | `FrontendBaseUrl` | Where payOS's hosted page sends the payer back. |
-| `LinkLifetimeMinutes` | How long a link (and its QR) stays payable. Default 30. |
+| `LinkLifetimeMinutes` | How long a link (and its QR) stays payable. Default 30. See "Payment window". |
 | `CredentialKey` | Base64 of 32 random bytes that encrypts the keys. **User-secrets / environment only.** Development has a fallback; elsewhere `PAYOS` stays off without it. |
 
 ```powershell
 dotnet user-secrets --project src/StreetBiz.API set Payments:PayOs:CredentialKey (
   [Convert]::ToBase64String((1..32 | ForEach-Object { Get-Random -Maximum 256 }) -as [byte[]]))
 ```
+
+## Payment window: how long a payer has
+
+A payment page or QR is payable for a limited time, and an unpaid order does not freeze the
+customer's cart forever.
+
+| Provider | Window | How it is enforced |
+| --- | --- | --- |
+| payOS | `Payments:PayOs:LinkLifetimeMinutes` (30) | Sent as `expiredAt` when the link is opened; stored with the link (`ExpiresAt`). The pay screen counts down to it (`bankTransfer.expiresAt`) and takes the QR away at 0. payOS then reports the link `EXPIRED`, which the status check turns into FAILED. |
+| MoMo | `Payments:Momo:OrderLifetimeMinutes` (30; MoMo accepts 10–1440, anything else is clamped; 0 = MoMo's own default) | Sent as `orderExpireTime` (minutes) in the create request; it is not part of the signed text. MoMo then reports the order expired (result code 1005 = FAILED). |
+
+**Verify once on MoMo's test environment.** `orderExpireTime` is taken from MoMo's collection-link
+documentation and could not be confirmed against the `captureWallet` request page from here (the
+page refuses automated reads). Open one checkout and check the payUrl really expires; if MoMo rejects
+the field, set `OrderLifetimeMinutes` to 0.
+
+**StreetBiz's own deadline.** The payment sweep (`PaymentSweepIntervalMinutes`, default 5) asks the
+provider about every online order payment older than `StalePaymentPolicy.CheckAfter` (30 min) —
+payOS orders with the household's keys, MoMo orders with the platform's — and applies a final answer
+like a callback. If the provider still reports nothing final once the window plus
+`StalePaymentPolicy.OrderExpiryGrace` (15 min) has passed, the order is **cancelled** and the customer
+told, which unfreezes the cart. It is skipped when the provider has no known window (`0`, ZaloPay,
+URL-template gateways), cannot be reached, or refused the keys: whether it was paid is then unknown,
+so nothing is closed on a guess. A transfer that still lands after the order was closed is recorded
+and raised as **surplus** (a payment alert), never applied or lost.
+
+A fee instalment is not cancelled with its link: its transaction is closed FAILED (by the status
+check or the sweep), the instalment stays payable, and the vendor opens a new attempt. An attempt
+that has ended is never replayed: `POST .../checkout` with the **same** `Idempotency-Key` as an ended
+attempt answers `409` (`CheckoutAttemptEnded`), because a new link opened on a closed transaction
+could not be stored, so its transfer would match nothing. The web app uses a new key for every new
+attempt after a closed transfer or a `409`.
 
 ## Trying it without money: the fake payOS server
 

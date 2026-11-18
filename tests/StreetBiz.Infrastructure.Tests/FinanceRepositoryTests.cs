@@ -39,6 +39,27 @@ public sealed class FinanceRepositoryTests
         Assert.Equal(1, await f.Db.PaymentTransactions.CountAsync(t => t.idempotency_key == "key-1"));
     }
 
+    [Theory]
+    [InlineData(PaymentStatuses.Failed)] // the payOS link expired and the sweep or a status check closed it
+    [InlineData(PaymentStatuses.RefundRequired)]
+    public async Task A_key_whose_attempt_has_ended_is_not_replayed_so_a_new_link_is_never_orphaned(string endedAs)
+    {
+        using var f = await Fixture.Create();
+        var repository = f.Repository();
+        var first = await repository.CreateFeeCheckoutAsync(Vendor, PastDueItem, "MOMO", "key-1", default);
+        await f.Db.PaymentTransactions.Where(t => t.transaction_id == first.TransactionId)
+            .ExecuteUpdateAsync(s => s.SetProperty(t => t.transaction_status, endedAs));
+
+        var again = await Assert.ThrowsAsync<ConflictException>(() =>
+            repository.CreateFeeCheckoutAsync(Vendor, PastDueItem, "MOMO", "key-1", default));
+
+        Assert.Equal(FinanceMessages.CheckoutAttemptEnded, again.Message);
+        // A new key opens a new attempt as usual, and the ended one is left as it was.
+        var next = await repository.CreateFeeCheckoutAsync(Vendor, PastDueItem, "MOMO", "key-2", default);
+        Assert.NotEqual(first.TransactionId, next.TransactionId);
+        Assert.Equal(endedAs, await StatusOf(f, first.TransactionId));
+    }
+
     [Fact]
     public async Task Reusing_a_key_for_a_different_checkout_is_a_conflict_not_a_server_error()
     {

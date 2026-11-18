@@ -35,6 +35,14 @@ public sealed class ConfiguredPaymentGateway(
     public bool IsOrdersOnly(string provider) =>
         provider != PaymentProviders.PayOs && settings.For(provider).OrdersOnly;
 
+    public TimeSpan? CheckoutLifetime(string provider) => provider switch
+    {
+        PaymentProviders.PayOs when UsesPayOs(provider) =>
+            TimeSpan.FromMinutes(Math.Max(1, settings.PayOs.LinkLifetimeMinutes)),
+        "MOMO" when UsesMomo(provider) => settings.Momo.MomoLifetime,
+        _ => null,
+    };
+
     public bool IsProviderAvailable(string provider) =>
         !string.IsNullOrWhiteSpace(settings.For(provider).CheckoutUrlTemplate)
         || UsesMomo(provider)

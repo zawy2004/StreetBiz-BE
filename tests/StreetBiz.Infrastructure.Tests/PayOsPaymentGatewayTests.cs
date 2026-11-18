@@ -120,6 +120,9 @@ public sealed class PayOsPaymentGatewayTests
         var expired = Gateway(new FakePayOs("{}"), Now.AddMinutes(30)).DescribeStoredCheckout("PAYOS", created.CheckoutPayload, 1_040_000m);
 
         Assert.Equal("00020101021238570010A000000727QRDATA", again?.QrContent);
+        // The screen counts down to this moment, so it is the same one payOS was told (expiredAt).
+        Assert.Equal(Now.AddMinutes(30), again?.ExpiresAt);
+        Assert.Equal(Now.AddMinutes(30), created.BankTransfer?.ExpiresAt);
         Assert.Null(expired);
         Assert.Null(Gateway(new FakePayOs("{}")).DescribeStoredCheckout("PAYOS", "not json", 1m));
         Assert.Null(Gateway(new FakePayOs("{}")).DescribeStoredCheckout("MOMO", created.CheckoutPayload, 1m));

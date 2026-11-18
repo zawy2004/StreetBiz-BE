@@ -53,6 +53,8 @@ public sealed class ReconcileFeeSchedulesCommandHandler(IFinanceRepository finan
 /// is checked with its provider: a reported result is applied exactly like a callback. A payment
 /// no provider can be asked about is closed then; one MoMo still reports in flight is closed after
 /// <see cref="StalePaymentPolicy.CloseAfter"/>. Closing is safe, since a late success is still applied.
+/// Online order payments (payOS, MoMo) are settled the same way and closed once their payment window is
+/// over, see <c>SweepStaleOrderPaymentsAsync</c>.
 /// </summary>
 public sealed record SettleStalePaymentsCommand : IRequest<StalePaymentSweepResult>;
 
@@ -123,30 +125,43 @@ public sealed class SettleStalePaymentsCommandHandler(
             }
         }
 
-        settled += await SettleStaleOrderPaymentsAsync(now, cancellationToken);
-        return new StalePaymentSweepResult(settled, closed);
+        var (settledOrders, closedOrders) = await SweepStaleOrderPaymentsAsync(now, cancellationToken);
+        return new StalePaymentSweepResult(settled + settledOrders, closed + closedOrders);
     }
 
     /// <summary>
-    /// Orders paid to a household's own payOS channel whose webhook never arrived: asked with that
-    /// household's keys and applied like a callback once payOS reports them final. Never closed here;
-    /// an unpaid order keeps its own lifecycle.
+    /// Orders waiting on a provider page or QR (payOS to a household, or MoMo) whose webhook or IPN
+    /// never arrived: asked with the payee's own keys (payOS) or the platform's (MoMo) and applied like
+    /// a callback once the provider reports them final. An order the provider still calls unfinished
+    /// after its payment window plus <see cref="StalePaymentPolicy.OrderExpiryGrace"/> is closed, so a
+    /// customer who walked away is not left with a frozen cart; a transfer that still lands later is
+    /// recorded and raised as surplus, never lost. When the provider cannot be asked (unreachable, or its
+    /// keys were refused) nothing is closed: whether it was paid is unknown.
     /// </summary>
-    private async Task<int> SettleStaleOrderPaymentsAsync(DateTime now, CancellationToken cancellationToken)
+    private async Task<(int Settled, int Closed)> SweepStaleOrderPaymentsAsync(
+        DateTime now, CancellationToken cancellationToken)
     {
-        if (transactions is null || payeeCheckouts is null || commerce is null)
+        if (transactions is null || commerce is null)
         {
-            return 0;
+            return (0, 0);
         }
 
         var settled = 0;
-        foreach (var payment in await transactions.ListStalePayeeOrderPaymentsAsync(
+        var closed = 0;
+        foreach (var payment in await transactions.ListStaleOrderPaymentsAsync(
             now - StalePaymentPolicy.CheckAfter, cancellationToken))
         {
+            if (payment.ProviderReference is not { } reference)
+            {
+                continue;
+            }
+
             PaymentGatewayCallback? state;
             try
             {
-                state = await payeeCheckouts.QueryAsync(payment, cancellationToken);
+                state = payment.PayeeAccountId is not null && payeeCheckouts is not null
+                    ? await payeeCheckouts.QueryAsync(payment, cancellationToken)
+                    : await paymentGateway.QueryPaymentAsync(payment.Provider, reference, cancellationToken);
             }
             catch (Exception exception) when (exception is HttpRequestException
                 || (exception is TaskCanceledException && !cancellationToken.IsCancellationRequested))
@@ -154,28 +169,35 @@ public sealed class SettleStalePaymentsCommandHandler(
                 continue;
             }
 
-            if (state?.Status is null)
+            if (state?.Status is not null)
             {
+                await commerce.ApplyPaymentCallbackAsync(
+                    new PaymentCallbackData(
+                        payment.Provider,
+                        state.ProviderReference ?? reference,
+                        payment.IdempotencyKey,
+                        state.Amount,
+                        state.Status,
+                        state.RawPayload ?? "{}",
+                        state.SignatureValid,
+                        state.ProviderEventId)
+                    {
+                        PayeeAccountId = payment.PayeeAccountId,
+                    },
+                    cancellationToken);
+                settled++;
                 continue;
             }
 
-            await commerce.ApplyPaymentCallbackAsync(
-                new PaymentCallbackData(
-                    payment.Provider,
-                    state.ProviderReference ?? payment.ProviderReference,
-                    payment.IdempotencyKey,
-                    state.Amount,
-                    state.Status,
-                    state.RawPayload ?? "{}",
-                    state.SignatureValid,
-                    state.ProviderEventId)
-                {
-                    PayeeAccountId = payment.PayeeAccountId,
-                },
-                cancellationToken);
-            settled++;
+            if (state is { SignatureValid: true }
+                && paymentGateway.CheckoutLifetime(payment.Provider) is { } lifetime
+                && payment.CreatedAt < now - lifetime - StalePaymentPolicy.OrderExpiryGrace
+                && await commerce.ExpireUnpaidOrderAsync(payment.TransactionId, cancellationToken))
+            {
+                closed++;
+            }
         }
 
-        return settled;
+        return (settled, closed);
     }
 }

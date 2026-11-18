@@ -55,6 +55,9 @@ public sealed record BankTransferInstructions(
 
     /// <summary>PAYOS: the provider's hosted payment page, for a payer who prefers it.</summary>
     public string? CheckoutUrl { get; init; }
+
+    /// <summary>When this QR stops being payable; the screen counts down to it.</summary>
+    public DateTimeOffset? ExpiresAt { get; init; }
 }
 
 /// <summary>
@@ -104,6 +107,13 @@ public interface IPaymentGateway
     /// so a rental-fee checkout must refuse it even though <see cref="IsProviderAvailable"/> is true.
     /// </summary>
     bool IsOrdersOnly(string provider) => false;
+
+    /// <summary>
+    /// How long a payment page or QR this provider opens stays payable, or null when it is not
+    /// known (a URL-template gateway, ZaloPay, the sandbox). After it, plus a grace period, an
+    /// order still unpaid is closed by the sweep instead of freezing the customer's cart forever.
+    /// </summary>
+    TimeSpan? CheckoutLifetime(string provider) => null;
 
     Task<PaymentGatewayCheckoutResult> CreateCheckoutAsync(
         PaymentGatewayCheckoutRequest request,

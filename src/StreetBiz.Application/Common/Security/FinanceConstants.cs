@@ -123,6 +123,14 @@ public static class StalePaymentPolicy
 {
     public static readonly TimeSpan CheckAfter = TimeSpan.FromMinutes(30);
     public static readonly TimeSpan CloseAfter = TimeSpan.FromHours(24);
+
+    /// <summary>
+    /// ORD: an order is closed once its provider page/QR has been dead this long (the provider's own
+    /// <see cref="StreetBiz.Application.Common.Interfaces.IPaymentGateway.CheckoutLifetime"/> plus this
+    /// grace) and the provider still reports no final result. The grace covers the provider's clock,
+    /// a payer who scanned at the last second and the delay before the bank reports the transfer.
+    /// </summary>
+    public static readonly TimeSpan OrderExpiryGrace = TimeSpan.FromMinutes(15);
 }
 
 /// <summary>Messages for the Fee, Payment, Invoice and Reporting workflow (SRS MSG27-MSG32).</summary>
@@ -152,6 +160,9 @@ public static class FinanceMessages
     /// </summary>
     public const string IdempotencyKeyReused =
         "Mã yêu cầu thanh toán này đã được dùng cho một giao dịch khác. Vui lòng thử lại.";
+    /// <summary>The Idempotency-Key belongs to an attempt that already ended (expired, failed or closed).</summary>
+    public const string CheckoutAttemptEnded =
+        "Lần thanh toán trước của khoản này đã hết hạn hoặc đã đóng. Hãy bấm thanh toán lại để tạo lần mới.";
     public const string TransactionNotFound = "Không tìm thấy giao dịch thanh toán.";
     public const string TransactionAlreadyProcessed = "Giao dịch này đã được xử lý.";
 

@@ -93,6 +93,23 @@ public sealed class PaymentProviderSettings
     public string RequestType { get; set; } = "captureWallet";
 
     /// <summary>
+    /// How long a MoMo payment page stays payable, sent as <c>orderExpireTime</c> (minutes; MoMo
+    /// accepts <see cref="MomoMinLifetimeMinutes"/> to <see cref="MomoMaxLifetimeMinutes"/>, the value is
+    /// clamped into that range). 0 leaves it to MoMo's own default and switches StreetBiz's own
+    /// deadline for unpaid orders off, because without a known lifetime there is nothing to compare with.
+    /// </summary>
+    public int OrderLifetimeMinutes { get; set; } = 30;
+
+    public const int MomoMinLifetimeMinutes = 10;
+    public const int MomoMaxLifetimeMinutes = 1440;
+
+    /// <summary>The lifetime actually sent to MoMo and used as StreetBiz's deadline; null when switched off.</summary>
+    public TimeSpan? MomoLifetime =>
+        OrderLifetimeMinutes <= 0
+            ? null
+            : TimeSpan.FromMinutes(Math.Clamp(OrderLifetimeMinutes, MomoMinLifetimeMinutes, MomoMaxLifetimeMinutes));
+
+    /// <summary>
     /// True: this wallet is offered and accepted only for a customer's order, never for a ward's
     /// rental fee. A platform-wide wallet collects into StreetBiz's own merchant account, which is
     /// acceptable for a buyer paying a stall in the wallet's test environment but not for money owed

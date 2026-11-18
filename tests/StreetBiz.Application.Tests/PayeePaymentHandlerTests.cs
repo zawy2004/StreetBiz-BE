@@ -379,7 +379,7 @@ public sealed class PayeePaymentHandlerTests
         finance.Setup(x => x.ListStalePaymentsAsync(It.IsAny<DateTime>(), It.IsAny<CancellationToken>())).ReturnsAsync([]);
         var orderPayment = new PaymentCheckoutState(55, "ORDER", "PAYOS", "PAYOS-55001", "idem-o", 65_000m, "PENDING", 21, "{}", 19, Now.AddHours(-1));
         var transactions = new Mock<IPaymentTransactionRepository>();
-        transactions.Setup(x => x.ListStalePayeeOrderPaymentsAsync(It.IsAny<DateTime>(), It.IsAny<CancellationToken>())).ReturnsAsync([orderPayment]);
+        transactions.Setup(x => x.ListStaleOrderPaymentsAsync(It.IsAny<DateTime>(), It.IsAny<CancellationToken>())).ReturnsAsync([orderPayment]);
         var keys = new PayeeCredentials(21, "store-client", "store-api", "store-checksum");
         var payees = new Mock<IPayeeAccountRepository>();
         payees.Setup(x => x.GetCredentialsAsync(21, It.IsAny<CancellationToken>())).ReturnsAsync(keys);
@@ -397,9 +397,139 @@ public sealed class PayeePaymentHandlerTests
             .Handle(new SettleStalePaymentsCommand(), CancellationToken.None);
 
         result.SettledCount.Should().Be(1);
-        result.ClosedCount.Should().Be(0); // an unpaid order is never closed by this sweep
+        result.ClosedCount.Should().Be(0); // reported paid: settled, never closed
         applied!.PayeeAccountId.Should().Be(21);
         applied.IdempotencyKey.Should().Be("idem-o");
+    }
+
+    // ------------------------------------------------------------- order payment window (MoMo, payOS)
+
+    private static PaymentCheckoutState MomoOrder(TimeSpan age) =>
+        new(66, "ORDER", "MOMO", "SB-T66-abcd1234", "idem-m", 50_000m, "PENDING", null, null, 19, Now - age);
+
+    private static (SettleStalePaymentsCommandHandler Sweep, Mock<ICommerceRepository> Commerce, Mock<IPaymentGateway> Gateway) OrderSweep(
+        PaymentCheckoutState payment, TimeSpan? lifetime, PaymentGatewayCallback? providerAnswer)
+    {
+        var finance = new Mock<IFinanceRepository>();
+        finance.Setup(x => x.ListStalePaymentsAsync(It.IsAny<DateTime>(), It.IsAny<CancellationToken>())).ReturnsAsync([]);
+        var transactions = new Mock<IPaymentTransactionRepository>();
+        transactions.Setup(x => x.ListStaleOrderPaymentsAsync(It.IsAny<DateTime>(), It.IsAny<CancellationToken>())).ReturnsAsync([payment]);
+        var gateway = new Mock<IPaymentGateway>();
+        gateway.Setup(x => x.CheckoutLifetime(payment.Provider)).Returns(lifetime);
+        gateway.Setup(x => x.QueryPaymentAsync(payment.Provider, payment.ProviderReference!, It.IsAny<CancellationToken>())).ReturnsAsync(providerAnswer);
+        var commerce = new Mock<ICommerceRepository>();
+        commerce.Setup(x => x.ExpireUnpaidOrderAsync(payment.TransactionId, It.IsAny<CancellationToken>())).ReturnsAsync(true);
+        commerce.Setup(x => x.ApplyPaymentCallbackAsync(It.IsAny<PaymentCallbackData>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PaymentCallbackMutationResult(PaymentCallbackOutcome.Applied, 9, payment.TransactionId, 19, "PLACED"));
+        var sweep = new SettleStalePaymentsCommandHandler(
+            finance.Object, gateway.Object, new FixedClock(Now), transactions.Object, commerce: commerce.Object);
+        return (sweep, commerce, gateway);
+    }
+
+    private static readonly PaymentGatewayCallback StillOpen = new("SB-T66-abcd1234", null, 50_000m, null, true, "{}");
+
+    [Fact]
+    public async Task A_momo_order_whose_ipn_never_arrived_is_settled_by_asking_momo()
+    {
+        var (sweep, commerce, _) = OrderSweep(
+            MomoOrder(TimeSpan.FromMinutes(40)),
+            TimeSpan.FromMinutes(30),
+            new PaymentGatewayCallback("SB-T66-abcd1234", null, 50_000m, "SUCCESS", true, "{}"));
+
+        var result = await sweep.Handle(new SettleStalePaymentsCommand(), CancellationToken.None);
+
+        result.SettledCount.Should().Be(1);
+        result.ClosedCount.Should().Be(0);
+        commerce.Verify(x => x.ApplyPaymentCallbackAsync(
+            It.Is<PaymentCallbackData>(d => d.Provider == "MOMO" && d.Status == "SUCCESS" && d.PayeeAccountId == null && d.IdempotencyKey == "idem-m"),
+            It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task An_unpaid_order_is_closed_once_its_window_and_the_grace_period_are_over()
+    {
+        // 30 minute window + 15 minute grace = 45: this one is 50 minutes old and MoMo still says nothing final.
+        var (sweep, commerce, _) = OrderSweep(MomoOrder(TimeSpan.FromMinutes(50)), TimeSpan.FromMinutes(30), StillOpen);
+
+        var result = await sweep.Handle(new SettleStalePaymentsCommand(), CancellationToken.None);
+
+        result.ClosedCount.Should().Be(1);
+        commerce.Verify(x => x.ExpireUnpaidOrderAsync(66, It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task An_unpaid_order_is_left_alone_while_its_window_or_grace_is_running()
+    {
+        var (sweep, commerce, _) = OrderSweep(MomoOrder(TimeSpan.FromMinutes(40)), TimeSpan.FromMinutes(30), StillOpen);
+
+        var result = await sweep.Handle(new SettleStalePaymentsCommand(), CancellationToken.None);
+
+        result.ClosedCount.Should().Be(0);
+        commerce.Verify(x => x.ExpireUnpaidOrderAsync(It.IsAny<long>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task Without_a_known_payment_window_an_order_is_never_closed_on_a_guess()
+    {
+        var (sweep, commerce, _) = OrderSweep(MomoOrder(TimeSpan.FromDays(3)), null, StillOpen);
+
+        var result = await sweep.Handle(new SettleStalePaymentsCommand(), CancellationToken.None);
+
+        result.ClosedCount.Should().Be(0);
+        commerce.Verify(x => x.ExpireUnpaidOrderAsync(It.IsAny<long>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Theory]
+    [InlineData(false)] // the provider cannot be asked at all
+    [InlineData(true)] // it answered, but the answer cannot be trusted (e.g. refused keys)
+    public async Task An_order_is_not_closed_when_the_provider_gave_no_trusted_answer(bool answered)
+    {
+        var answer = answered ? new PaymentGatewayCallback("SB-T66-abcd1234", null, null, null, false) : null;
+        var (sweep, commerce, _) = OrderSweep(MomoOrder(TimeSpan.FromDays(3)), TimeSpan.FromMinutes(30), answer);
+
+        var result = await sweep.Handle(new SettleStalePaymentsCommand(), CancellationToken.None);
+
+        result.ClosedCount.Should().Be(0);
+        commerce.Verify(x => x.ExpireUnpaidOrderAsync(It.IsAny<long>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task An_unreachable_provider_leaves_the_order_for_the_next_sweep()
+    {
+        var (sweep, commerce, gateway) = OrderSweep(MomoOrder(TimeSpan.FromDays(3)), TimeSpan.FromMinutes(30), StillOpen);
+        gateway.Setup(x => x.QueryPaymentAsync("MOMO", "SB-T66-abcd1234", It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new HttpRequestException("MoMo is down"));
+
+        var result = await sweep.Handle(new SettleStalePaymentsCommand(), CancellationToken.None);
+
+        result.Should().Be(new StalePaymentSweepResult(0, 0));
+        commerce.Verify(x => x.ExpireUnpaidOrderAsync(It.IsAny<long>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task A_payos_order_the_provider_still_calls_open_past_its_window_is_closed_too()
+    {
+        var finance = new Mock<IFinanceRepository>();
+        finance.Setup(x => x.ListStalePaymentsAsync(It.IsAny<DateTime>(), It.IsAny<CancellationToken>())).ReturnsAsync([]);
+        var payment = new PaymentCheckoutState(55, "ORDER", "PAYOS", "PAYOS-55001", "idem-o", 65_000m, "PENDING", 21, "{}", 19, Now.AddMinutes(-50));
+        var transactions = new Mock<IPaymentTransactionRepository>();
+        transactions.Setup(x => x.ListStaleOrderPaymentsAsync(It.IsAny<DateTime>(), It.IsAny<CancellationToken>())).ReturnsAsync([payment]);
+        var keys = new PayeeCredentials(21, "store-client", "store-api", "store-checksum");
+        var payees = new Mock<IPayeeAccountRepository>();
+        payees.Setup(x => x.GetCredentialsAsync(21, It.IsAny<CancellationToken>())).ReturnsAsync(keys);
+        var gateway = new Mock<IPaymentGateway>();
+        gateway.Setup(x => x.CheckoutLifetime("PAYOS")).Returns(TimeSpan.FromMinutes(30));
+        gateway.Setup(x => x.QueryPaymentAsync("PAYOS", "PAYOS-55001", keys, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PaymentGatewayCallback("PAYOS-55001", null, 65_000m, null, true, "{}"));
+        var commerce = new Mock<ICommerceRepository>();
+        commerce.Setup(x => x.ExpireUnpaidOrderAsync(55, It.IsAny<CancellationToken>())).ReturnsAsync(true);
+
+        var result = await new SettleStalePaymentsCommandHandler(
+                finance.Object, gateway.Object, new FixedClock(Now), transactions.Object, Checkouts(payees, transactions, gateway).Object, commerce.Object)
+            .Handle(new SettleStalePaymentsCommand(), CancellationToken.None);
+
+        result.ClosedCount.Should().Be(1);
+        commerce.Verify(x => x.ExpireUnpaidOrderAsync(55, It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [Fact]

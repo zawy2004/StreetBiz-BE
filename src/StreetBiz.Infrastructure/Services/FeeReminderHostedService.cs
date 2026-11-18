@@ -16,15 +16,22 @@ public sealed class FeeReminderOptions
     /// <summary>How often the sweep runs. The sweep itself is idempotent per calendar day, so a
     /// shorter interval only makes a reminder arrive sooner within the same day, never twice.</summary>
     public int SweepIntervalMinutes { get; set; } = 60;
+
+    /// <summary>
+    /// How often payments left PENDING are settled or closed. Much shorter than the daily sweeps: a
+    /// customer whose payOS/MoMo window has run out is waiting on it with a frozen cart, and each pass
+    /// only asks the provider about payments that are already past their check delay.
+    /// </summary>
+    public int PaymentSweepIntervalMinutes { get; set; } = 5;
 }
 
 /// <summary>
-/// FEE-02/SYS-06 background timer. Each tick runs four independent steps, in this order:
+/// FEE-02/SYS-06 background timers. The daily-style tick runs three independent steps, in this order:
 /// reconcile schedules with their contracts (SYS-03: bill contracts nothing bills, close the
-/// instalments of contracts that ended early), the overdue/reminder sweep, the SIDE-10 release of
-/// slots whose address-change grace period is over, then settle or close
-/// payments left PENDING. Reconciling first means no reminder goes out for an instalment that is
-/// about to be closed.
+/// instalments of contracts that ended early), the overdue/reminder sweep, then the SIDE-10 release of
+/// slots whose address-change grace period is over. Reconciling first means no reminder goes out for
+/// an instalment that is about to be closed. A second, faster timer settles or closes payments left
+/// PENDING (fees, penalties and online orders).
 ///
 /// A hosted service is a singleton, so it resolves <see cref="ISender"/> from a new DI scope per
 /// step rather than injecting it directly — the same reason ASP.NET Core scopes a request:
@@ -36,19 +43,36 @@ public sealed class FeeReminderHostedService(
     TimeProvider clock,
     ILogger<FeeReminderHostedService> logger) : BackgroundService
 {
-    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+    protected override Task ExecuteAsync(CancellationToken stoppingToken) =>
+        Task.WhenAll(
+            RunEveryAsync(options.Value.SweepIntervalMinutes, RunOnceAsync, stoppingToken),
+            RunEveryAsync(options.Value.PaymentSweepIntervalMinutes, RunPaymentSweepAsync, stoppingToken));
+
+    private async Task RunEveryAsync(
+        int intervalMinutes, Func<CancellationToken, Task> run, CancellationToken stoppingToken)
     {
-        var interval = TimeSpan.FromMinutes(Math.Max(1, options.Value.SweepIntervalMinutes));
-        using var timer = new PeriodicTimer(interval, clock);
+        using var timer = new PeriodicTimer(TimeSpan.FromMinutes(Math.Max(1, intervalMinutes)), clock);
 
         // Run once at startup, then on the timer, so a fresh deploy does not wait a full interval
         // before the first sweep.
-        await RunOnceAsync(stoppingToken);
+        await run(stoppingToken);
         while (await timer.WaitForNextTickAsync(stoppingToken))
         {
-            await RunOnceAsync(stoppingToken);
+            await run(stoppingToken);
         }
     }
+
+    private Task RunPaymentSweepAsync(CancellationToken cancellationToken) =>
+        StepAsync("Stale payment sweep", async sender =>
+        {
+            var result = await sender.Send(new SettleStalePaymentsCommand(), cancellationToken);
+            if (result.SettledCount > 0 || result.ClosedCount > 0)
+            {
+                logger.LogInformation(
+                    "Stale payments: {Settled} settled with their provider, {Closed} closed.",
+                    result.SettledCount, result.ClosedCount);
+            }
+        }, cancellationToken);
 
     private async Task RunOnceAsync(CancellationToken cancellationToken)
     {
@@ -88,17 +112,6 @@ public sealed class FeeReminderHostedService(
                     "Adjacent slot release: {Released} slot(s) returned after their grace period, "
                     + "{Waiting} held back by unpaid fees.",
                     result.Released, result.WaitingForPayment);
-            }
-        }, cancellationToken);
-
-        await StepAsync("Stale payment sweep", async sender =>
-        {
-            var result = await sender.Send(new SettleStalePaymentsCommand(), cancellationToken);
-            if (result.SettledCount > 0 || result.ClosedCount > 0)
-            {
-                logger.LogInformation(
-                    "Stale payments: {Settled} settled with their provider, {Closed} closed.",
-                    result.SettledCount, result.ClosedCount);
             }
         }, cancellationToken);
     }

@@ -195,6 +195,7 @@ internal static class PayOsGateway
         {
             QrContent = stored.QrCode,
             CheckoutUrl = string.IsNullOrWhiteSpace(stored.CheckoutUrl) ? null : stored.CheckoutUrl,
+            ExpiresAt = stored.ExpiresAt,
         };
 
     private static string ReturnUrl(PayOsSettings settings, PaymentGatewayCheckoutRequest request)

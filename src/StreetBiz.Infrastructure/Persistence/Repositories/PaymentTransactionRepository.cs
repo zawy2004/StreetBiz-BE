@@ -32,16 +32,19 @@ public sealed class PaymentTransactionRepository(StreetBizDbContext db) : IPayme
                 .SetProperty(t => t.checkout_payload, checkoutPayload), cancellationToken);
     }
 
-    public async Task<IReadOnlyList<PaymentCheckoutState>> ListStalePayeeOrderPaymentsAsync(
+    public async Task<IReadOnlyList<PaymentCheckoutState>> ListStaleOrderPaymentsAsync(
         DateTime createdBefore, CancellationToken cancellationToken)
     {
+        // A provider_reference means a provider page or QR was really opened: a payOS link or a MoMo
+        // order. A sandbox payment has none and is settled or failed on screen.
         var rows = await db.PaymentTransactions.AsNoTracking()
             .Where(t => t.payment_purpose == PaymentPurposes.Order
                 && t.transaction_status == PaymentStatuses.Pending
-                && t.payee_account_id != null
                 && t.provider_reference != null
                 && t.created_at < createdBefore)
-            .OrderBy(t => t.transaction_id)
+            // Newest first: a customer is waiting on those, and old payments a provider never settles
+            // (no known window to close them by) must not crowd the recent ones out of the 200.
+            .OrderByDescending(t => t.transaction_id)
             .Take(200)
             .ToListAsync(cancellationToken);
         return [.. rows.Select(row => ToState(row)!)];
