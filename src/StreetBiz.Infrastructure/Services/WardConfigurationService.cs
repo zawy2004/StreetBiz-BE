@@ -705,6 +705,7 @@ public sealed class WardConfigurationService(
                 longitude = request.Longitude,
                 width_meters = request.WidthMeters,
                 length_meters = request.LengthMeters,
+                bearing_degrees = SlotBearing.Normalize(request.BearingDegrees),
                 slot_status = SlotStatuses.Available,
                 source = SlotSources.WardDefined,
                 has_power = request.HasPower,
@@ -742,11 +743,14 @@ public sealed class WardConfigurationService(
                 throw new WardException(400, "vendor_proposed_readonly", "Ô do hộ kinh doanh đề xuất được xử lý ở luồng duyệt đề xuất (WARD-16), không sửa tại đây.");
             EnsureToken(SlotToken(slot), request.VersionToken);
 
+            // A turned slot covers different ground, so the bearing is geometry like the position.
+            var bearing = request.BearingDegrees is null ? slot.bearing_degrees : SlotBearing.Normalize(request.BearingDegrees);
             var geometryChanged = slot.zone_id != request.ZoneId || slot.latitude != request.Latitude
                                   || slot.longitude != request.Longitude || slot.width_meters != request.WidthMeters
-                                  || slot.length_meters != request.LengthMeters || slot.slot_code != request.SlotCode.Trim();
+                                  || slot.length_meters != request.LengthMeters || slot.slot_code != request.SlotCode.Trim()
+                                  || slot.bearing_degrees != bearing;
             if (geometryChanged && slot.slot_status != SlotStatuses.Available)
-                throw new WardException(400, "slot_in_use", "Chỉ sửa mã, vị trí, kích thước hoặc khu vực khi ô đang trống (AVAILABLE).");
+                throw new WardException(400, "slot_in_use", "Chỉ sửa mã, vị trí, hướng, kích thước hoặc khu vực khi ô đang trống (AVAILABLE).");
 
             if (geometryChanged)
             {
@@ -765,6 +769,7 @@ public sealed class WardConfigurationService(
             slot.longitude = request.Longitude;
             slot.width_meters = request.WidthMeters;
             slot.length_meters = request.LengthMeters;
+            slot.bearing_degrees = bearing;
             slot.has_power = request.HasPower;
             slot.has_water = request.HasWater;
             slot.has_trash_bin = request.HasTrashBin;
@@ -863,6 +868,8 @@ public sealed class WardConfigurationService(
                 throw new WardException(400, "placement_warnings", "Có vị trí đang có cảnh báo. Hãy xem lại và xác nhận kèm lý do.");
 
             var codes = await NextSlotCodesAsync(zone, request.Positions.Count, ct);
+            // The batch lays slots end to end along one segment: that segment is their street.
+            var lineBearing = SlotBearing.OfLine(request.Positions);
             var slots = request.Positions.Select((p, i) => new SidewalkSlot
             {
                 slot_code = codes[i],
@@ -871,6 +878,7 @@ public sealed class WardConfigurationService(
                 longitude = p.Longitude,
                 width_meters = request.WidthMeters,
                 length_meters = request.LengthMeters,
+                bearing_degrees = lineBearing,
                 slot_status = SlotStatuses.Available,
                 source = SlotSources.WardDefined,
                 has_power = request.HasPower,
@@ -991,7 +999,7 @@ public sealed class WardConfigurationService(
         return new WardSlotDto(
             s.slot_id, s.slot_code, s.zone_id, s.zone.zone_name, s.latitude, s.longitude, s.width_meters, s.length_meters,
             s.slot_status, s.source, s.has_power, s.has_water, s.has_trash_bin, s.business_category,
-            editable && !hasHistory, editable, SlotToken(s), OrderedImageUrls(s));
+            editable && !hasHistory, editable, SlotToken(s), OrderedImageUrls(s), s.bearing_degrees);
     }
 
     private WardStreetFeatureDto ToFeatureDto(StreetFeature f) =>
@@ -1196,6 +1204,7 @@ public sealed class WardConfigurationService(
         longitude = s.longitude,
         widthMeters = s.width_meters,
         lengthMeters = s.length_meters,
+        bearingDegrees = s.bearing_degrees,
         status = s.slot_status,
         hasPower = s.has_power,
         hasWater = s.has_water,
@@ -1217,7 +1226,7 @@ public sealed class WardConfigurationService(
 
     private static string SlotToken(SidewalkSlot s) =>
         VersionToken.Compute(s.slot_code, s.zone_id, s.latitude, s.longitude, s.width_meters, s.length_meters, s.slot_status,
-            s.has_power, s.has_water, s.has_trash_bin, s.business_category, string.Join('|', OrderedImageUrls(s)));
+            s.has_power, s.has_water, s.has_trash_bin, s.business_category, string.Join('|', OrderedImageUrls(s)), s.bearing_degrees);
 
     private static List<string> OrderedImageUrls(SidewalkSlot s) =>
         s.SlotImages.OrderBy(i => i.sort_order).ThenBy(i => i.image_id).Select(i => i.image_url).ToList();
@@ -1358,6 +1367,35 @@ internal static class SlotLine
                 Math.Round((decimal)(sLat + (eLat - sLat) * t), 6),
                 Math.Round((decimal)(sLng + (eLng - sLng) * t), 6));
         }).ToList();
+    }
+}
+
+/// <summary>
+/// A slot's orientation: the compass bearing (0 = north, clockwise) of its length side, folded
+/// into [0, 180) since a rectangle turned half a circle covers the same ground.
+/// </summary>
+public static class SlotBearing
+{
+    public static decimal? Normalize(decimal? bearing)
+    {
+        if (bearing is null) return null;
+        var folded = Math.Round(bearing.Value, 2) % 180m;
+        if (folded < 0) folded += 180m;
+        return folded == 180m ? 0m : folded;
+    }
+
+    /// <summary>The bearing from the first position to the last; null for a single slot (no line).</summary>
+    public static decimal? OfLine(IReadOnlyList<BatchSlotPosition> positions)
+    {
+        if (positions.Count < 2) return null;
+        var (a, b) = (positions[0], positions[^1]);
+        if (a.Latitude == b.Latitude && a.Longitude == b.Longitude) return null;
+        var lat1 = (double)a.Latitude * Math.PI / 180;
+        var lat2 = (double)b.Latitude * Math.PI / 180;
+        var dLng = ((double)b.Longitude - (double)a.Longitude) * Math.PI / 180;
+        var y = Math.Sin(dLng) * Math.Cos(lat2);
+        var x = Math.Cos(lat1) * Math.Sin(lat2) - Math.Sin(lat1) * Math.Cos(lat2) * Math.Cos(dLng);
+        return Normalize((decimal)(Math.Atan2(y, x) * 180 / Math.PI));
     }
 }
 

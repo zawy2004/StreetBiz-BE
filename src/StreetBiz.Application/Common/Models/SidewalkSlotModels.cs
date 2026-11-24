@@ -38,7 +38,9 @@ public sealed record SlotRow(
     DateOnly? EventEndDate = null,
     decimal? QuarterDiscountPercent = null,
     // The ward's manual price for this one slot (monthly for STANDARD, daily for EVENT).
-    decimal? PriceOverride = null)
+    decimal? PriceOverride = null,
+    // The compass bearing of the slot's length side; null = lay it along its zone's street.
+    decimal? BearingDegrees = null)
 {
     /// <summary>What this slot is actually priced at: the zone's price unless the ward set its own.</summary>
     public ZonePricing Pricing =>

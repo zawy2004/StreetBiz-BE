@@ -200,7 +200,9 @@ GO
    The Nguyễn Văn Linh pilot corridor:
    NVL-01..10 walk a 15 m pitch starting at 50 Nguyễn Văn Linh (phường Hải
    Châu, formerly Nam Dương -- geocoded), matching the zone's own segment_from "Nút giao
-   Hoàng Diệu"; NVL-11..20 mirror them 38 m across to the far carriageway.
+   Hoàng Diệu"; NVL-11..20 face them on the south sidewalk. Every slot's centre is
+   2 m inside the kerb, measured on satellite imagery against the OSM centre lines
+   (db/StreetBiz_Upgrade_Demo_Slot_Positions.sql moves an older database the same way).
    Keeping the geometry means the street-strip diagram and its straightness
    check still work. The other three zones' 1-2 slots each anchor at a
    geocoded point on their own real street instead of a single made-up spot.
@@ -264,12 +266,12 @@ GO
 IF NOT EXISTS (SELECT 1 FROM StreetFeatures)
 BEGIN
     INSERT INTO StreetFeatures (zone_id, feature_type, label, latitude, longitude, blocks_business, note) VALUES
-        (1, 'TRANSFORMER', N'Trạm biến áp NVL-T1', 16.061005, 108.217960, 1, N'Hành lang an toàn lưới điện 3 m'),
-        (1, 'HYDRANT',     N'Trụ nước chữa cháy',  16.061145, 108.219360, 1, N'Không được che chắn'),
-        (1, 'TREE',        N'Cây xanh đô thị',     16.061075, 108.218660, 0, NULL),
-        (1, 'LIGHT_POLE',  N'Cột đèn chiếu sáng',  16.061105, 108.219010, 0, NULL),
-        (1, 'BUS_STOP',    N'Điểm dừng xe buýt',   16.061185, 108.219760, 1, N'Phạm vi 10 m mỗi bên'),
-        (1, 'PARKING',     N'Vạch đỗ xe máy',      16.061035, 108.218260, 0, NULL);
+        (1, 'TRANSFORMER', N'Trạm biến áp NVL-T1', 16.060929, 108.217960, 1, N'Hành lang an toàn lưới điện 3 m'),
+        (1, 'HYDRANT',     N'Trụ nước chữa cháy',  16.060983, 108.219360, 1, N'Không được che chắn'),
+        (1, 'TREE',        N'Cây xanh đô thị',     16.060956, 108.218660, 0, NULL),
+        (1, 'LIGHT_POLE',  N'Cột đèn chiếu sáng',  16.060969, 108.219010, 0, NULL),
+        (1, 'BUS_STOP',    N'Điểm dừng xe buýt',   16.060998, 108.219760, 1, N'Phạm vi 10 m mỗi bên'),
+        (1, 'PARKING',     N'Vạch đỗ xe máy',      16.060940, 108.218260, 0, NULL);
 END;
 GO
 
@@ -282,48 +284,48 @@ IF NOT EXISTS (SELECT 1 FROM SidewalkSlots)
 BEGIN
     SET IDENTITY_INSERT SidewalkSlots ON;
 
-    -- Near carriageway, NVL-01..10: 15 m pitch starting at 50 Nguyễn Văn Linh (geocoded).
+    -- North sidewalk, NVL-01..10: ~15 m pitch from 50 Nguyễn Văn Linh, clear of the two crossings.
     INSERT INTO SidewalkSlots
         (slot_id, slot_code, zone_id, latitude, longitude, width_meters, length_meters,
          slot_status, source, has_power, has_water, has_trash_bin, business_category)
     VALUES
-        ( 1, 'NVL-01', 1, 16.060935, 108.217760, 2.00, 3.00, 'ACTIVE', 'WARD_DEFINED', 1, 1, 1, 'FOOD_BEVERAGE'),
-        ( 2, 'NVL-02', 1, 16.060948, 108.217900, 2.00, 3.00, 'AVAILABLE', 'WARD_DEFINED', 1, 0, 1, 'FOOD_BEVERAGE'),
-        ( 3, 'NVL-03', 1, 16.060961, 108.218040, 2.00, 3.00, 'PENDING_APPLICATION', 'WARD_DEFINED', 0, 0, 1, 'RETAIL'),
-        ( 4, 'NVL-04', 1, 16.060974, 108.218180, 2.00, 3.00, 'AVAILABLE', 'WARD_DEFINED', 1, 1, 0, 'FOOD_BEVERAGE'),
-        ( 5, 'NVL-05', 1, 16.060987, 108.218320, 2.00, 3.00, 'ACTIVE', 'WARD_DEFINED', 0, 0, 0, 'GENERAL'),
-        ( 6, 'NVL-06', 1, 16.061000, 108.218460, 2.00, 3.00, 'AVAILABLE', 'WARD_DEFINED', 1, 0, 1, 'FOOD_BEVERAGE'),
-        ( 7, 'NVL-07', 1, 16.061013, 108.218600, 2.00, 3.00, 'AVAILABLE', 'WARD_DEFINED', 0, 1, 1, 'CRAFTS'),
-        ( 8, 'NVL-08', 1, 16.061026, 108.218740, 2.00, 3.00, 'ACTIVE', 'WARD_DEFINED', 1, 1, 1, 'FOOD_BEVERAGE'),
-        ( 9, 'NVL-09', 1, 16.061039, 108.218880, 2.00, 3.00, 'AVAILABLE', 'WARD_DEFINED', 0, 0, 0, 'SERVICES'),
-        (10, 'NVL-10', 1, 16.061052, 108.219020, 2.00, 3.00, 'AVAILABLE', 'WARD_DEFINED', 1, 0, 1, 'RETAIL'),
+        ( 1, 'NVL-01', 1, 16.060932, 108.217760, 2.00, 3.00, 'ACTIVE', 'WARD_DEFINED', 1, 1, 1, 'FOOD_BEVERAGE'),
+        ( 2, 'NVL-02', 1, 16.060937, 108.217900, 2.00, 3.00, 'AVAILABLE', 'WARD_DEFINED', 1, 0, 1, 'FOOD_BEVERAGE'),
+        ( 3, 'NVL-03', 1, 16.060943, 108.218040, 2.00, 3.00, 'PENDING_APPLICATION', 'WARD_DEFINED', 0, 0, 1, 'RETAIL'),
+        ( 4, 'NVL-04', 1, 16.060949, 108.218210, 2.00, 3.00, 'AVAILABLE', 'WARD_DEFINED', 1, 1, 0, 'FOOD_BEVERAGE'),
+        ( 5, 'NVL-05', 1, 16.060954, 108.218320, 2.00, 3.00, 'ACTIVE', 'WARD_DEFINED', 0, 0, 0, 'GENERAL'),
+        ( 6, 'NVL-06', 1, 16.060958, 108.218425, 2.00, 3.00, 'AVAILABLE', 'WARD_DEFINED', 1, 0, 1, 'FOOD_BEVERAGE'),
+        ( 7, 'NVL-07', 1, 16.060964, 108.218600, 2.00, 3.00, 'AVAILABLE', 'WARD_DEFINED', 0, 1, 1, 'CRAFTS'),
+        ( 8, 'NVL-08', 1, 16.060970, 108.218740, 2.00, 3.00, 'ACTIVE', 'WARD_DEFINED', 1, 1, 1, 'FOOD_BEVERAGE'),
+        ( 9, 'NVL-09', 1, 16.060975, 108.218880, 2.00, 3.00, 'AVAILABLE', 'WARD_DEFINED', 0, 0, 0, 'SERVICES'),
+        (10, 'NVL-10', 1, 16.060980, 108.219020, 2.00, 3.00, 'AVAILABLE', 'WARD_DEFINED', 1, 0, 1, 'RETAIL'),
 
-    -- Far carriageway, NVL-11..20: the same run mirrored 38 m across the road.
-        (11, 'NVL-11', 1, 16.061277, 108.217760, 2.00, 3.00, 'AVAILABLE', 'WARD_DEFINED', 1, 1, 1, 'FOOD_BEVERAGE'),
-        (12, 'NVL-12', 1, 16.061290, 108.217900, 2.00, 3.00, 'AVAILABLE', 'WARD_DEFINED', 0, 0, 1, 'FOOD_BEVERAGE'),
-        (13, 'NVL-13', 1, 16.061303, 108.218040, 2.00, 3.00, 'AVAILABLE', 'WARD_DEFINED', 1, 0, 0, 'RETAIL'),
-        (14, 'NVL-14', 1, 16.061316, 108.218180, 2.00, 3.00, 'AVAILABLE', 'WARD_DEFINED', 0, 1, 1, 'GENERAL'),
-        (15, 'NVL-15', 1, 16.061329, 108.218320, 2.00, 3.00, 'AVAILABLE', 'WARD_DEFINED', 1, 1, 1, 'FOOD_BEVERAGE'),
-        (16, 'NVL-16', 1, 16.061342, 108.218460, 2.00, 3.00, 'AVAILABLE', 'WARD_DEFINED', 0, 0, 0, 'SERVICES'),
-        (17, 'NVL-17', 1, 16.061355, 108.218600, 2.00, 3.00, 'AVAILABLE', 'WARD_DEFINED', 1, 0, 1, 'CRAFTS'),
-        (18, 'NVL-18', 1, 16.061368, 108.218740, 2.00, 3.00, 'AVAILABLE', 'WARD_DEFINED', 0, 1, 0, 'FOOD_BEVERAGE'),
-        (19, 'NVL-19', 1, 16.061381, 108.218880, 2.00, 3.00, 'AVAILABLE', 'WARD_DEFINED', 1, 1, 1, 'FOOD_BEVERAGE'),
-        (20, 'NVL-20', 1, 16.061394, 108.219020, 2.00, 3.00, 'AVAILABLE', 'WARD_DEFINED', 0, 0, 1, 'RETAIL'),
+    -- South sidewalk, NVL-11..20: the same run across the road, clear of the alley mouth.
+        (11, 'NVL-11', 1, 16.060688, 108.217760, 2.00, 3.00, 'AVAILABLE', 'WARD_DEFINED', 1, 1, 1, 'FOOD_BEVERAGE'),
+        (12, 'NVL-12', 1, 16.060696, 108.217900, 2.00, 3.00, 'AVAILABLE', 'WARD_DEFINED', 0, 0, 1, 'FOOD_BEVERAGE'),
+        (13, 'NVL-13', 1, 16.060704, 108.218040, 2.00, 3.00, 'AVAILABLE', 'WARD_DEFINED', 1, 0, 0, 'RETAIL'),
+        (14, 'NVL-14', 1, 16.060714, 108.218210, 2.00, 3.00, 'AVAILABLE', 'WARD_DEFINED', 0, 1, 1, 'GENERAL'),
+        (15, 'NVL-15', 1, 16.060722, 108.218358, 2.00, 3.00, 'AVAILABLE', 'WARD_DEFINED', 1, 1, 1, 'FOOD_BEVERAGE'),
+        (16, 'NVL-16', 1, 16.060726, 108.218425, 2.00, 3.00, 'AVAILABLE', 'WARD_DEFINED', 0, 0, 0, 'SERVICES'),
+        (17, 'NVL-17', 1, 16.060736, 108.218600, 2.00, 3.00, 'AVAILABLE', 'WARD_DEFINED', 1, 0, 1, 'CRAFTS'),
+        (18, 'NVL-18', 1, 16.060744, 108.218740, 2.00, 3.00, 'AVAILABLE', 'WARD_DEFINED', 0, 1, 0, 'FOOD_BEVERAGE'),
+        (19, 'NVL-19', 1, 16.060752, 108.218880, 2.00, 3.00, 'AVAILABLE', 'WARD_DEFINED', 1, 1, 1, 'FOOD_BEVERAGE'),
+        (20, 'NVL-20', 1, 16.060760, 108.219020, 2.00, 3.00, 'AVAILABLE', 'WARD_DEFINED', 0, 0, 1, 'RETAIL'),
 
     -- A few slots in the other zones so every ward map has content, each anchored at a
     -- geocoded point on its own real street (Hoàng Diệu, Điện Biên Phủ, Ngô Quyền).
-        (21, 'HD-01',  2, 16.059417, 108.217017, 2.00, 2.50, 'AVAILABLE', 'WARD_DEFINED', 0, 0, 1, 'FOOD_BEVERAGE'),
-        (22, 'HD-02',  2, 16.059537, 108.217157, 2.00, 2.50, 'AVAILABLE', 'WARD_DEFINED', 1, 0, 1, 'RETAIL'),
-        (23, 'HD-03',  2, 16.059657, 108.217297, 2.00, 2.50, 'AVAILABLE', 'WARD_DEFINED', 0, 1, 0, 'GENERAL'),
-        (24, 'DBP-01', 3, 16.066229, 108.205945, 2.00, 3.00, 'AVAILABLE', 'WARD_DEFINED', 1, 1, 1, 'FOOD_BEVERAGE'),
-        (25, 'DBP-02', 3, 16.066369, 108.206105, 2.00, 3.00, 'AVAILABLE', 'WARD_DEFINED', 0, 0, 1, 'CRAFTS'),
-        (26, 'NQ-01',  4, 16.080457, 108.234506, 2.00, 3.00, 'AVAILABLE', 'WARD_DEFINED', 1, 0, 1, 'FOOD_BEVERAGE'),
-        (27, 'NQ-02',  4, 16.080597, 108.234666, 2.00, 3.00, 'AVAILABLE', 'WARD_DEFINED', 0, 1, 1, 'RETAIL'),
+        (21, 'HD-01',  2, 16.059416, 108.217042, 2.00, 2.50, 'AVAILABLE', 'WARD_DEFINED', 0, 0, 1, 'FOOD_BEVERAGE'),
+        (22, 'HD-02',  2, 16.059519, 108.217144, 2.00, 2.50, 'AVAILABLE', 'WARD_DEFINED', 1, 0, 1, 'RETAIL'),
+        (23, 'HD-03',  2, 16.059622, 108.217031, 2.00, 2.50, 'AVAILABLE', 'WARD_DEFINED', 0, 1, 0, 'GENERAL'),
+        (24, 'DBP-01', 3, 16.066197, 108.205936, 2.00, 3.00, 'AVAILABLE', 'WARD_DEFINED', 1, 1, 1, 'FOOD_BEVERAGE'),
+        (25, 'DBP-02', 3, 16.065990, 108.206103, 2.00, 3.00, 'AVAILABLE', 'WARD_DEFINED', 0, 0, 1, 'CRAFTS'),
+        (26, 'NQ-01',  4, 16.080571, 108.234386, 2.00, 3.00, 'AVAILABLE', 'WARD_DEFINED', 1, 0, 1, 'FOOD_BEVERAGE'),
+        (27, 'NQ-02',  4, 16.080512, 108.234872, 2.00, 3.00, 'AVAILABLE', 'WARD_DEFINED', 0, 1, 1, 'RETAIL'),
 
     -- The event market (zone 5) along Bạch Đằng, between Cầu Rồng and Cầu Sông Hàn.
-        (31, 'BD-EV-01', 5, 16.061300, 108.226900, 2.00, 2.00, 'AVAILABLE', 'WARD_DEFINED', 1, 0, 1, 'FOOD_BEVERAGE'),
-        (32, 'BD-EV-02', 5, 16.061430, 108.226920, 2.00, 2.00, 'AVAILABLE', 'WARD_DEFINED', 1, 0, 1, 'FOOD_BEVERAGE'),
-        (33, 'BD-EV-03', 5, 16.061560, 108.226940, 2.00, 2.00, 'AVAILABLE', 'WARD_DEFINED', 0, 0, 1, 'CRAFTS');
+        (31, 'BD-EV-01', 5, 16.062222, 108.224226, 2.00, 2.00, 'AVAILABLE', 'WARD_DEFINED', 1, 0, 1, 'FOOD_BEVERAGE'),
+        (32, 'BD-EV-02', 5, 16.062096, 108.224291, 2.00, 2.00, 'AVAILABLE', 'WARD_DEFINED', 1, 0, 1, 'FOOD_BEVERAGE'),
+        (33, 'BD-EV-03', 5, 16.061970, 108.224226, 2.00, 2.00, 'AVAILABLE', 'WARD_DEFINED', 0, 0, 1, 'CRAFTS');
 
     SET IDENTITY_INSERT SidewalkSlots OFF;
 END;
@@ -890,18 +892,18 @@ BEGIN
          slot_status, source, proposed_by_registration_id, proposal_review_status,
          proposal_photo_url, proposal_reviewed_by, proposal_review_reason, created_at)
     VALUES
-        -- Latitude sits on the near-carriageway sidewalk (continuing the NVL-01..10 run past
-        -- NVL-10), not the gap between 16.061052 and 16.061277 where the road itself runs.
-        (28, 'VP-1-20260101000000001', 1, 16.061091, 108.219460, 2.00, 2.50,
+        -- On the north sidewalk, 2 m inside the kerb like NVL-01..10 (29 just west of the
+        -- Phan Châu Trinh junction; 30 against the transformer it was rejected for).
+        (28, 'VP-1-20260101000000001', 1, 16.060997, 108.219460, 2.00, 2.50,
             'AVAILABLE', 'VENDOR_PROPOSED', 1, 'PENDING',
             '/api/uploads/evidence/5/0000000000000000000000000000ab01.jpg', NULL, NULL,
             DATEADD(DAY, -1, SYSUTCDATETIME())),
-        (29, 'VP-1-20260101000000002', 1, 16.061215, 108.219610, 2.00, 2.50,
+        (29, 'VP-1-20260101000000002', 1, 16.060989, 108.219243, 2.00, 2.50,
             'AVAILABLE', 'VENDOR_PROPOSED', 10, 'APPROVED',
             '/api/uploads/evidence/6/0000000000000000000000000000ab04.jpg', 2,
             N'Vị trí phù hợp quy hoạch, đủ 1,5 m lối đi bộ.',
             DATEADD(DAY, -9, SYSUTCDATETIME())),
-        (30, 'VP-1-20260101000000003', 1, 16.061175, 108.218010, 2.00, 2.50,
+        (30, 'VP-1-20260101000000003', 1, 16.060942, 108.218010, 2.00, 2.50,
             'AVAILABLE', 'VENDOR_PROPOSED', 10, 'REJECTED',
             '/api/uploads/evidence/6/0000000000000000000000000000ab04.jpg', 2,
             N'Vị trí nằm trong hành lang an toàn của trạm biến áp.',
