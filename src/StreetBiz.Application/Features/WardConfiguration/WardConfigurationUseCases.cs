@@ -288,6 +288,10 @@ internal static class SlotRules
     public static IRuleBuilderOptions<T, decimal> Dimension<T>(this IRuleBuilder<T, decimal> rule) =>
         rule.GreaterThan(0m).LessThanOrEqualTo(MaxDimension).WithMessage("Kích thước ô phải lớn hơn 0 và không quá 999,99 m.");
 
+    /// <summary>A slot is a rectangle, so a bearing and the same bearing + 180 are one orientation.</summary>
+    public static IRuleBuilderOptions<T, decimal?> Bearing<T>(this IRuleBuilder<T, decimal?> rule) =>
+        rule.Must(b => b is null or >= 0m and < 180m).WithMessage("Hướng ô phải từ 0 đến dưới 180 độ.");
+
     public static IRuleBuilderOptions<T, string?> Category<T>(this IRuleBuilder<T, string?> rule) =>
         rule.Must(c => c is null || Categories.Contains(c)).WithMessage("Ngành hàng không hợp lệ.");
 }
@@ -335,6 +339,7 @@ public sealed class CreateWardSlotCommandValidator : AbstractValidator<CreateWar
         RuleFor(x => x.Request.WidthMeters).Dimension();
         RuleFor(x => x.Request.LengthMeters).Dimension();
         RuleFor(x => x.Request.BusinessCategory).Category();
+        RuleFor(x => x.Request.BearingDegrees).Bearing();
         RuleFor(x => x.Request.WarningReason).MaximumLength(500);
         RuleFor(x => x.Request.WarningReason).NotEmpty().When(x => x.Request.AcknowledgeWarnings)
             .WithMessage("Nhập lý do khi xác nhận bỏ qua cảnh báo.");
@@ -362,6 +367,7 @@ public sealed class UpdateWardSlotCommandValidator : AbstractValidator<UpdateWar
         RuleFor(x => x.Request.WidthMeters).Dimension();
         RuleFor(x => x.Request.LengthMeters).Dimension();
         RuleFor(x => x.Request.BusinessCategory).Category();
+        RuleFor(x => x.Request.BearingDegrees).Bearing();
         RuleFor(x => x.Request.VersionToken).NotEmpty();
         RuleFor(x => x.Request.WarningReason).MaximumLength(500);
         RuleFor(x => x.Request.WarningReason).NotEmpty().When(x => x.Request.AcknowledgeWarnings)

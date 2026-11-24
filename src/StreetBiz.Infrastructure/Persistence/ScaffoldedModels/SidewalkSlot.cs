@@ -22,6 +22,8 @@ public partial class SidewalkSlot
 
     public decimal? length_meters { get; set; }
 
+    public decimal? bearing_degrees { get; set; }
+
     public string slot_status { get; set; } = null!;
 
     public string source { get; set; } = null!;

@@ -474,6 +474,8 @@ CREATE TABLE SidewalkSlots (
     longitude                     DECIMAL(9,6)          NOT NULL,
     width_meters                  DECIMAL(5,2)          NULL,
     length_meters                 DECIMAL(5,2)          NULL,
+    -- Compass bearing of the length side (along the street), [0, 180). NULL = follow the zone's street.
+    bearing_degrees               DECIMAL(5,2)          NULL,
     slot_status                   NVARCHAR(20)          NOT NULL DEFAULT 'AVAILABLE',
     source                        NVARCHAR(20)          NOT NULL DEFAULT 'WARD_DEFINED',
     proposed_by_registration_id   BIGINT                NULL,  -- SIDE-11
@@ -494,6 +496,8 @@ CREATE TABLE SidewalkSlots (
     price_override                DECIMAL(18,0)         NULL,
     CONSTRAINT CK_SidewalkSlots_PriceOverride
         CHECK (price_override IS NULL OR price_override > 0),
+    CONSTRAINT CK_SidewalkSlots_Bearing
+        CHECK (bearing_degrees IS NULL OR (bearing_degrees >= 0 AND bearing_degrees < 180)),
     CONSTRAINT CK_SidewalkSlots_Status
         CHECK (slot_status IN ('AVAILABLE','PENDING_APPLICATION','ACTIVE','SUSPENDED')),
     CONSTRAINT CK_SidewalkSlots_Source

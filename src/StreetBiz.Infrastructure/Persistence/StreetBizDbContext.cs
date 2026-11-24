@@ -1224,6 +1224,7 @@ public partial class StreetBizDbContext : DbContext
                 .HasMaxLength(20)
                 .HasDefaultValue("WARD_DEFINED");
             entity.Property(e => e.width_meters).HasColumnType("decimal(5, 2)");
+            entity.Property(e => e.bearing_degrees).HasColumnType("decimal(5, 2)");
 
             entity.HasOne(d => d.proposed_by_registration).WithMany(p => p.SidewalkSlots)
                 .HasForeignKey(d => d.proposed_by_registration_id)
