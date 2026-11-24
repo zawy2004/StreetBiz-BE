@@ -33,7 +33,12 @@ public sealed record SidewalkSlotDto(
     decimal MonthlyPrice,
     decimal? QuarterDiscountPercent,
     /// <summary>True when the ward priced this one slot by hand rather than at the zone's price.</summary>
-    bool PriceOverridden = false);
+    bool PriceOverridden = false,
+    /// <summary>
+    /// Compass bearing (0 = north, clockwise, [0, 180)) of the slot's length side, the side along
+    /// the street; null when the ward has not set one (maps then follow the zone's street).
+    /// </summary>
+    decimal? BearingDegrees = null);
 
 /// <summary>Maps domain records to DTOs for the Sidewalk Slot API.</summary>
 public static class SlotMapper
@@ -46,7 +51,7 @@ public static class SlotMapper
         r.ImageUrls, r.HasPower, r.HasWater, r.HasTrashBin, r.BusinessCategory, r.TenantName,
         r.HoldExpiresAt is { } holdExpiresAt ? DateTime.SpecifyKind(holdExpiresAt, DateTimeKind.Utc) : null,
         r.PriceDisplayUnit, r.Pricing.BillsByMonth ? r.Pricing.PricePerMonth : r.PricePerMonth, r.RentalMode, r.EventEndDate,
-        r.Pricing.MonthlyPrice, r.QuarterDiscountPercent, r.IsPriceOverridden);
+        r.Pricing.MonthlyPrice, r.QuarterDiscountPercent, r.IsPriceOverridden, r.BearingDegrees);
 }
 
 public sealed record SlotProposalDto(

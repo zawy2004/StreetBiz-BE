@@ -161,7 +161,12 @@ public sealed record WardSlotDto(
     bool CanHardDelete,
     bool CanEditGeometry,
     string VersionToken,
-    IReadOnlyList<string>? ImageUrls = null);
+    IReadOnlyList<string>? ImageUrls = null,
+    /// <summary>
+    /// Compass bearing (0 = north, clockwise, [0, 180)) of the slot's length side, the side that runs
+    /// along the street. null = not set: maps lay the slot along the street fitted through its zone.
+    /// </summary>
+    decimal? BearingDegrees = null);
 
 public sealed record WardStreetFeatureDto(
     int FeatureId,
@@ -203,7 +208,9 @@ public sealed record CreateSlotRequest(
     string? BusinessCategory,
     bool AcknowledgeWarnings,
     string? WarningReason,
-    IReadOnlyList<string>? ImageUrls = null);
+    IReadOnlyList<string>? ImageUrls = null,
+    /// <summary>See <see cref="WardSlotDto.BearingDegrees"/>; null = follow the street.</summary>
+    decimal? BearingDegrees = null);
 
 public sealed record UpdateSlotRequest(
     int ZoneId,
@@ -220,7 +227,12 @@ public sealed record UpdateSlotRequest(
     bool AcknowledgeWarnings,
     string? WarningReason,
     /// <summary>null keeps the current photos; a list replaces them all (first = cover, max 6).</summary>
-    IReadOnlyList<string>? ImageUrls = null);
+    IReadOnlyList<string>? ImageUrls = null,
+    /// <summary>
+    /// null keeps the current bearing (a client that does not know about bearings never clears one);
+    /// a value sets it. See <see cref="WardSlotDto.BearingDegrees"/>.
+    /// </summary>
+    decimal? BearingDegrees = null);
 
 public sealed record SetSlotStatusRequest(string Status, string Reason, string VersionToken);
 

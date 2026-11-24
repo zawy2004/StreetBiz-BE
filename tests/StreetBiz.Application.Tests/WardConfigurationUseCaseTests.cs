@@ -56,6 +56,22 @@ public sealed class WardConfigurationUseCaseTests
         service.Verify(x => x.CreateBatchAsync(Actor, batch, It.IsAny<CancellationToken>()));
     }
 
+    [Theory]
+    [InlineData(null, true)]
+    [InlineData(0.0, true)]
+    [InlineData(179.99, true)]
+    [InlineData(180.0, false)]
+    [InlineData(-1.0, false)]
+    public void A_slot_bearing_is_unset_or_within_half_a_circle(double? bearing, bool valid)
+    {
+        var value = bearing is null ? (decimal?)null : (decimal)bearing.Value;
+        var create = new CreateSlotRequest(1, null, 16.06m, 108.22m, 2, 2, false, false, false, null, false, null, BearingDegrees: value);
+        var edit = new UpdateSlotRequest(1, "A-1", 16, 108, 2, 2, false, false, false, null, "t", false, null, BearingDegrees: value);
+
+        Assert.Equal(valid, new CreateWardSlotCommandValidator().Validate(new CreateWardSlotCommand(create)).IsValid);
+        Assert.Equal(valid, new UpdateWardSlotCommandValidator().Validate(new UpdateWardSlotCommand(1, edit)).IsValid);
+    }
+
     [Fact]
     public void Slot_validators_bound_coordinates_dimensions_category_and_require_a_reason_for_acknowledged_warnings()
     {

@@ -679,6 +679,82 @@ public sealed class WardConfigurationServiceTests
     }
 
     [Fact]
+    public async Task A_new_slot_keeps_its_bearing_and_one_without_follows_the_street()
+    {
+        using var f = await Fixture.Create();
+        var turned = await f.Service().CreateSlotAsync(f.Actor, Slot(16.050000m, 108.220000m) with { BearingDegrees = 35.5m }, default);
+        var plain = await f.Service().CreateSlotAsync(f.Actor, Slot(16.051000m, 108.221000m), default);
+
+        Assert.Equal(35.5m, turned.Slot.BearingDegrees);
+        Assert.Null(plain.Slot.BearingDegrees);
+    }
+
+    [Fact]
+    public async Task Turning_a_free_slot_saves_the_bearing_and_changes_its_token()
+    {
+        using var f = await Fixture.Create();
+        var slot = (await f.Service().GetSlotGridAsync(f.Actor, null, default)).Slots.Single(s => s.SlotId == 100);
+
+        var turned = await f.Service().UpdateSlotAsync(f.Actor, 100, Move(slot, slot.Latitude) with { BearingDegrees = 90m }, default);
+
+        Assert.Equal(90m, turned.Slot.BearingDegrees);
+        Assert.NotEqual(slot.VersionToken, turned.Slot.VersionToken);
+        Assert.Equal(1, await f.AuditCount("SLOT_UPDATED"));
+    }
+
+    [Fact]
+    public async Task An_update_without_a_bearing_keeps_the_one_already_set()
+    {
+        using var f = await Fixture.Create();
+        var slot = (await f.Service().GetSlotGridAsync(f.Actor, null, default)).Slots.Single(s => s.SlotId == 100);
+        var turned = (await f.Service().UpdateSlotAsync(f.Actor, 100, Move(slot, slot.Latitude) with { BearingDegrees = 45m }, default)).Slot;
+
+        // An older client (the mobile app) sends no bearing: it must not undo the turn.
+        var renamed = await f.Service().UpdateSlotAsync(f.Actor, 100, Move(turned, turned.Latitude) with { HasPower = !turned.HasPower }, default);
+
+        Assert.Equal(45m, renamed.Slot.BearingDegrees);
+    }
+
+    [Fact]
+    public async Task Turning_a_slot_that_is_not_free_is_refused()
+    {
+        using var f = await Fixture.Create();
+        var slot = (await f.Service().GetSlotGridAsync(f.Actor, null, default)).Slots.Single(s => s.SlotId == 101);
+        var ex = await Assert.ThrowsAsync<WardException>(() =>
+            f.Service().UpdateSlotAsync(f.Actor, 101, Move(slot, slot.Latitude) with { BearingDegrees = 30m }, default));
+        Assert.Equal("slot_in_use", ex.Code);
+    }
+
+    [Fact]
+    public async Task A_batch_lays_its_slots_along_the_segment_it_was_drawn_on()
+    {
+        using var f = await Fixture.Create();
+        // Due east: every slot's length side runs at 90 degrees.
+        var created = await f.Service().CreateBatchAsync(f.Actor, new BatchCreateRequest(1,
+            [new(16.030000m, 108.230000m), new(16.030000m, 108.230030m)], 1.5m, 2m, false, false, false, null, false, null), default);
+
+        Assert.All(created, s => Assert.Equal(90m, s.BearingDegrees));
+    }
+
+    [Theory]
+    [InlineData(0.0, 0.0)]
+    [InlineData(180.0, 0.0)]
+    [InlineData(270.0, 90.0)]
+    [InlineData(-30.0, 150.0)]
+    [InlineData(359.999, 0.0)]
+    public void A_bearing_is_folded_into_half_a_circle(double raw, double folded) =>
+        Assert.Equal((decimal)folded, SlotBearing.Normalize((decimal)raw));
+
+    [Fact]
+    public void A_line_runs_north_at_0_and_a_single_point_has_no_bearing()
+    {
+        Assert.Equal(0m, SlotBearing.OfLine([new(16.03m, 108.23m), new(16.04m, 108.23m)]));
+        Assert.Equal(0m, SlotBearing.OfLine([new(16.04m, 108.23m), new(16.03m, 108.23m)]));
+        Assert.Null(SlotBearing.OfLine([new(16.03m, 108.23m)]));
+        Assert.Null(SlotBearing.OfLine([new(16.03m, 108.23m), new(16.03m, 108.23m)]));
+    }
+
+    [Fact]
     public async Task Batch_preview_spaces_slots_along_the_segment_without_writing()
     {
         using var f = await Fixture.Create();
