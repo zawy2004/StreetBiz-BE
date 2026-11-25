@@ -400,7 +400,32 @@ public sealed class CommerceUseCaseTests
 
         await new ClearCartCommandHandler(CustomerContext(), repository.Object).Handle(new ClearCartCommand(), CancellationToken.None);
 
-        repository.Verify(x => x.ClearCartAsync(7, It.IsAny<CancellationToken>()), Times.Once);
+        repository.Verify(x => x.ClearCartAsync(7, null, It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task Clearing_one_stalls_cart_names_that_stall()
+    {
+        var repository = new Mock<ICommerceRepository>();
+
+        await new ClearCartCommandHandler(CustomerContext(), repository.Object).Handle(new ClearCartCommand(42), CancellationToken.None);
+
+        repository.Verify(x => x.ClearCartAsync(7, 42, It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task Listing_the_carts_returns_the_callers_own_drafts_one_per_stall()
+    {
+        var repository = new Mock<ICommerceRepository>();
+        repository.Setup(x => x.GetActiveCartsAsync(7, It.IsAny<CancellationToken>())).ReturnsAsync(new[]
+        {
+            new CommerceCartRow(1, 10, "Stall A", "OPEN", Array.Empty<CommerceCartItemRow>(), 0, null),
+            new CommerceCartRow(2, 20, "Stall B", "OPEN", Array.Empty<CommerceCartItemRow>(), 0, null),
+        });
+
+        var carts = await new GetCartsQueryHandler(CustomerContext(), repository.Object).Handle(new GetCartsQuery(), CancellationToken.None);
+
+        carts.Select(c => c.StorefrontId).Should().Equal(10, 20);
     }
 
     [Fact]
