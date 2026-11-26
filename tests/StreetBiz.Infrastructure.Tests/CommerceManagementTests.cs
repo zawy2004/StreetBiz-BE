@@ -376,6 +376,99 @@ public sealed class CommerceManagementTests
     }
 
     [Fact]
+    public async Task Each_stall_keeps_its_own_draft_cart_side_by_side()
+    {
+        using var f = await Fixture.Create();
+        await AddSecondStall(f);
+
+        var first = await f.Repository.AddCartItemAsync(2, 1, 2, null, default);
+        var second = await f.Repository.AddCartItemAsync(2, 2, 1, null, default);
+
+        // Going to another stall adds a cart, it does not replace the first one.
+        Assert.Equal(CartMutationOutcome.Updated, first.Outcome);
+        Assert.Equal(CartMutationOutcome.Updated, second.Outcome);
+        Assert.Equal(2, await f.Db.ShoppingCarts.CountAsync(c => c.cart_status == "ACTIVE"));
+        Assert.Equal(0, await f.Db.ShoppingCarts.CountAsync(c => c.cart_status == "ABANDONED"));
+
+        var carts = await f.Repository.GetActiveCartsAsync(2, default);
+        Assert.Equal(new long[] { 2, 1 }, carts.Select(c => c.StorefrontId).ToArray()); // newest first
+        Assert.Equal(2, carts.Single(c => c.StorefrontId == 1).Items.Single().Quantity);
+
+        // Coming back to the first stall adds to the cart that is still there.
+        var back = await f.Repository.AddCartItemAsync(2, 1, 1, null, default);
+        Assert.Equal(3, back.Cart!.Items.Single().Quantity);
+        Assert.Equal(2, (await f.Repository.GetActiveCartsAsync(2, default)).Count);
+    }
+
+    [Fact]
+    public async Task The_cart_list_leaves_out_carts_with_no_dishes()
+    {
+        using var f = await Fixture.Create();
+        f.Db.ShoppingCarts.Add(new ShoppingCart { customer_user_id = 2, storefront_id = 1, cart_status = "ACTIVE", created_at = DateTime.UtcNow });
+        await f.Db.SaveChangesAsync();
+        f.Db.ChangeTracker.Clear();
+
+        Assert.Empty(await f.Repository.GetActiveCartsAsync(2, default));
+    }
+
+    [Fact]
+    public async Task An_unpaid_order_freezes_only_the_cart_of_its_own_stall()
+    {
+        using var f = await Fixture.Create();
+        await AddSecondStall(f);
+        var cartA = await AddCart(f);
+        var cartB = (await f.Repository.AddCartItemAsync(2, 2, 1, null, default)).Cart!.CartId;
+        var orderA = (await f.Repository.CheckoutAsync(2, cartA, "MOMO", "freeze-a", default)).Order!;
+        f.Db.ChangeTracker.Clear();
+
+        var carts = await f.Repository.GetActiveCartsAsync(2, default);
+        Assert.Equal(orderA.OrderId, carts.Single(c => c.StorefrontId == 1).PendingOrderId);
+        Assert.Null(carts.Single(c => c.StorefrontId == 2).PendingOrderId);
+
+        // Stall A is frozen; stall B is still a draft that can be edited.
+        Assert.Equal(CartMutationOutcome.CheckoutPending, (await f.Repository.AddCartItemAsync(2, 1, 1, null, default)).Outcome);
+        Assert.Equal(CartMutationOutcome.Updated, (await f.Repository.AddCartItemAsync(2, 2, 1, null, default)).Outcome);
+        Assert.Equal(CartMutationOutcome.Updated, (await f.Repository.UpdateCartItemAsync(2, 2, 5, null, default)).Outcome);
+        Assert.Equal(CartMutationOutcome.Updated, (await f.Repository.RemoveCartItemAsync(2, 2, default)).Outcome);
+        Assert.Equal("ABANDONED", (await f.Db.ShoppingCarts.AsNoTracking().SingleAsync(c => c.cart_id == cartB)).cart_status);
+    }
+
+    [Fact]
+    public async Task Another_stalls_cart_can_be_checked_out_while_one_is_unpaid()
+    {
+        using var f = await Fixture.Create();
+        await AddSecondStall(f);
+        var cartA = await AddCart(f);
+        var cartB = (await f.Repository.AddCartItemAsync(2, 2, 1, null, default)).Cart!.CartId;
+        await f.Repository.CheckoutAsync(2, cartA, "MOMO", "two-a", default);
+
+        var other = await f.Repository.CheckoutAsync(2, cartB, "MOMO", "two-b", default);
+        // A new key for the stall that is already waiting is still refused (no double billing).
+        var again = await f.Repository.CheckoutAsync(2, cartA, "MOMO", "two-a-again", default);
+
+        Assert.Equal(OrderMutationOutcome.Updated, other.Outcome);
+        Assert.Equal(2, other.Order!.StorefrontId);
+        Assert.Equal(OrderMutationOutcome.PendingCheckout, again.Outcome);
+    }
+
+    [Fact]
+    public async Task Clearing_a_stall_drops_only_its_cart()
+    {
+        using var f = await Fixture.Create();
+        await AddSecondStall(f);
+        await f.Repository.AddCartItemAsync(2, 1, 1, null, default);
+        await f.Repository.AddCartItemAsync(2, 2, 1, null, default);
+
+        await f.Repository.ClearCartAsync(2, 1, default);
+
+        var left = await f.Repository.GetActiveCartsAsync(2, default);
+        Assert.Equal(2, left.Single().StorefrontId);
+
+        await f.Repository.ClearCartAsync(2, null, default);
+        Assert.Empty(await f.Repository.GetActiveCartsAsync(2, default));
+    }
+
+    [Fact]
     public async Task Adding_past_99_of_one_item_reports_the_limit_not_a_conflict()
     {
         using var f = await Fixture.Create();
@@ -1011,6 +1104,19 @@ public sealed class CommerceManagementTests
         await f.Db.SaveChangesAsync();
         f.Db.ChangeTracker.Clear();
         return cart.cart_id;
+    }
+
+    /// <summary>A second open stall (own registration, slot, contract and dish) of the same vendor.</summary>
+    private static async Task AddSecondStall(Fixture f)
+    {
+        f.Db.BusinessRegistrations.Add(new BusinessRegistration { registration_id = 2, vendor_id = 1, ward_unit_id = 1, vendor_type = "ITINERANT", display_name = "Vendor 2", declared_address = "34 Lê Duẩn, Hải Châu, Đà Nẵng", registration_status = "APPROVED" });
+        f.Db.SidewalkSlots.Add(new SidewalkSlot { slot_id = 2, zone_id = 1, slot_code = "SLOT-2", source = "WARD_DEFINED", slot_status = "ACTIVE" });
+        f.Db.RentalApplications.Add(new RentalApplication { application_id = 2, registration_id = 2, slot_id = 2, application_method = "MANUAL_SELECTED", application_status = "APPROVED" });
+        f.Db.RentalContracts.Add(new RentalContract { contract_id = 2, application_id = 2, slot_id = 2, vendor_id = 1, start_date = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(-1)), end_date = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(30)), contract_status = "ACTIVE" });
+        f.Db.Storefronts.Add(new Storefront { storefront_id = 2, registration_id = 2, contract_id = 2, storefront_name = "Store 2", availability_status = "OPEN" });
+        f.Db.MenuItems.Add(new MenuItem { menu_item_id = 2, storefront_id = 2, category_id = 1, item_name = "Meal 2", unit_price = 30000, availability_status = "AVAILABLE" });
+        await f.Db.SaveChangesAsync();
+        f.Db.ChangeTracker.Clear();
     }
 
     private static Task<PaymentCallbackMutationResult> ApplyCallback(
