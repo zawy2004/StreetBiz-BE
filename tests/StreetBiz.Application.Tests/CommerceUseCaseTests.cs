@@ -442,6 +442,181 @@ public sealed class CommerceUseCaseTests
         new UpdateSellerOrderStatusCommandValidator().Validate(new UpdateSellerOrderStatusCommand(15, target, expected))
             .IsValid.Should().Be(valid);
 
+    // ---------------- returning from the payment page (SyncOrderPayment) ----------------
+
+    private static CommerceOrderRow Pending() => Order(OrderStatuses.PendingPayment) with
+    {
+        PaymentProvider = PaymentProviders.Momo,
+        PaymentProviderReference = "momo-ref-1",
+        PaymentIdempotencyKey = "key-1",
+        PaymentStatus = "PENDING",
+    };
+
+    [Theory]
+    [InlineData(OrderStatuses.Placed, "momo-ref-1")]
+    [InlineData(OrderStatuses.PendingPayment, null)]
+    [InlineData(OrderStatuses.PendingPayment, "  ")]
+    public async Task Sync_does_not_ask_the_provider_about_a_settled_order_or_one_without_a_reference(string status, string? reference)
+    {
+        var repository = new Mock<ICommerceRepository>();
+        repository.Setup(x => x.GetCustomerOrderAsync(7, 15, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Pending() with { OrderStatus = status, PaymentProviderReference = reference });
+        var gateway = new Mock<IPaymentGateway>(MockBehavior.Strict);
+
+        var dto = await new SyncOrderPaymentCommandHandler(CustomerContext(), repository.Object, gateway.Object)
+            .Handle(new SyncOrderPaymentCommand(15), default);
+
+        dto.OrderStatus.Should().Be(status);
+        repository.Verify(x => x.ApplyPaymentCallbackAsync(It.IsAny<PaymentCallbackData>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task Sync_leaves_the_order_alone_while_the_provider_has_no_answer_yet()
+    {
+        var repository = new Mock<ICommerceRepository>();
+        repository.Setup(x => x.GetCustomerOrderAsync(7, 15, It.IsAny<CancellationToken>())).ReturnsAsync(Pending());
+        var gateway = new Mock<IPaymentGateway>();
+        gateway.Setup(x => x.QueryPaymentAsync(PaymentProviders.Momo, "momo-ref-1", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PaymentGatewayCallback("momo-ref-1", null, null, null, true));
+
+        var dto = await new SyncOrderPaymentCommandHandler(CustomerContext(), repository.Object, gateway.Object)
+            .Handle(new SyncOrderPaymentCommand(15), default);
+
+        dto.OrderStatus.Should().Be(OrderStatuses.PendingPayment);
+        repository.Verify(x => x.ApplyPaymentCallbackAsync(It.IsAny<PaymentCallbackData>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task Sync_applies_the_provider_answer_like_a_verified_callback_and_returns_the_fresh_order()
+    {
+        var repository = new Mock<ICommerceRepository>();
+        repository.SetupSequence(x => x.GetCustomerOrderAsync(7, 15, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Pending())
+            .ReturnsAsync(Order(OrderStatuses.Placed));
+        PaymentCallbackData? applied = null;
+        repository.Setup(x => x.ApplyPaymentCallbackAsync(It.IsAny<PaymentCallbackData>(), It.IsAny<CancellationToken>()))
+            .Callback<PaymentCallbackData, CancellationToken>((data, _) => applied = data)
+            .ReturnsAsync(default(PaymentCallbackMutationResult)!);
+        var gateway = new Mock<IPaymentGateway>();
+        gateway.Setup(x => x.QueryPaymentAsync(PaymentProviders.Momo, "momo-ref-1", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PaymentGatewayCallback(null, null, 50_000, "SUCCESS", true, null, "evt-9"));
+
+        var dto = await new SyncOrderPaymentCommandHandler(CustomerContext(), repository.Object, gateway.Object)
+            .Handle(new SyncOrderPaymentCommand(15), default);
+
+        dto.OrderStatus.Should().Be(OrderStatuses.Placed);
+        applied.Should().NotBeNull();
+        applied!.Provider.Should().Be(PaymentProviders.Momo);
+        // The provider did not echo its reference: the order's own is used, and the raw body defaults to "{}".
+        applied.ProviderReference.Should().Be("momo-ref-1");
+        applied.IdempotencyKey.Should().Be("key-1");
+        applied.Amount.Should().Be(50_000);
+        applied.Status.Should().Be("SUCCESS");
+        applied.RawPayload.Should().Be("{}");
+        applied.ProviderEventId.Should().Be("evt-9");
+    }
+
+    [Fact]
+    public async Task Sync_falls_back_to_the_order_it_read_when_the_reread_finds_nothing()
+    {
+        var repository = new Mock<ICommerceRepository>();
+        repository.SetupSequence(x => x.GetCustomerOrderAsync(7, 15, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Pending())
+            .ReturnsAsync((CommerceOrderRow?)null);
+        var gateway = new Mock<IPaymentGateway>();
+        gateway.Setup(x => x.QueryPaymentAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PaymentGatewayCallback("momo-ref-1", null, 50_000, "FAILED", true));
+
+        var dto = await new SyncOrderPaymentCommandHandler(CustomerContext(), repository.Object, gateway.Object)
+            .Handle(new SyncOrderPaymentCommand(15), default);
+
+        dto.OrderId.Should().Be(15);
+    }
+
+    [Fact]
+    public async Task Sync_of_an_order_that_is_not_the_buyer_own_is_not_found()
+    {
+        var repository = new Mock<ICommerceRepository>();
+        var action = () => new SyncOrderPaymentCommandHandler(CustomerContext(), repository.Object, Mock.Of<IPaymentGateway>())
+            .Handle(new SyncOrderPaymentCommand(99), default);
+
+        await action.Should().ThrowAsync<NotFoundException>();
+    }
+
+    // ---------------- read-only order and cart queries ----------------
+
+    [Theory]
+    [InlineData(null, null)]
+    [InlineData("  ", null)]
+    [InlineData(" placed ", "PLACED")]
+    public async Task Seller_order_list_normalises_the_status_filter(string? status, string? expected)
+    {
+        var repository = new Mock<ICommerceRepository>();
+        repository.Setup(x => x.ListSellerOrdersAsync(4, expected, It.IsAny<CancellationToken>()))
+            .ReturnsAsync([Order(), Order(OrderStatuses.Completed)]);
+
+        var list = await new ListSellerOrdersQueryHandler(VendorContext(), repository.Object)
+            .Handle(new ListSellerOrdersQuery(status), default);
+
+        list.Should().HaveCount(2);
+        repository.VerifyAll();
+    }
+
+    [Fact]
+    public async Task A_seller_sees_only_their_own_order()
+    {
+        var repository = new Mock<ICommerceRepository>();
+        repository.Setup(x => x.GetSellerOrderAsync(4, 15, It.IsAny<CancellationToken>())).ReturnsAsync(Order());
+
+        (await new GetSellerOrderQueryHandler(VendorContext(), repository.Object).Handle(new GetSellerOrderQuery(15), default))
+            .OrderId.Should().Be(15);
+        var other = () => new GetSellerOrderQueryHandler(VendorContext(), repository.Object).Handle(new GetSellerOrderQuery(16), default);
+        await other.Should().ThrowAsync<NotFoundException>();
+    }
+
+    [Fact]
+    public async Task Buyer_order_list_and_an_empty_cart()
+    {
+        var repository = new Mock<ICommerceRepository>();
+        repository.Setup(x => x.ListCustomerOrdersAsync(7, It.IsAny<CancellationToken>())).ReturnsAsync([Order()]);
+
+        (await new ListCustomerOrdersQueryHandler(CustomerContext(), repository.Object).Handle(new ListCustomerOrdersQuery(), default))
+            .Should().ContainSingle();
+        (await new GetCartQueryHandler(CustomerContext(), repository.Object).Handle(new GetCartQuery(), default))
+            .Should().BeNull();
+    }
+
+    [Theory]
+    [InlineData(OrderMutationOutcome.NotFound, typeof(NotFoundException))]
+    [InlineData(OrderMutationOutcome.EmptyCart, typeof(DomainRuleException))]
+    [InlineData(OrderMutationOutcome.MenuItemUnavailable, typeof(DomainRuleException))]
+    [InlineData(OrderMutationOutcome.StorefrontUnavailable, typeof(DomainRuleException))]
+    [InlineData(OrderMutationOutcome.PaymentNotFound, typeof(DomainRuleException))]
+    [InlineData(OrderMutationOutcome.PendingCheckout, typeof(ConflictException))]
+    [InlineData(OrderMutationOutcome.Conflict, typeof(ConflictException))]
+    public async Task Each_failed_order_change_becomes_the_right_error(OrderMutationOutcome outcome, Type expected)
+    {
+        var repository = new Mock<ICommerceRepository>();
+        repository.Setup(x => x.ConfirmSandboxPaymentAsync(7, 15, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OrderMutationResult(outcome, null));
+
+        var ex = await Record.ExceptionAsync(() => new ConfirmSandboxOrderPaymentCommandHandler(CustomerContext(), repository.Object)
+            .Handle(new ConfirmSandboxOrderPaymentCommand(15), default));
+
+        ex.Should().BeOfType(expected);
+    }
+
+    [Fact]
+    public async Task A_confirmed_sandbox_payment_returns_the_order()
+    {
+        var repository = new Mock<ICommerceRepository>();
+        repository.Setup(x => x.ConfirmSandboxPaymentAsync(7, 15, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OrderMutationResult(OrderMutationOutcome.Updated, Order()));
+
+        (await new ConfirmSandboxOrderPaymentCommandHandler(CustomerContext(), repository.Object)
+            .Handle(new ConfirmSandboxOrderPaymentCommand(15), default)).OrderStatus.Should().Be(OrderStatuses.Placed);
+    }
+
     private static ICustomerContext CustomerContext()
     {
         var context = new Mock<ICustomerContext>();
