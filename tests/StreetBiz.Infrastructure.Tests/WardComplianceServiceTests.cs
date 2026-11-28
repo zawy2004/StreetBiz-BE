@@ -2051,6 +2051,112 @@ public sealed class WardComplianceServiceTests
         return report.report_id;
     }
 
+    // ---------------- ward lists: renewals, rental applications, patrol heatmap ----------------
+
+    private static async Task SeedRenewal(TestContext seed, long contractId, long renewalId, DateTime createdAt, bool clean, long applicationId = 1)
+    {
+        var today = DateOnly.FromDateTime(DateTime.UtcNow);
+        seed.RentalContracts.Add(new RentalContract
+        {
+            contract_id = contractId, application_id = applicationId, slot_id = 100, vendor_id = 10,
+            start_date = today.AddDays(-30), end_date = today.AddDays(10), contract_status = "ACTIVE", created_at = createdAt,
+        });
+        seed.DigitalPermits.Add(new DigitalPermit
+        {
+            permit_id = contractId, contract_id = contractId, qr_payload = $"qr-{contractId}", permit_status = "ACTIVE", issued_at = createdAt,
+        });
+        seed.FeeSchedules.Add(new FeeSchedule { fee_schedule_id = contractId, contract_id = contractId, revision = 1, total_amount = 1_500_000, generated_at = createdAt });
+        if (!clean)
+        {
+            seed.FeeScheduleItems.Add(new FeeScheduleItem
+            {
+                fee_schedule_id = contractId, due_date = today.AddDays(-5), amount = 500_000, item_status = "OVERDUE",
+            });
+        }
+        seed.RenewalRequests.Add(new RenewalRequest
+        {
+            renewal_id = renewalId, contract_id = contractId, requested_term_days = 30, renewal_status = "PENDING", created_at = createdAt,
+        });
+        await seed.SaveChangesAsync();
+    }
+
+    [Fact]
+    public async Task The_renewal_list_marks_clean_files_prices_the_term_and_flags_overdue_ones()
+    {
+        using var f = await Fixture.Create();
+        using (var seed = f.NewDb())
+        {
+            await SeedRenewal(seed, 801, 811, DateTime.UtcNow.AddHours(-1), clean: true);
+            await SeedRenewal(seed, 802, 812, DateTime.UtcNow.AddDays(-40), clean: false, applicationId: 2);
+        }
+
+        var list = await f.NewService().ListRenewalsAsync(f.Actor, null, 1, default);
+
+        var fresh = Assert.Single(list, r => r.ContractId == 801);
+        var stale = Assert.Single(list, r => r.ContractId == 802);
+        // Newest first.
+        Assert.True(list.ToList().IndexOf(fresh) < list.ToList().IndexOf(stale));
+        Assert.True(fresh.IsFastTrackEligible);
+        Assert.False(fresh.IsOverdue);
+        Assert.Equal(fresh.CurrentEndDate.AddDays(30), fresh.ProposedEndDate);
+        Assert.True(fresh.TotalFee > 0);
+        // An overdue instalment makes the file not clean; 40 days past the decision deadline it is overdue.
+        Assert.False(stale.IsFastTrackEligible);
+        Assert.True(stale.IsOverdue);
+    }
+
+    [Fact]
+    public async Task The_renewal_list_filters_by_status_pages_by_twenty_and_stays_in_the_ward()
+    {
+        using var f = await Fixture.Create();
+        using (var seed = f.NewDb())
+        {
+            await SeedRenewal(seed, 803, 813, DateTime.UtcNow, clean: true);
+        }
+        var service = f.NewService();
+
+        Assert.Single(await service.ListRenewalsAsync(f.Actor, "PENDING", 1, default));
+        Assert.Empty(await service.ListRenewalsAsync(f.Actor, "APPROVED", 1, default));
+        Assert.Empty(await service.ListRenewalsAsync(f.Actor, null, 2, default));
+        Assert.Empty(await service.ListRenewalsAsync(new WardActor(2, 2, "Cán bộ Phường 2"), null, 1, default));
+    }
+
+    [Fact]
+    public async Task The_rental_application_list_is_the_wards_own_newest_first_and_filters_by_status()
+    {
+        using var f = await Fixture.Create();
+        var service = f.NewService();
+
+        var all = await service.ListRentalApplicationsAsync(f.Actor, null, 1, default);
+        Assert.Equal(2, all.Count);
+        Assert.All(all, a => Assert.Equal("PENDING", a.Status));
+        Assert.Equal(2, (await service.ListRentalApplicationsAsync(f.Actor, " ", 1, default)).Count);
+        Assert.Empty(await service.ListRentalApplicationsAsync(f.Actor, "APPROVED", 1, default));
+        Assert.Empty(await service.ListRentalApplicationsAsync(f.Actor, null, 2, default));
+        Assert.Empty(await service.ListRentalApplicationsAsync(new WardActor(2, 2, "Cán bộ Phường 2"), null, 1, default));
+    }
+
+    [Fact]
+    public async Task The_patrol_heatmap_groups_the_wards_violations_by_weekday_hour_and_zone()
+    {
+        using var f = await Fixture.Create();
+        var tuesday8 = new DateTime(2026, 11, 17, 1, 0, 0, DateTimeKind.Utc); // 08:00 Tuesday in Da Nang
+        using (var seed = f.NewDb())
+        {
+            seed.Violations.AddRange(
+                new Violation { violation_id = 901, slot_id = 100, vendor_id = 10, violation_type = "UNAUTHORIZED_BUSINESS_USE", description = "a", recorded_by = 1, recorded_at = tuesday8, source = "WARD_INSPECTION" },
+                new Violation { violation_id = 902, slot_id = 100, vendor_id = 10, violation_type = "UNAUTHORIZED_BUSINESS_USE", description = "b", recorded_by = 1, recorded_at = tuesday8.AddMinutes(20), source = "WARD_INSPECTION" },
+                new Violation { violation_id = 903, slot_id = 100, vendor_id = 10, violation_type = "UNAUTHORIZED_BUSINESS_USE", description = "c", recorded_by = 1, recorded_at = tuesday8.AddDays(1).AddHours(5), source = "WARD_INSPECTION" });
+            await seed.SaveChangesAsync();
+        }
+
+        var points = await f.NewService().GetPatrolHeatmapAsync(f.Actor, default);
+
+        Assert.Equal(3, points.Sum(p => p.ViolationCount));
+        Assert.Contains(points, p => p.ViolationCount == 2);
+        Assert.Empty(await f.NewService().GetPatrolHeatmapAsync(new WardActor(2, 2, "Cán bộ Phường 2"), default));
+    }
+
     private sealed class Fixture : IDisposable
     {
         public SqliteConnection Connection { get; } = new("Data Source=:memory:");

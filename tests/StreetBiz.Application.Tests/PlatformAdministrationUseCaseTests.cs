@@ -299,6 +299,100 @@ public sealed class PlatformAdministrationUseCaseTests
     public void The_reported_content_list_checks_status_and_paging(string? status, int pageNo, int size, bool valid) =>
         new ListReportedContentQueryValidator().Validate(new ListReportedContentQuery(status, pageNo, size)).IsValid.Should().Be(valid);
 
+    // ---------------- read-only admin queries ----------------
+
+    private static OrderComplaintRow Complaint(long id, string status = ComplaintStatuses.Open) => new(
+        id, 20, "ORD-20", "COMPLETED", "Khách", "Quán", ComplaintTypes.RefundRequest, "Món hỏng", 50_000,
+        status, null, null, DateTime.UtcNow, null, 100_000, "MOMO", 10_000, 3, "PENDING");
+
+    [Theory]
+    [InlineData(null, null)]
+    [InlineData(" ", null)]
+    [InlineData(" open ", ComplaintStatuses.Open)]
+    public async Task The_complaint_list_normalises_its_filter_and_keeps_paging(string? status, string? expected)
+    {
+        var repository = new Mock<IPlatformAdministrationRepository>();
+        repository.Setup(x => x.ListOrderComplaintsAsync(expected, 2, 10, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PlatformPage<OrderComplaintRow>([Complaint(1), Complaint(2)], 2, 10, 12));
+
+        var page = await new ListOrderComplaintsQueryHandler(AdminContext().Object, repository.Object)
+            .Handle(new ListOrderComplaintsQuery(status, 2, 10), default);
+
+        page.Items.Should().HaveCount(2);
+        page.TotalCount.Should().Be(12);
+        page.Items[0].RefundedAmount.Should().Be(10_000);
+        repository.VerifyAll();
+    }
+
+    [Fact]
+    public async Task One_complaint_or_report_is_found_or_not_found()
+    {
+        var repository = new Mock<IPlatformAdministrationRepository>();
+        repository.Setup(x => x.GetOrderComplaintAsync(1, It.IsAny<CancellationToken>())).ReturnsAsync(Complaint(1));
+        repository.Setup(x => x.GetReportedContentAsync(5, It.IsAny<CancellationToken>())).ReturnsAsync(Report(5));
+
+        (await new GetOrderComplaintQueryHandler(AdminContext().Object, repository.Object)
+            .Handle(new GetOrderComplaintQuery(1), default)).ComplaintId.Should().Be(1);
+        (await new GetReportedContentQueryHandler(AdminContext().Object, repository.Object)
+            .Handle(new GetReportedContentQuery(5), default)).ReportId.Should().Be(5);
+
+        var missingComplaint = () => new GetOrderComplaintQueryHandler(AdminContext().Object, repository.Object)
+            .Handle(new GetOrderComplaintQuery(2), default);
+        await missingComplaint.Should().ThrowAsync<NotFoundException>();
+        var missingReport = () => new GetReportedContentQueryHandler(AdminContext().Object, repository.Object)
+            .Handle(new GetReportedContentQuery(6), default);
+        await missingReport.Should().ThrowAsync<NotFoundException>();
+    }
+
+    [Fact]
+    public async Task The_profile_and_the_category_list_come_from_the_signed_in_admin()
+    {
+        (await new GetPlatformAdminProfileQueryHandler(AdminContext().Object).Handle(new GetPlatformAdminProfileQuery(), default))
+            .Should().BeEquivalentTo(new { UserId = 7L, Name = "Admin" });
+
+        var repository = new Mock<IPlatformAdministrationRepository>();
+        repository.Setup(x => x.ListFoodCategoriesAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync([new FoodCategoryRow(1, "Bánh mì", 3, "Admin"), new FoodCategoryRow(2, "Chè", 0, null)]);
+        var list = await new ListFoodCategoriesQueryHandler(AdminContext().Object, repository.Object)
+            .Handle(new ListFoodCategoriesQuery(), default);
+        list.Select(c => c.CategoryName).Should().Equal("Bánh mì", "Chè");
+    }
+
+    [Fact]
+    public async Task A_non_admin_is_stopped_before_any_read()
+    {
+        var actor = new Mock<IPlatformAdminContext>();
+        actor.Setup(x => x.RequireAsync(It.IsAny<CancellationToken>())).ThrowsAsync(new ForbiddenException("Chỉ quản trị viên."));
+        var repository = new Mock<IPlatformAdministrationRepository>(MockBehavior.Strict);
+
+        var action = () => new ListOrderComplaintsQueryHandler(actor.Object, repository.Object)
+            .Handle(new ListOrderComplaintsQuery(null), default);
+
+        await action.Should().ThrowAsync<ForbiddenException>();
+    }
+
+    [Theory]
+    [InlineData("open", 1, 50, true)]
+    [InlineData("closed", 1, 50, false)]
+    [InlineData(null, 0, 50, false)]
+    [InlineData(null, 1, 101, false)]
+    public void The_complaint_list_query_is_validated(string? status, int page, int size, bool valid) =>
+        new ListOrderComplaintsQueryValidator().Validate(new ListOrderComplaintsQuery(status, page, size)).IsValid.Should().Be(valid);
+
+    [Theory]
+    [InlineData("RESOLVE", "OPEN", null, true)]
+    [InlineData("reject", "UNDER_REVIEW", null, true)]
+    [InlineData("RESOLVE", "OPEN", 20_000.0, true)]
+    [InlineData("REJECT", "OPEN", 20_000.0, false)]
+    [InlineData("RESOLVE", "RESOLVED", null, false)]
+    [InlineData("MAYBE", "OPEN", null, false)]
+    [InlineData("RESOLVE", "OPEN", -1.0, false)]
+    [InlineData("RESOLVE", "OPEN", 0.5, false)]
+    public void A_complaint_decision_is_validated(string decision, string expected, double? refund, bool valid) =>
+        new DecideOrderComplaintCommandValidator()
+            .Validate(new DecideOrderComplaintCommand(1, decision, "Ghi chú", expected, refund is null ? null : (decimal)refund))
+            .IsValid.Should().Be(valid);
+
     private static Mock<IPlatformAdminContext> AdminContext()
     {
         var actor = new Mock<IPlatformAdminContext>();
