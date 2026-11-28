@@ -498,6 +498,131 @@ public sealed class FinanceRepositoryTests
     private static async Task<string> StatusOf(Fixture f, long transactionId) =>
         (await f.Db.PaymentTransactions.AsNoTracking().SingleAsync(t => t.transaction_id == transactionId)).transaction_status;
 
+    // ---------------- the vendor's own money pages (summary, lists, payment lookups) ----------------
+
+    /// <summary>A 500 000 unpaid fine and a paid 300 000 one, a fee payment and a fine payment.</summary>
+    private static async Task SeedPenaltiesAndPayments(Fixture f)
+    {
+        var at = MorningOf26th.UtcDateTime.AddDays(-3);
+        f.Db.ViolationTypes.Add(new ViolationType { violation_type_code = "OUTSIDE_SLOT", description = "Lấn ra ngoài ô", is_active = true });
+        f.Db.PenaltyFeeSchedules.Add(new PenaltyFeeSchedule { penalty_schedule_id = 1, ward_unit_id = 1, violation_type = "OUTSIDE_SLOT", penalty_amount = 500_000m, created_by = 1 });
+        f.Db.Violations.AddRange(
+            new Violation { violation_id = 1, slot_id = 1, contract_id = 1, vendor_id = Vendor, violation_type = "OUTSIDE_SLOT", description = "Bày ra lối đi", recorded_by = 1, source = "ON_SITE", recorded_at = at },
+            new Violation { violation_id = 2, slot_id = 1, contract_id = 1, vendor_id = Vendor, violation_type = "OUTSIDE_SLOT", recorded_by = 1, source = "ON_SITE", recorded_at = at.AddDays(-10) });
+        f.Db.Penalties.AddRange(
+            new Penalty { penalty_id = 1, violation_id = 1, penalty_schedule_id = 1, amount = 500_000m, penalty_status = PenaltyStatuses.Unpaid, created_at = at },
+            new Penalty { penalty_id = 2, violation_id = 2, penalty_schedule_id = 1, amount = 300_000m, penalty_status = PenaltyStatuses.Paid, created_at = at.AddDays(-10), paid_at = at.AddDays(-9) });
+        f.Db.PaymentTransactions.AddRange(
+            new PaymentTransaction { transaction_id = 70, fee_item_id = PastDueItem, idempotency_key = "IDEM-FEE", provider_reference = "REF-FEE", payment_purpose = PaymentPurposes.RentalFee, provider = "MOMO", amount = 1_000_000m, transaction_status = "PENDING", created_at = at },
+            new PaymentTransaction { transaction_id = 71, penalty_id = 2, idempotency_key = "IDEM-FINE", payment_purpose = PaymentPurposes.Penalty, provider = "ZALOPAY", amount = 300_000m, transaction_status = "SUCCESS", created_at = at });
+        await f.Db.SaveChangesAsync();
+        f.Db.ChangeTracker.Clear();
+    }
+
+    [Fact]
+    public async Task The_summary_counts_only_the_current_schedule_and_unpaid_fines()
+    {
+        using var f = await Fixture.Create();
+        await SeedPenaltiesAndPayments(f);
+
+        var summary = await f.Repository().GetSummaryAsync(Vendor, default);
+
+        // Current revision: 1 000 000 + 2 000 000 + 2 000 000 still owed (the superseded item and the paid one do not count).
+        Assert.Equal(5_000_000m, summary.FeeDue);
+        Assert.Equal(500_000m, summary.PenaltyDue);
+        Assert.Equal(0, summary.OverdueCount);
+        Assert.Equal(new DateOnly(2026, 9, 20), summary.NextDueDate);
+        Assert.Equal(0m, (await f.Repository().GetSummaryAsync(999, default)).FeeDue);
+    }
+
+    [Fact]
+    public async Task The_fee_list_numbers_instalments_within_their_whole_schedule_even_when_filtered()
+    {
+        using var f = await Fixture.Create();
+        var repository = f.Repository();
+
+        var all = await repository.ListFeeItemsAsync(Vendor, null, default);
+        Assert.Equal(4, all.Count);
+        Assert.All(all, item => Assert.Equal(4, item.OfCount));
+        Assert.DoesNotContain(all, item => item.FeeItemId == SupersededItem);
+
+        var paid = Assert.Single(await repository.ListFeeItemsAsync(Vendor, FeeItemStatuses.Paid, default));
+        Assert.Equal((1, 4), (paid.Ordinal, paid.OfCount));
+        // Latest due date first; the numbers stay those of the whole schedule.
+        Assert.Equal(new[] { 4, 3, 2 }, (await repository.ListFeeItemsAsync(Vendor, FeeItemStatuses.Pending, default)).Select(i => i.Ordinal));
+        Assert.Equal("S-01", paid.SlotCode);
+    }
+
+    [Fact]
+    public async Task The_fine_and_violation_lists_are_the_vendors_own()
+    {
+        using var f = await Fixture.Create();
+        await SeedPenaltiesAndPayments(f);
+        var repository = f.Repository();
+
+        var fines = await repository.ListPenaltiesAsync(Vendor, null, default);
+        Assert.Equal(2, fines.Count);
+        var unpaid = Assert.Single(await repository.ListPenaltiesAsync(Vendor, PenaltyStatuses.Unpaid, default));
+        Assert.Equal(500_000m, unpaid.Amount);
+        Assert.Equal("Lấn ra ngoài ô", unpaid.ViolationLabel);
+        Assert.Empty(await repository.ListPenaltiesAsync(999, null, default));
+
+        var violations = await repository.ListVendorViolationsAsync(Vendor, default);
+        Assert.Equal(new long[] { 1, 2 }, violations.Select(v => v.ViolationId));
+        Assert.Equal(500_000m, violations[0].PenaltyAmount);
+        Assert.Equal("Bày ra lối đi", violations[0].Description);
+    }
+
+    [Fact]
+    public async Task A_callback_is_told_apart_by_the_provider_reference_then_by_the_idempotency_key()
+    {
+        using var f = await Fixture.Create();
+        await SeedPenaltiesAndPayments(f);
+        var repository = f.Repository();
+
+        Assert.Equal(PaymentPurposes.RentalFee, await repository.FindPaymentPurposeAsync("REF-FEE", null, default));
+        // An unknown reference falls back to the key.
+        Assert.Equal(PaymentPurposes.Penalty, await repository.FindPaymentPurposeAsync("NOPE", "IDEM-FINE", default));
+        Assert.Equal(PaymentPurposes.Penalty, await repository.FindPaymentPurposeAsync(" ", "IDEM-FINE", default));
+        Assert.Null(await repository.FindPaymentPurposeAsync("NOPE", null, default));
+        Assert.Null(await repository.FindPaymentPurposeAsync(null, "NOPE", default));
+    }
+
+    [Fact]
+    public async Task A_vendor_reads_only_their_own_fee_or_fine_payment()
+    {
+        using var f = await Fixture.Create();
+        await SeedPenaltiesAndPayments(f);
+        var repository = f.Repository();
+
+        var fee = await repository.GetVendorPaymentAsync(Vendor, 70, default);
+        Assert.NotNull(fee);
+        Assert.Equal("REF-FEE", fee.ProviderReference);
+        Assert.Equal(1_000_000m, fee.Amount);
+        Assert.NotNull(await repository.GetVendorPaymentAsync(Vendor, 71, default));
+        Assert.Null(await repository.GetVendorPaymentAsync(999, 70, default));
+        Assert.Null(await repository.GetVendorPaymentAsync(Vendor, 404, default));
+    }
+
+    [Fact]
+    public async Task The_current_schedule_and_the_contract_context_are_read_for_fee_generation()
+    {
+        using var f = await Fixture.Create();
+        var repository = f.Repository();
+
+        var schedule = await repository.GetCurrentFeeScheduleAsync(1, default);
+        Assert.NotNull(schedule);
+        Assert.Equal(2, schedule.Revision);
+        Assert.Equal(4, schedule.Items.Count);
+        Assert.Null(await repository.GetCurrentFeeScheduleAsync(2, default));
+
+        var context = await repository.GetFeeScheduleContextAsync(1, default);
+        Assert.NotNull(context);
+        Assert.Equal("S-01", context.SlotCode);
+        Assert.Equal(Vendor, context.VendorId);
+        Assert.Null(await repository.GetFeeScheduleContextAsync(999, default));
+    }
+
     private sealed class Fixture : IDisposable
     {
         private SqliteConnection Connection { get; } = new("Data Source=:memory:");
@@ -611,6 +736,10 @@ public sealed class FinanceRepositoryTests
                         property.ValueGenerated = ValueGenerated.Never;
                     }
                     property.SetDefaultValueSql(null);
+                    // SQLite cannot SUM a decimal stored as text; money is a whole number of đồng, so a
+                    // double holds it exactly.
+                    if (property.ClrType == typeof(decimal) || property.ClrType == typeof(decimal?))
+                        modelBuilder.Entity(entity.ClrType).Property(property.Name).HasConversion<double>();
                 }
         }
     }

@@ -80,6 +80,7 @@ public sealed class ControllerEndpointContractTests
         "GET /api/marketplace/storefronts/{storefrontId}",
         "GET /api/marketplace/storefronts/{storefrontId}/pickup-range",
         "GET /api/cart",
+        "GET /api/cart/all",
         "POST /api/cart/items",
         "PUT /api/cart/items/{menuItemId}",
         "DELETE /api/cart/items/{menuItemId}",
@@ -419,6 +420,7 @@ public sealed class ControllerEndpointContractTests
         // POST /api/community/vendors/{id}/reports is open to guests (BUY-05): see CommunityGuestReportTests.
         (HttpMethod.Get, "/api/community/my-reports"),
         (HttpMethod.Get, "/api/cart"),
+        (HttpMethod.Get, "/api/cart/all"),
         (HttpMethod.Post, "/api/cart/items"),
         (HttpMethod.Put, "/api/cart/items/1"),
         (HttpMethod.Delete, "/api/cart/items/1"),

@@ -93,6 +93,21 @@ public sealed class GetCartQueryHandler(
     }
 }
 
+public sealed record GetCartsQuery : IRequest<IReadOnlyList<CartDto>>;
+
+public sealed class GetCartsQueryHandler(
+    ICustomerContext customerContext,
+    ICommerceRepository repository) : IRequestHandler<GetCartsQuery, IReadOnlyList<CartDto>>
+{
+    public async Task<IReadOnlyList<CartDto>> Handle(GetCartsQuery request, CancellationToken cancellationToken)
+    {
+        var customerId = await customerContext.RequireCustomerUserIdAsync(cancellationToken);
+        return (await repository.GetActiveCartsAsync(customerId, cancellationToken))
+            .Select(cart => cart.ToDto())
+            .ToArray();
+    }
+}
+
 public sealed record AddCartItemCommand(long MenuItemId, int Quantity, string? Note)
     : IRequest<CartDto>;
 
@@ -179,7 +194,7 @@ public sealed class RemoveCartItemCommandHandler(
     }
 }
 
-public sealed record ClearCartCommand : IRequest<Unit>;
+public sealed record ClearCartCommand(long? StorefrontId = null) : IRequest<Unit>;
 
 public sealed class ClearCartCommandHandler(
     ICustomerContext customerContext,
@@ -188,7 +203,7 @@ public sealed class ClearCartCommandHandler(
     public async Task<Unit> Handle(ClearCartCommand request, CancellationToken cancellationToken)
     {
         var customerId = await customerContext.RequireCustomerUserIdAsync(cancellationToken);
-        await repository.ClearCartAsync(customerId, cancellationToken);
+        await repository.ClearCartAsync(customerId, request.StorefrontId, cancellationToken);
         return Unit.Value;
     }
 }

@@ -129,6 +129,30 @@ public sealed partial class CommerceRepository(
         return cartId.HasValue ? await BuildCartAsync(cartId.Value, cancellationToken) : null;
     }
 
+    public async Task<IReadOnlyList<CommerceCartRow>> GetActiveCartsAsync(
+        long customerUserId,
+        CancellationToken cancellationToken)
+    {
+        var cartIds = await db.ShoppingCarts.AsNoTracking()
+            .Where(cart => cart.customer_user_id == customerUserId
+                && cart.cart_status == CartStatuses.Active
+                && cart.ShoppingCartItems.Any())
+            .OrderByDescending(cart => cart.created_at)
+            .ThenByDescending(cart => cart.cart_id)
+            .Select(cart => cart.cart_id)
+            .ToListAsync(cancellationToken);
+        var carts = new List<CommerceCartRow>(cartIds.Count);
+        foreach (var cartId in cartIds)
+        {
+            if (await BuildCartAsync(cartId, cancellationToken) is { } row)
+            {
+                carts.Add(row);
+            }
+        }
+
+        return carts;
+    }
+
     public async Task<CartMutationResult> AddCartItemAsync(
         long customerUserId,
         long menuItemId,
@@ -165,19 +189,10 @@ public sealed partial class CommerceRepository(
                 return (CartMutationOutcome.StorefrontUnavailable, (long?)null);
             }
 
-            if (await HasPendingCheckoutAsync(customerUserId, cancellationToken))
+            // Each stall keeps its own draft cart; only an unpaid order at this stall freezes it.
+            if (await HasPendingCheckoutAsync(customerUserId, menuItem.storefront_id, cancellationToken))
             {
                 return (CartMutationOutcome.CheckoutPending, (long?)null);
-            }
-
-            var otherCarts = await db.ShoppingCarts
-                .Where(cart => cart.customer_user_id == customerUserId
-                    && cart.cart_status == CartStatuses.Active
-                    && cart.storefront_id != menuItem.storefront_id)
-                .ToListAsync(cancellationToken);
-            foreach (var oldCart in otherCarts)
-            {
-                oldCart.cart_status = CartStatuses.Abandoned;
             }
 
             var cart = await db.ShoppingCarts.SingleOrDefaultAsync(
@@ -251,7 +266,7 @@ public sealed partial class CommerceRepository(
             return new CartMutationResult(CartMutationOutcome.NotFound, null);
         }
 
-        if (await HasPendingCheckoutAsync(customerUserId, cancellationToken))
+        if (await HasPendingCheckoutAsync(customerUserId, item.cart.storefront_id, cancellationToken))
         {
             return new CartMutationResult(CartMutationOutcome.CheckoutPending, null);
         }
@@ -282,7 +297,7 @@ public sealed partial class CommerceRepository(
                 return (CartMutationOutcome.NotFound, (long?)null);
             }
 
-            if (await HasPendingCheckoutAsync(customerUserId, cancellationToken))
+            if (await HasPendingCheckoutAsync(customerUserId, item.cart.storefront_id, cancellationToken))
             {
                 return (CartMutationOutcome.CheckoutPending, (long?)null);
             }
@@ -310,16 +325,21 @@ public sealed partial class CommerceRepository(
                 : null);
     }
 
-    public async Task ClearCartAsync(long customerUserId, CancellationToken cancellationToken)
+    public async Task ClearCartAsync(
+        long customerUserId,
+        long? storefrontId,
+        CancellationToken cancellationToken)
     {
-        if (await HasPendingCheckoutAsync(customerUserId, cancellationToken))
+        // One stall named: only that stall's cart goes, and only its own unpaid order blocks it.
+        if (await HasPendingCheckoutAsync(customerUserId, storefrontId, cancellationToken))
         {
             throw new ConflictException(CommerceMessages.CheckoutAlreadyPending);
         }
 
         var carts = await db.ShoppingCarts
             .Where(cart => cart.customer_user_id == customerUserId
-                && cart.cart_status == CartStatuses.Active)
+                && cart.cart_status == CartStatuses.Active
+                && (!storefrontId.HasValue || cart.storefront_id == storefrontId.Value))
             .ToListAsync(cancellationToken);
         foreach (var cart in carts)
         {
@@ -388,14 +408,6 @@ public sealed partial class CommerceRepository(
                 return (OrderMutationOutcome.Conflict, (long?)null);
             }
 
-            // Checked after the idempotency branch above, so retrying the same request
-            // still returns its order. A different key while one checkout is unpaid would
-            // otherwise bill the same still-active cart twice.
-            if (await HasPendingCheckoutAsync(customerUserId, cancellationToken))
-            {
-                return (OrderMutationOutcome.PendingCheckout, (long?)null);
-            }
-
             var cart = await db.ShoppingCarts
                 .Include(row => row.storefront)
                     .ThenInclude(storefront => storefront.registration)
@@ -410,6 +422,15 @@ public sealed partial class CommerceRepository(
             if (cart is null || cart.ShoppingCartItems.Count == 0)
             {
                 return (OrderMutationOutcome.EmptyCart, (long?)null);
+            }
+
+            // Checked after the idempotency branch above, so retrying the same request
+            // still returns its order. A different key while this stall's checkout is unpaid
+            // would otherwise bill the same still-active cart twice. Another stall's unpaid
+            // order does not matter: every stall has its own cart.
+            if (await HasPendingCheckoutAsync(customerUserId, cart.storefront_id, cancellationToken))
+            {
+                return (OrderMutationOutcome.PendingCheckout, (long?)null);
             }
 
             if (!await EligibleStores().AnyAsync(x => x.storefront_id == cart.storefront_id, cancellationToken))
@@ -1048,7 +1069,7 @@ public sealed partial class CommerceRepository(
             items,
             items.Sum(item => item.UnitPrice * item.Quantity),
             header.StorefrontAddress,
-            await PendingCheckoutOrderIdAsync(header.customer_user_id, cancellationToken));
+            await PendingCheckoutOrderIdAsync(header.customer_user_id, header.storefront_id, cancellationToken));
     }
 
     private async Task<IReadOnlyList<CommerceOrderRow>> BuildOrdersAsync(
@@ -1285,15 +1306,21 @@ public sealed partial class CommerceRepository(
 
     private async Task<bool> HasPendingCheckoutAsync(
         long customerUserId,
+        long? storefrontId,
         CancellationToken cancellationToken) =>
-        await PendingCheckoutOrderIdAsync(customerUserId, cancellationToken) is not null;
+        await PendingCheckoutOrderIdAsync(customerUserId, storefrontId, cancellationToken) is not null;
 
-    /// <summary>The order that currently freezes this customer's cart, if any.</summary>
+    /// <summary>
+    /// The order that currently freezes this customer's cart at <paramref name="storefrontId"/>
+    /// (at any stall when null), if any.
+    /// </summary>
     private Task<long?> PendingCheckoutOrderIdAsync(
         long customerUserId,
+        long? storefrontId,
         CancellationToken cancellationToken) =>
         db.Orders.AsNoTracking()
             .Where(order => order.customer_user_id == customerUserId
+                && (!storefrontId.HasValue || order.storefront_id == storefrontId.Value)
                 && order.order_status == OrderStatuses.PendingPayment
                 && order.PaymentTransactions.Any(payment =>
                     payment.payment_purpose == PaymentPurposeOrder

@@ -222,6 +222,38 @@ public sealed class WardFinanceServiceTests
         await Assert.ThrowsAsync<DomainRuleException>(() => service.WaivePenaltyAsync(Officer, 1, "Lần hai", default));
     }
 
+    [Fact]
+    public async Task The_contract_list_sums_what_is_owed_per_contract_newest_first_and_only_the_wards_own()
+    {
+        using var f = await Fixture.Create();
+
+        var list = await f.Service().ListContractsAsync(Officer, default);
+
+        // Ward 2's contract 2 is not listed; newest contract first.
+        Assert.Equal(new long[] { 3, 1 }, list.Select(c => c.ContractId));
+        var active = list.Single(c => c.ContractId == 1);
+        // The overdue and the pending instalment are both still owed; only one is overdue.
+        Assert.Equal(1_800_000m, active.Outstanding);
+        Assert.Equal(1, active.OverdueCount);
+        // An unpaid fine belongs to the household, so it shows on each of its contracts.
+        Assert.Equal(500_000m, active.UnpaidPenalties);
+        Assert.Equal(500_000m, active.DepositPaid);
+        Assert.False(active.DepositRefunded);
+        Assert.Equal("S-01", active.SlotCode);
+
+        var expired = list.Single(c => c.ContractId == 3);
+        Assert.Equal(0m, expired.Outstanding);
+        Assert.Equal(500_000m, expired.DepositPaid);
+    }
+
+    [Fact]
+    public async Task A_ward_with_no_contracts_gets_an_empty_list()
+    {
+        using var f = await Fixture.Create();
+
+        Assert.Empty(await f.Service().ListContractsAsync(new WardActor(9, 99, "Phường khác"), default));
+    }
+
     private sealed class Fixture : IDisposable
     {
         private SqliteConnection Connection { get; } = new("Data Source=:memory:");
