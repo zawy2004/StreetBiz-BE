@@ -32,6 +32,11 @@ public interface ICommerceRepository
         long customerUserId,
         CancellationToken cancellationToken);
 
+    /// <summary>Every draft cart that still holds dishes, newest first (one per stall).</summary>
+    Task<IReadOnlyList<CommerceCartRow>> GetActiveCartsAsync(
+        long customerUserId,
+        CancellationToken cancellationToken);
+
     Task<CartMutationResult> AddCartItemAsync(
         long customerUserId,
         long menuItemId,
@@ -51,7 +56,8 @@ public interface ICommerceRepository
         long menuItemId,
         CancellationToken cancellationToken);
 
-    Task ClearCartAsync(long customerUserId, CancellationToken cancellationToken);
+    /// <summary>Drops one stall's cart, or every cart when <paramref name="storefrontId"/> is null.</summary>
+    Task ClearCartAsync(long customerUserId, long? storefrontId, CancellationToken cancellationToken);
 
     Task<OrderMutationResult> PlacePrepaidOrderAsync(
         long customerUserId,

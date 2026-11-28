@@ -129,6 +129,11 @@ public sealed class CartController(ISender sender) : ControllerBase
     public async Task<ActionResult<CartDto?>> Get(CancellationToken cancellationToken) =>
         Ok(await sender.Send(new GetCartQuery(), cancellationToken));
 
+    /// <summary>Every draft cart of the customer, one per stall.</summary>
+    [HttpGet("all")]
+    public async Task<ActionResult<IReadOnlyList<CartDto>>> GetAll(CancellationToken cancellationToken) =>
+        Ok(await sender.Send(new GetCartsQuery(), cancellationToken));
+
     [HttpPost("items")]
     public async Task<ActionResult<CartDto>> AddItem(
         AddCartItemRequest request,
@@ -151,9 +156,11 @@ public sealed class CartController(ISender sender) : ControllerBase
         Ok(await sender.Send(new RemoveCartItemCommand(menuItemId), cancellationToken));
 
     [HttpDelete]
-    public async Task<IActionResult> Clear(CancellationToken cancellationToken)
+    public async Task<IActionResult> Clear(
+        [FromQuery] long? storefrontId,
+        CancellationToken cancellationToken)
     {
-        await sender.Send(new ClearCartCommand(), cancellationToken);
+        await sender.Send(new ClearCartCommand(storefrontId), cancellationToken);
         return NoContent();
     }
 }
